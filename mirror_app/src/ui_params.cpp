@@ -13,7 +13,7 @@ namespace ui {
 
 namespace {
 
-enum class Kind { Float, Int, Bool, Color3 };
+enum class Kind { Float, Int, Bool, Color3, Str };
 
 struct Entry {
     Kind  kind;
@@ -25,6 +25,7 @@ struct Entry {
     float f[3] = {0.f, 0.f, 0.f};
     int   i = 0;
     bool  b = false;
+    std::string s;
     Bank  bank = Bank::Unassigned;
     bool  retired = false;
     // Whether this path was declared in the frame just drawn. A parameter that
@@ -217,6 +218,7 @@ void WriteValue(std::ostream& o, const Entry& e) {
         case Kind::Int:    o << e.i; break;
         case Kind::Bool:   o << (e.b ? 1 : 0); break;
         case Kind::Color3: o << e.f[0] << ' ' << e.f[1] << ' ' << e.f[2]; break;
+        case Kind::Str:    o << e.s; break;
     }
 }
 
@@ -226,6 +228,7 @@ const char* KindName(Kind k) {
         case Kind::Int:    return "int";
         case Kind::Bool:   return "bool";
         case Kind::Color3: return "rgb";
+        case Kind::Str:    return "string";
     }
     return "?";
 }
@@ -373,11 +376,18 @@ int BankCount(Bank b, int* retired_out) {
 void PushSection(const char* name) {
     Frame f;
     f.name = name;
-    if (S().stack.empty()) {
-        f.bank = BankForSection(f.name);
-    } else {
+    if (!S().stack.empty()) {
         const Frame& p = S().stack.back();
         f.bank = p.bank; f.retired = p.retired; f.visible = p.visible;
+    }
+    // A named section matching a rule takes that bank wherever it appears, not
+    // only at the top level. Depth is a fact about how the panel is laid out --
+    // a visibility gate wrapped around a page adds a level without meaning to --
+    // and letting it decide the bank made classification depend on the nesting,
+    // which is exactly the accident this table exists to prevent.
+    if (!f.name.empty()) {
+        const Bank rule = BankForSection(f.name);
+        if (rule != Bank::Unassigned) f.bank = rule;
     }
     S().stack.push_back(std::move(f));
 }
@@ -551,6 +561,17 @@ void DeclareInt(const char* label, int* v, int lo, int hi) {
     e.i = *v;
 }
 
+void DeclareString(const char* label, std::string* v) {
+    const std::string path = PathFor(CleanLabel(label).c_str());
+    Entry& e = Declare(path, Kind::Str, 0.f, 0.f);
+    auto lp = S().loaded.find(path);
+    if (lp != S().loaded.end()) {
+        *v = lp->second;
+        S().loaded.erase(lp);
+    }
+    e.s = *v;
+}
+
 void DeclareFloat(const char* label, float* v, float lo, float hi) {
     const std::string path = PathFor(CleanLabel(label).c_str());
     Entry& e = Declare(path, Kind::Float, lo, hi);
@@ -676,7 +697,8 @@ std::string SettingsDoc() {
             o << "| `" << kv.first << "`";
             if (e.retired) o << " _(retired)_";
             o << " | " << KindName(e.kind) << " | ";
-            if (e.kind == Kind::Bool || e.kind == Kind::Color3) o << "--";
+            if (e.kind == Kind::Bool || e.kind == Kind::Color3 ||
+                e.kind == Kind::Str) o << "--";
             else o << e.lo << " .. " << e.hi;
             o << " | ";
             WriteValue(o, e);

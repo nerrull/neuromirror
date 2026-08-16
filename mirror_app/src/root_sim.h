@@ -52,6 +52,41 @@ struct SimParams {
     std::string speciesXml = "Zea_mays_6_Leitner_2014.xml";
 };
 
+// Every field of SimParams that is part of a saved root look, in one list.
+//
+// These used to be saved through this list into a .root file, a second preset
+// system beside the parameter registry -- which meant "the root preset" and
+// "the root settings" were different things holding different subsets, and a
+// look could not be reproduced from either alone. The registry owns them now.
+//
+// The list stays because it is what the round-trip test walks: the failure a
+// preset system has is silent, and a field nobody declared comes back as its
+// default without complaining. paramDir is excluded deliberately -- it is a
+// build path, not a setting.
+template <class Fn>
+void visitSimParams(SimParams& p, Fn&& f) {
+    f("speciesXml", p.speciesXml);
+    f("N", p.N);
+    f("R0", p.R0);              f("Hh", p.Hh);
+    f("startFrac", p.startFrac); f("endFrac", p.endFrac);
+    f("taperPower", p.taperPower);
+    f("angleStepGoldenMult", p.angleStepGoldenMult);
+    f("distStepFrac", p.distStepFrac);
+    f("dwellDays", p.dwellDays);
+    f("weight", p.weight);      f("mainTravelTrials", p.mainTravelTrials);
+    f("lateralWeight", p.lateralWeight);
+    f("dwellWeight", p.dwellWeight);
+    f("dwellLateralWeight", p.dwellLateralWeight);
+    f("sigma", p.sigma);        f("viewCylLen", p.viewCylLen);
+    f("maxHopDays", p.maxHopDays); f("reachMult", p.reachMult);
+    f("travelPullReach", p.travelPullReach);
+    f("coneSurfaceTravel", p.coneSurfaceTravel);
+    f("coneShellThickness", p.coneShellThickness);
+    f("growthDt", p.growthDt);
+    f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
+    f("seed", p.seed);
+}
+
 // A revealed face mask in render (Y-up) space, for the face mid-geometry pass.
 struct SimMask {
     float pos[3];

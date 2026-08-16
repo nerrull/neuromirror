@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <type_traits>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -823,6 +824,14 @@ bool  g_ui_detached = false;
 // when imgui.ini has it parked on a monitor that is not here any more.
 bool  g_panel_reset = false;
 bool  g_panel_cli   = false;   // the flags above were given, so do not restore
+
+// --settings-doc: build one panel frame, write SETTINGS.md, exit.
+bool  g_write_settings_doc = false;
+// --presettest: round-trip SimParams through the roots bank, then exit.
+bool  g_roots_roundtrip = false;
+// What main() returns when one of the in-app tests above asks it to stop. They
+// have to run inside the real loop, so they cannot simply return from a branch.
+int   g_exit_code = 0;
 
 // Whether the panel is its own window is a property of the machine it is being
 // operated from, not of the show, so it is remembered next to imgui.ini rather
@@ -2073,6 +2082,10 @@ int main(int argc, char** argv) {
         if (a == "--reset-panel")  { g_panel_reset = true; g_panel_cli = true; continue; }
         if (a == "--panel-window") { g_ui_detached = true; g_panel_cli = true; continue; }
         if (a == "--no-panel")     { g_ui_visible = false; continue; }
+        // Write the settings document and quit. It has to run the real panel
+        // for a frame -- the registry *is* the panel -- but only one, because
+        // declaring no longer depends on what is open or which scene is up.
+        if (a == "--settings-doc") { g_write_settings_doc = true; continue; }
         if (a == "--selftest") return selftest();
         if (a == "--roottest") return roottest();
         if (a == "--transhot") {
@@ -2276,8 +2289,14 @@ int main(int argc, char** argv) {
             float amp = 0.5f, gain = 2.0f;
             int   steps = 4;
             bool  flag = false;
+            // Behind a header that is never opened, and behind a gate that is
+            // switched off: the two ways a control used to fall out of the
+            // registry entirely.
+            float buried = 0.5f;
+            float gated  = 0.5f;
+            bool  gate_on = true;
 
-            // One frame of the panel, declaring four controls in two sections.
+            // One frame of the panel, declaring six controls in two sections.
             auto frame = [&]() {
                 ImGui::NewFrame();
                 ui::BeginFrame();
@@ -2287,6 +2306,14 @@ int main(int argc, char** argv) {
                     ui::SliderFloat("amp", &amp, 0.f, 1.f);
                     ui::SliderInt("steps", &steps, 0, 10);
                     ui::Checkbox("flag", &flag);
+                    // A collapsing header in a headless frame is never open,
+                    // so this is the collapsed case by construction.
+                    ui::BeginHeader("folded");
+                    ui::SliderFloat("buried", &buried, 0.f, 1.f);
+                    ui::EndHeader();
+                    ui::BeginGate(gate_on);
+                    ui::SliderFloat("gated", &gated, 0.f, 1.f);
+                    ui::EndGate();
                 }
                 {
                     ui::Section b("roots");
@@ -2297,8 +2324,75 @@ int main(int argc, char** argv) {
             };
             frame();
             int bad = 0;
-            if (ui::DeclaredCount() != 4) {
-                printf("  declared %d, want 4\n", ui::DeclaredCount()); ++bad;
+            if (ui::DeclaredCount() != 6) {
+                printf("  declared %d, want 6\n", ui::DeclaredCount()); ++bad;
+            }
+            // Drawing and declaring are separate: neither the header nor the
+            // gate may add a level to a parameter's name, or every preset ever
+            // written stops finding it.
+            {
+                std::string err;
+                const std::string p = ui::PresetDir() + "/__uinames.set";
+                if (!ui::SavePreset(p, err)) { printf("  name save: %s\n", err.c_str()); ++bad; }
+                std::ifstream f(p);
+                std::string all, line;
+                while (std::getline(f, line)) all += line + "\n";
+                f.close();
+                if (all.find("p mirror/buried = ") == std::string::npos) {
+                    printf("  a folded control did not save under its own name\n"); ++bad;
+                }
+                if (all.find("p mirror/gated = ") == std::string::npos) {
+                    printf("  a gated control did not save under its own name\n"); ++bad;
+                }
+                remove(p.c_str());
+            }
+            // The bug this split exists to kill: a value loaded for a control
+            // that is not on screen must still land, and a save must not write
+            // that control from a stale cache.
+            {
+                std::string err;
+                const std::string p = ui::PresetDir() + "/__uihidden.set";
+                buried = 0.8f; gated = 0.9f;
+                gate_on = false;                 // and now the gate is shut
+                frame();
+                if (!ui::SavePreset(p, err)) { printf("  hidden save: %s\n", err.c_str()); ++bad; }
+                buried = 0.f; gated = 0.f;
+                frame();
+                if (!ui::LoadPreset(p, err)) { printf("  hidden load: %s\n", err.c_str()); ++bad; }
+                frame();
+                if (std::fabs(buried - 0.8f) > 1e-4f) {
+                    printf("  folded control did not take a loaded value: %.3f\n", buried);
+                    ++bad;
+                }
+                if (std::fabs(gated - 0.9f) > 1e-4f) {
+                    printf("  gated-off control did not take a loaded value: %.3f\n", gated);
+                    ++bad;
+                }
+                remove(p.c_str());
+                gate_on = true;
+                buried = 0.5f; gated = 0.5f;
+                frame();
+            }
+            // Banks come from the section, and a bank's file holds only its
+            // own keys -- a mirror preset that carried machine settings would
+            // rewire the room every time it loaded.
+            {
+                std::string err;
+                const std::string p = ui::PresetDir() + "/__uibank.mirror";
+                if (!ui::SaveBank(ui::Bank::Mirror, p, err)) {
+                    printf("  bank save: %s\n", err.c_str()); ++bad;
+                }
+                std::ifstream f(p);
+                std::string all, line;
+                while (std::getline(f, line)) all += line + "\n";
+                f.close();
+                if (all.find("p mirror/amp") == std::string::npos) {
+                    printf("  mirror bank is missing its own parameter\n"); ++bad;
+                }
+                if (all.find("p roots/") != std::string::npos) {
+                    printf("  mirror bank leaked a roots parameter\n"); ++bad;
+                }
+                remove(p.c_str());
             }
 
             // Bind mirror/amp to cc 7 and sweep it. The two "amp" controls
@@ -2363,98 +2457,14 @@ int main(int argc, char** argv) {
             printf("uitest: %s\n", bad ? "FAIL" : "OK");
             return bad ? 1 : 0;
         }
-        if (a == "--presettest") {
-            // Round-trip the growth parameters through a file. The failure a
-            // preset system has is silent: a field that is written but never
-            // read (or the reverse) comes back as its default and nobody
-            // notices until a saved look cannot be reproduced.
-            MetalContext ctx;
-            if (!ctx.device()) { fprintf(stderr, "presettest: no Metal device\n"); return 1; }
-            RootScene roots(ctx, 320, 240);
-            if (!roots.valid()) { fprintf(stderr, "presettest: invalid\n"); return 1; }
-
-            rootsim::SimParams& SP = roots.simParams();
-            // Deliberately non-default values, all distinct, so a field that
-            // reads back another field's value is caught too.
-            SP.speciesXml = "Glycine_max.xml";
-            SP.N = 11;  SP.R0 = 17.5f; SP.Hh = 61.25f;
-            SP.startFrac = 0.21f; SP.endFrac = 0.87f; SP.taperPower = 1.37f;
-            SP.angleStepGoldenMult = 0.93f; SP.distStepFrac = 0.11f;
-            SP.dwellDays = 23.5f; SP.weight = 0.77f; SP.mainTravelTrials = 19.f;
-            SP.lateralWeight = 0.31f; SP.dwellWeight = 0.83f;
-            SP.dwellLateralWeight = 0.71f; SP.sigma = 0.47f; SP.viewCylLen = 9.5f;
-            SP.maxHopDays = 71.f; SP.reachMult = 1.9f; SP.travelPullReach = 1.45f;
-            SP.coneSurfaceTravel = true; SP.coneShellThickness = 5.5f;
-            SP.growthDt = 0.35f; SP.targetLift = 1.25f; SP.spawnBehind = 0.75f;
-            SP.seed = 4242u;
-            const rootsim::SimParams want = SP;
-
-            const std::string path = std::string(RootScene::presetDir()) + "/__roundtrip.root";
-            if (!roots.saveConfig(path)) {
-                fprintf(stderr, "presettest: could not write %s\n", path.c_str());
-                return 1;
-            }
-            SP = rootsim::SimParams{};          // wipe to defaults
-            if (!roots.loadConfig(path)) {
-                fprintf(stderr, "presettest: could not read back\n"); return 1;
-            }
-            const rootsim::SimParams& got = roots.simParams();
-
-            int bad = 0;
-            auto cf = [&](const char* n, float a, float b) {
-                if (std::fabs(a - b) > 1e-4f) { printf("  MISMATCH %-22s %g != %g\n", n, a, b); ++bad; }
-            };
-            auto ci = [&](const char* n, long a, long b) {
-                if (a != b) { printf("  MISMATCH %-22s %ld != %ld\n", n, a, b); ++bad; }
-            };
-            if (got.speciesXml != want.speciesXml) {
-                printf("  MISMATCH %-22s %s != %s\n", "speciesXml",
-                       got.speciesXml.c_str(), want.speciesXml.c_str());
-                ++bad;
-            }
-            ci("N", got.N, want.N);
-            cf("R0", got.R0, want.R0);                cf("Hh", got.Hh, want.Hh);
-            cf("startFrac", got.startFrac, want.startFrac);
-            cf("endFrac", got.endFrac, want.endFrac);
-            cf("taperPower", got.taperPower, want.taperPower);
-            cf("angleStepGoldenMult", got.angleStepGoldenMult, want.angleStepGoldenMult);
-            cf("distStepFrac", got.distStepFrac, want.distStepFrac);
-            cf("dwellDays", got.dwellDays, want.dwellDays);
-            cf("weight", got.weight, want.weight);
-            cf("mainTravelTrials", got.mainTravelTrials, want.mainTravelTrials);
-            cf("lateralWeight", got.lateralWeight, want.lateralWeight);
-            cf("dwellWeight", got.dwellWeight, want.dwellWeight);
-            cf("dwellLateralWeight", got.dwellLateralWeight, want.dwellLateralWeight);
-            cf("sigma", got.sigma, want.sigma);
-            cf("viewCylLen", got.viewCylLen, want.viewCylLen);
-            cf("maxHopDays", got.maxHopDays, want.maxHopDays);
-            cf("reachMult", got.reachMult, want.reachMult);
-            cf("travelPullReach", got.travelPullReach, want.travelPullReach);
-            ci("coneSurfaceTravel", got.coneSurfaceTravel, want.coneSurfaceTravel);
-            cf("coneShellThickness", got.coneShellThickness, want.coneShellThickness);
-            cf("growthDt", got.growthDt, want.growthDt);
-            cf("targetLift", got.targetLift, want.targetLift);
-            cf("spawnBehind", got.spawnBehind, want.spawnBehind);
-            ci("seed", got.seed, want.seed);
-
-            // An unknown key must be skipped and a missing one must keep its
-            // default, or a preset written before a parameter existed stops
-            // loading the day one is added.
-            {
-                std::ofstream partial(path);
-                partial << "N = 7\nsomethingUnknown = 3\n";
-            }
-            SP = rootsim::SimParams{};
-            SP.sigma = 0.99f;
-            if (!roots.loadConfig(path)) { printf("  partial load failed\n"); ++bad; }
-            if (roots.simParams().N != 7) { printf("  partial: N not read\n"); ++bad; }
-            if (std::fabs(roots.simParams().sigma - 0.99f) > 1e-6f) {
-                printf("  partial: absent key clobbered an existing value\n"); ++bad;
-            }
-            remove(path.c_str());
-            printf("presettest: %s\n", bad ? "FAIL" : "OK");
-            return bad ? 1 : 0;
-        }
+        // Round-trip every SimParams field through the roots bank. The
+        // failure a preset system has is silent: a field nobody declared comes
+        // back as its default and nothing complains, and the saved look simply
+        // cannot be reproduced. That used to be caught by writing a .root file
+        // from visitSimParams; now the registry is the only writer, so the test
+        // has to run the real panel -- which is also the only honest way to
+        // check it, since the panel is where declaration happens.
+        if (a == "--presettest") { g_roots_roundtrip = true; continue; }
         if (a == "--maskframes") {
             // The mask frames as numbers. A face is placed as
             // p + tangent*x + bitangent*y + normal*z, so the bitangent is the
@@ -2503,6 +2513,20 @@ int main(int argc, char** argv) {
     // next launch without flags comes up the way this one was asked for.
     if (g_panel_cli) PanelStateSave(g_ui_detached);
     else             PanelStateLoad(&g_ui_detached);
+
+    // The machine bank comes up on its own, every launch: it describes the room
+    // this copy of the app is installed in, and having to remember to load the
+    // camera calibration is a way of arriving at a show with the wrong one. The
+    // values are staged here and land on the first panel frame, like any other
+    // load. Its absence on a fresh checkout is not an error.
+    {
+        std::string e;
+        if (ui::LoadBank(ui::Bank::Machine, ui::MachinePath(), e))
+            printf("machine settings: loaded %s\n", ui::MachinePath().c_str());
+        else
+            printf("machine settings: none yet (%s)\n", e.c_str());
+        fflush(stdout);
+    }
 
     if (!glfwInit()) { fprintf(stderr, "glfw init failed\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // Metal owns the surface
@@ -3494,10 +3518,14 @@ int main(int argc, char** argv) {
             ui::PushSection("face tracking");
             ui::BeginHeader("face tracking", /*default_open=*/false);
             {
-                if (!mirror::FaceTracker::available()) {
+                ui::BeginGate(!mirror::FaceTracker::available());
+                {
                     ImGui::TextDisabled("MediaPipe not compiled in");
                     ImGui::TextDisabled("run ./setup-mediapipe.sh, then re-cmake");
-                } else {
+                }
+                ui::EndGate();
+                ui::BeginGate(!(!mirror::FaceTracker::available()));
+                {
                     if (ui::Checkbox("track faces", &g_track_on) && g_track_on) {
                         if (!g_tracker.isOpen()) {
                             const std::string model =
@@ -3580,7 +3608,8 @@ int main(int argc, char** argv) {
                             "no reason to draw one.");
                     }
                     ImGui::PushItemWidth(90);
-                    if (g_mask_shape == (int)MaskShape::Box) {
+                    ui::BeginGate(g_mask_shape == (int)MaskShape::Box);
+                    {
                         ui::SliderFloat("pad", &g_crop_pad, 0.f, 0.6f, "%.2f");
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip(
@@ -3589,6 +3618,7 @@ int main(int argc, char** argv) {
                         }
                         ImGui::SameLine();
                     }
+                    ui::EndGate();
                     ui::SliderInt("dilate", &g_mask_dilate, 0, 24);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -3744,7 +3774,8 @@ int main(int argc, char** argv) {
                             "from a stale frame from the photo still being\n"
                             "selected; this can.");
                     }
-                    if (g_show_source) {
+                    ui::BeginGate(g_show_source);
+                    {
                         ImGui::SameLine();
                         ui::Checkbox("landmarks", &g_pip_landmarks);
                         ImGui::PushItemWidth(110);
@@ -3756,11 +3787,17 @@ int main(int argc, char** argv) {
                         ui::DeclareInt("corner", &g_source_corner, 0, 3);
                         ImGui::PopItemWidth();
                     }
+                    ui::EndGate();
                     ui::PopSection();
 
                     // --- identity ------------------------------------------
                     ImGui::Separator();
                     ui::PushSection("identity");
+                    // "face tracking" is Machine -- how the camera acquires is
+                    // a property of the room. How the identity fit is shaped is
+                    // not: it decides what the face *looks* like, so it travels
+                    // with the piece rather than staying with the rig.
+                    ui::SetBank(ui::Bank::Look);
                     ImGui::Text("IDENTITY");
                     ImGui::SameLine();
                     if (g_fitter.hasIdentity()) {
@@ -3806,7 +3843,8 @@ int main(int argc, char** argv) {
                     ui::SliderFloat("secs", &g_id_collect_secs, 1.f, 15.f, "%.0fs");
                     ImGui::EndDisabled();
 
-                    if (g_fitter.valid()) {
+                    ui::BeginGate(g_fitter.valid());
+                    {
                         ImGui::PushItemWidth(90);
                         ui::SliderInt("modes", &g_fitter.config().n_identity, 10, 100);
                         ImGui::SameLine();
@@ -3848,19 +3886,29 @@ int main(int argc, char** argv) {
                                             g_fitter.basis().triangleCount(),
                                             g_fitter.basis().nvfTopology() ? "Maxine/NVF"
                                                                            : "ICT");
-                    } else {
+                    }
+                    ui::EndGate();
+                    ui::BeginGate(!(g_fitter.valid()));
+                    {
                         ImGui::TextDisabled("no face_basis.bin -- run");
                         ImGui::TextDisabled("tools/export_face_basis.py");
                     }
+                    ui::EndGate();
                     ui::PopSection();       // "identity"
                 }
+                ui::EndGate();
             }
             ui::EndHeader();
             ui::PopSection();               // "face tracking"
             ImGui::Separator();
 
             ui::PushSection("transition");
-            if (scene == (int)Scene::Transition) {
+            // Same as the mirror and roots pages: drawn only on its own scene,
+            // declared always. This section is the whole `look` bank's half of
+            // the transition, and gating the declaration meant a look preset
+            // saved from any other scene wrote none of it.
+            ui::BeginGate(scene == (int)Scene::Transition);
+            {
                 ImGui::Text("%s   t=%.2fs   emergence %.0f%%",
                             trans.phaseName(), trans.clock(), trans.emergence() * 100.f);
                 ImGui::SameLine();
@@ -3911,6 +3959,7 @@ int main(int argc, char** argv) {
                                     (int)trans.cloth().pos.size(),
                                     trans.cloth().tris.size() / 3, trans.cloth().minZ());
             }
+            ui::EndGate();
             ui::PopSection();               // "transition"
 
             // --- text overlay -------------------------------------------
@@ -3975,7 +4024,14 @@ int main(int argc, char** argv) {
             ui::EndHeader();
             ui::PopSection();               // "text"
 
-            if (scene == (int)Scene::Mirror) {
+            // Both scene pages are built every frame and only one is drawn.
+            // Gating the *declaration* on the active scene was the same bug as
+            // a collapsed header, one level up: half the registry would go
+            // missing whenever the other scene was on, so a mirror preset
+            // loaded from the roots page reached nothing and a save from there
+            // wrote the mirror's values as they were last seen.
+            ui::BeginGate(scene == (int)Scene::Mirror);
+            {
                 ui::PushSection("mirror");
                 mirror::PondParams& P = mirror.params();
                 // ripples
@@ -4080,10 +4136,12 @@ int main(int argc, char** argv) {
 
                 ui::Checkbox("moving ripple", &P.orbit_on);
                 ui::Checkbox("soft centers (anti-alias)", &P.core_rolloff);
-                if (P.core_rolloff) {
+                ui::BeginGate(P.core_rolloff);
+                {
                     ImGui::SameLine(); ImGui::SetNextItemWidth(120);
                     ui::SliderFloat("radius", &P.core_radius, 0.02f, 0.5f);
                 }
+                ui::EndGate();
                 ImGui::Separator();
                 // --- live fitting -----------------------------------------
                 {
@@ -4239,7 +4297,8 @@ int main(int argc, char** argv) {
                             ImGui::TextDisabled("(these need a tracked face)");
                         }
 
-                        if (open) {
+                        ui::BeginGate(open);
+                        {
                             bool mir = g_kinect.mirrored();
                             if (ui::Checkbox("mirror image", &mir)) g_kinect.setMirrored(mir);
                             if (ImGui::IsItemHovered()) {
@@ -4248,6 +4307,7 @@ int main(int argc, char** argv) {
                                     "left. The sensor does not.");
                             }
                         }
+                        ui::EndGate();
                         ImGui::Separator();
                     }
 #endif
@@ -4426,10 +4486,12 @@ int main(int argc, char** argv) {
                 const char* greyItems[] = {"R", "G", "B"};
                 ImGui::Combo("grey ch", &P.grey_channel, greyItems, 3);
                 ui::Checkbox("ripple amp -> color", &P.amp_drives_color);
-                if (P.amp_drives_color) {
+                ui::BeginGate(P.amp_drives_color);
+                {
                     ImGui::SameLine(); ImGui::SetNextItemWidth(120);
                     ui::SliderFloat("amp gain", &P.amp_gain, 0.2f, 6.0f);
                 }
+                ui::EndGate();
                 ui::Checkbox("swap R/B", &P.swap_rb);
                 ui::Checkbox("color travel (palette follows orbit)", &P.color_travel);
                 }
@@ -4485,19 +4547,32 @@ int main(int argc, char** argv) {
                 ui::EndHeader();
                 ui::PopSection();
                 ui::PopSection();          // "mirror"
-            } else {
+            }
+            ui::EndGate();
+
+            ui::BeginGate(scene != (int)Scene::Mirror);
+            {
                 ui::PushSection("roots");
                 MetalRootRenderer& R = roots.renderer();
                 ImGui::Text("%.0f fps   t=%5.1fs", fpsShown, roots.clock());
                 ImGui::Text("render %d x %d -> %d x %d  (overdraw-bound)",
                             roots.width(), roots.height(), fbw, fbh);
+                // How hard to drive the GPU is a fact about this machine, not
+                // about the piece: a preset carried to a venue with a different
+                // card should not bring last week's render scale with it.
+                ui::SetBank(ui::Bank::Machine);
                 ui::Checkbox("auto render-scale", &rootAutoScale);
-                if (rootAutoScale) {
-                    ImGui::SameLine(); ImGui::SetNextItemWidth(120);
-                    ui::SliderInt("target px", &rootTargetDim, 720, 3840);
-                } else {
-                    ui::SliderInt("root downscale", &rootDownscale, 1, 6);
-                }
+                // Both arms declare; only the live one draws. Otherwise
+                // whichever mode was off at save time got written from a stale
+                // cache, and the two would drift apart across a round trip.
+                ui::BeginGate(rootAutoScale);
+                if (ui::Visible()) { ImGui::SameLine(); ImGui::SetNextItemWidth(120); }
+                ui::SliderInt("target px", &rootTargetDim, 720, 3840);
+                ui::EndGate();
+                ui::BeginGate(!rootAutoScale);
+                ui::SliderInt("root downscale", &rootDownscale, 1, 6);
+                ui::EndGate();
+                ui::SetBank(ui::Bank::Roots);
                 ImGui::Separator();
 
                 // --- growth ------------------------------------------------
@@ -4508,6 +4583,12 @@ int main(int argc, char** argv) {
                     ImGui::Text("%s", roots.simActive()
                                     ? (roots.simDone() ? "grown" : "growing")
                                     : "stand-in (no CPlantBox parameters)");
+
+                    // The species is saved by name, not by its position in the
+                    // combo: the list is a hand-written table that will grow,
+                    // and an index would repoint every roots preset the day a
+                    // row is inserted above the one they meant.
+                    ui::DeclareString("species", &SP.speciesXml);
 
                     const auto& sp = RootScene::species();
                     int si = roots.speciesIndex();
@@ -4558,12 +4639,14 @@ int main(int argc, char** argv) {
                             "nests around each mask would be flattened onto the\n"
                             "surface instead of bulging into 3D.");
                     }
-                    if (SP.coneSurfaceTravel) {
+                    ui::BeginGate(SP.coneSurfaceTravel);
+                    if (ui::Visible()) {
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(90);
-                        ui::SliderFloat("shell", &SP.coneShellThickness, 1.f, 20.f,
-                                           "%.1f cm");
                     }
+                    ui::SliderFloat("shell", &SP.coneShellThickness, 1.f, 20.f,
+                                       "%.1f cm");
+                    ui::EndGate();
 
                     ImGui::SetNextItemWidth(110);
                     ui::SliderFloat("days / step", &SP.growthDt, 0.05f, 3.f, "%.2f");
@@ -4588,49 +4671,61 @@ int main(int argc, char** argv) {
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("seed %u", SP.seed);
+
+                    // --- the rest of SimParams ----------------------------
+                    //
+                    // These had no control at all: they existed only in the
+                    // .root file, which is what made a second preset system
+                    // necessary in the first place. Declaring them here is what
+                    // lets that system go away -- a roots preset is now the
+                    // whole of SimParams, and there is one file per root look
+                    // instead of two that can disagree.
+                    //
+                    // Folded away by default because they are structure, not
+                    // performance: changing one means a regrow.
+                    ui::BeginHeader("structure (needs a regrow)");
+                    {
+                        ImGui::PushItemWidth(110);
+                        ui::SliderFloat("mask start", &SP.startFrac, 0.f, 1.f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("mask end", &SP.endFrac, 0.f, 1.f);
+                        ui::SliderFloat("spiral drift", &SP.distStepFrac, -0.5f, 0.5f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("travel trials", &SP.mainTravelTrials, 1.f, 60.f,
+                                        "%.0f");
+                        ui::SliderFloat("dwell lateral", &SP.dwellLateralWeight, 0.f, 1.f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("reach x", &SP.reachMult, 0.4f, 4.f);
+                        ui::SliderFloat("view cylinder", &SP.viewCylLen, 1.f, 30.f,
+                                        "%.1f cm");
+                        ImGui::SameLine();
+                        ui::SliderFloat("target lift", &SP.targetLift, -10.f, 10.f,
+                                        "%.2f cm");
+                        ui::SliderFloat("spawn behind", &SP.spawnBehind, -10.f, 10.f,
+                                        "%.2f cm");
+                        ImGui::PopItemWidth();
+
+                        // The seed is part of the look -- a preset that came
+                        // back with a different one would not be the same root
+                        // system -- so it is saved, through an int because that
+                        // is the widest kind the registry has.
+                        int seed_i = (int)SP.seed;
+                        ui::DeclareInt("seed", &seed_i, 0, 1 << 30);
+                        SP.seed = (unsigned)seed_i;
+                    }
+                    ui::EndHeader();
                 }
                 ui::EndHeader();
                 ui::PopSection();
 
                 // --- presets -----------------------------------------------
-                ui::PushSection("presets");
-                ui::BeginHeader("presets", /*default_open=*/false);
-                {
-                    static std::vector<std::string> presets = RootScene::listPresets();
-                    static char preset_name[128] = "untitled";
-                    static std::string preset_msg;
-                    ImGui::PushItemWidth(-90);
-                    if (ImGui::BeginCombo("load", "choose...")) {
-                        for (const std::string& nm : presets) {
-                            if (ImGui::Selectable(nm.c_str())) {
-                                if (roots.loadConfig(RootScene::presetDir() + "/" +
-                                                     nm + ".root")) {
-                                    snprintf(preset_name, sizeof(preset_name), "%s",
-                                             nm.c_str());
-                                    roots.regrow();
-                                    preset_msg = "loaded " + nm;
-                                } else {
-                                    preset_msg = "could not read " + nm;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::InputText("name", preset_name, sizeof(preset_name));
-                    ImGui::PopItemWidth();
-                    if (ImGui::Button("save")) {
-                        const std::string path = RootScene::presetDir() + "/" +
-                                                 preset_name + ".root";
-                        preset_msg = roots.saveConfig(path) ? ("saved " + path)
-                                                            : ("could not write " + path);
-                        presets = RootScene::listPresets();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("rescan")) presets = RootScene::listPresets();
-                    if (!preset_msg.empty()) ImGui::TextDisabled("%s", preset_msg.c_str());
-                }
-                ui::EndHeader();
-                ui::PopSection();
+                // The root scene's presets are the `roots` bank now, saved
+                // from the settings section at the bottom of the panel with
+                // everything else. There used to be a second preset system
+                // here, writing .root files that held the SimParams fields the
+                // panel did not expose -- so "the root preset" and "the root
+                // settings" were two different things that could disagree, and
+                // only one of them was ever in the file you loaded.
 
                 // --- camera ------------------------------------------------
                 ui::PushSection("camera");
@@ -4644,7 +4739,8 @@ int main(int argc, char** argv) {
                             "one cone size and pointed at the wrong part of any\n"
                             "other.");
                     }
-                    if (roots.autoFrame) {
+                    ui::BeginGate(roots.autoFrame);
+                    {
                         const int nm = roots.maskCount();
                         std::string label = roots.focusMask >= 0 && roots.focusMask < nm
                                                 ? ("mask " + std::to_string(roots.focusMask))
@@ -4666,6 +4762,7 @@ int main(int argc, char** argv) {
                         ImGui::SameLine();
                         if (ImGui::SmallButton("reset zoom")) roots.zoom = 1.f;
                     }
+                    ui::EndGate();
                     ui::Checkbox("auto-orbit", &roots.autoOrbit); ImGui::SameLine();
                     ImGui::SetNextItemWidth(120);
                     ui::SliderFloat("orbit rate", &roots.orbitRate, -1.0f, 1.0f);
@@ -4691,10 +4788,12 @@ int main(int argc, char** argv) {
                 ui::SliderFloat("ambient", &R.mat.ambient, 0.0f, 0.5f);
                 ui::SliderFloat("diffuse", &R.mat.diffuse, 0.0f, 1.5f);
                 ui::SliderFloat("shininess", &R.mat.shininess, 4.0f, 300.0f);
-                if (sm == 1) {
+                ui::BeginGate(sm == 1);
+                {
                     ui::SliderFloat("metallic", &R.pbr.metallic, 0.0f, 1.0f);
                     ui::SliderFloat("roughness", &R.pbr.roughness, 0.05f, 1.0f);
                 }
+                ui::EndGate();
                 ui::SliderFloat("radius scale", &R.radiusScale, 0.2f, 4.0f);
                 ui::PopSection();           // "material"
                 ImGui::Separator();
@@ -4837,13 +4936,18 @@ int main(int argc, char** argv) {
                     ImGui::SameLine();
                     if (ImGui::Button("normal")) roots.setWideAngle(false);
                     ui::Checkbox("set FOV by focal length", &roots.useFocal);
-                    if (roots.useFocal) {
+                    ui::BeginGate(roots.useFocal);
+                    {
                         ui::SliderFloat("focal length (mm)", &roots.focalMM, 8.0f, 135.0f);
                         ImGui::TextDisabled("35mm equiv · %.0f deg vertical FOV",
                                             roots.effectiveFov() * 2.0f * 57.2957795f);
-                    } else {
+                    }
+                    ui::EndGate();
+                    ui::BeginGate(!(roots.useFocal));
+                    {
                         ui::SliderFloat("fov (rad, half-angle)", &roots.fov, 0.15f, 1.2f);
                     }
+                    ui::EndGate();
                     ui::SliderFloat("barrel <-> pincushion", &R.post.distortK1, -0.4f, 0.4f);
                     ui::SliderFloat("distortion (corners)", &R.post.distortK2, -0.2f, 0.2f);
                     ui::SliderFloat("distortion re-crop", &R.post.distortZoom, 0.6f, 1.2f);
@@ -4937,6 +5041,7 @@ int main(int argc, char** argv) {
                 ui::PopSection();
                 ui::PopSection();          // "roots"
             }
+            ui::EndGate();
 
             // --- settings: MIDI and presets -------------------------------
             //
@@ -5018,44 +5123,120 @@ int main(int argc, char** argv) {
                     ImGui::TreePop();
                 }
 
+                // --- presets, by bank -------------------------------------
+                //
+                // One box per bank rather than one for everything, because the
+                // banks are not the same kind of thing and mixing them is the
+                // mistake worth designing out: a mirror preset must be safe to
+                // load in any venue, which it only is if it cannot carry the
+                // camera calibration with it.
+                //
+                // The list is drawn from the bank table itself, so a bank added
+                // in ui_params gets its box here without anybody remembering to
+                // add one.
                 ImGui::Separator();
-                ImGui::Text("settings presets");
+                ImGui::Text("presets");
                 ImGui::SameLine();
-                ImGui::TextDisabled("(%d params)", ui::DeclaredCount());
-                static std::vector<std::string> sets = ui::ListPresets();
-                static char set_name[128] = "default";
-                static std::string set_msg;
-                ImGui::PushItemWidth(-90);
-                if (ImGui::BeginCombo("load##set", "choose...")) {
-                    for (const std::string& nm : sets) {
-                        if (ImGui::Selectable(nm.c_str())) {
-                            std::string e;
-                            if (ui::LoadPreset(ui::PresetDir() + "/" + nm + ".set", e)) {
-                                snprintf(set_name, sizeof(set_name), "%s", nm.c_str());
-                                set_msg = "loaded " + nm;
-                            } else {
-                                set_msg = e;
-                            }
-                        }
+                ImGui::TextDisabled("(%d params declared)", ui::DeclaredCount());
+
+                static bool show_retired = ui::ShowRetired();
+                if (ImGui::Checkbox("show retired controls", &show_retired))
+                    ui::SetShowRetired(show_retired);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Retired controls are still loaded and still saved --\n"
+                        "they are only hidden. Nothing in a preset breaks.");
+
+                struct BankUI { char name[128]; std::string msg;
+                                std::vector<std::string> list; };
+                static BankUI bui[(int)ui::Bank::Count];
+                static bool bui_init = false;
+                if (!bui_init) {
+                    for (int b = 1; b < (int)ui::Bank::Count; ++b) {
+                        snprintf(bui[b].name, sizeof(bui[b].name), "default");
+                        bui[b].list = ui::ListBank((ui::Bank)b);
                     }
-                    ImGui::EndCombo();
+                    bui_init = true;
                 }
-                ImGui::InputText("name##set", set_name, sizeof(set_name));
-                ImGui::PopItemWidth();
-                if (ImGui::Button("save##set")) {
-                    std::string e;
-                    set_msg = ui::SavePreset(ui::PresetDir() + "/" + set_name + ".set", e)
-                                  ? ("saved " + std::string(set_name))
-                                  : e;
-                    sets = ui::ListPresets();
+
+                for (int b = (int)ui::Bank::Machine; b < (int)ui::Bank::Count; ++b) {
+                    const ui::Bank bank = (ui::Bank)b;
+                    int retired = 0;
+                    const int n = ui::BankCount(bank, &retired);
+                    BankUI& U = bui[b];
+                    ImGui::PushID(b);
+                    ImGui::SeparatorText(ui::BankName(bank));
+                    ImGui::TextDisabled("%d parameter%s%s", n, n == 1 ? "" : "s",
+                                        retired ? " (some retired)" : "");
+
+                    if (bank == ui::Bank::Machine) {
+                        // One file, always the same one. Offering a choice of
+                        // machine configurations is offering to load the wrong
+                        // one on the night.
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| this room only");
+                        if (ImGui::Button("save machine")) {
+                            std::string e;
+                            U.msg = ui::SaveBank(bank, ui::MachinePath(), e)
+                                        ? "saved machine settings" : e;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("reload machine")) {
+                            std::string e;
+                            U.msg = ui::LoadBank(bank, ui::MachinePath(), e)
+                                        ? "reloaded machine settings" : e;
+                        }
+                    } else {
+                        ImGui::PushItemWidth(-110);
+                        if (ImGui::BeginCombo("load", "choose...")) {
+                            for (const std::string& nm : U.list) {
+                                if (!ImGui::Selectable(nm.c_str())) continue;
+                                std::string e;
+                                const std::string p = ui::BankDir(bank) + "/" + nm +
+                                                      ui::BankExt(bank);
+                                if (ui::LoadBank(bank, p, e)) {
+                                    snprintf(U.name, sizeof(U.name), "%s", nm.c_str());
+                                    U.msg = "loaded " + nm;
+                                } else {
+                                    U.msg = e;
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::InputText("name", U.name, sizeof(U.name));
+                        ImGui::PopItemWidth();
+                        if (ImGui::Button("save")) {
+                            std::string e;
+                            const std::string p = ui::BankDir(bank) + "/" + U.name +
+                                                  ui::BankExt(bank);
+                            U.msg = ui::SaveBank(bank, p, e)
+                                        ? ("saved " + std::string(U.name)) : e;
+                            U.list = ui::ListBank(bank);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("rescan")) U.list = ui::ListBank(bank);
+                    }
+                    if (!U.msg.empty()) ImGui::TextDisabled("%s", U.msg.c_str());
+                    ImGui::PopID();
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("rescan##set")) sets = ui::ListPresets();
-                if (!set_msg.empty()) ImGui::TextDisabled("%s", set_msg.c_str());
-                // A value only reaches a control when that control next draws,
-                // so anything inside a collapsed header is applied the moment
-                // it is opened. Saying so beats it looking like a partial load.
-                ImGui::TextDisabled("collapsed sections apply when opened");
+
+                // --- what nobody has classified ---------------------------
+                // Loud on purpose. A parameter in no bank is saved by nothing
+                // that anyone loads, which looks exactly like a control that
+                // does not work.
+                ImGui::Separator();
+                const auto& unassigned = ui::UnassignedParams();
+                if (!unassigned.empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f),
+                                       "%zu parameter(s) in no bank",
+                                       unassigned.size());
+                    if (ImGui::IsItemHovered()) {
+                        std::string t = "Add a rule to kBankRules in ui_params.cpp:\n\n";
+                        for (size_t i = 0; i < unassigned.size() && i < 30; ++i)
+                            t += unassigned[i] + "\n";
+                        ImGui::SetTooltip("%s", t.c_str());
+                    }
+                }
                 if (!ui::UnclaimedKeys().empty()) {
                     ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
                                        "%zu key(s) no control claimed",
@@ -5066,10 +5247,162 @@ int main(int argc, char** argv) {
                         ImGui::SetTooltip("%s", t.c_str());
                     }
                 }
+
+                // The master document, written from the registry that is live
+                // in this frame. Since declaring no longer depends on what is
+                // open, one frame is the whole app -- which is what makes a
+                // generated document worth having over a written one.
+                static std::string doc_msg;
+                if (ImGui::Button("write SETTINGS.md")) {
+                    const std::string p =
+                        std::string(MIRROR_APP_SRC_DIR) + "/../SETTINGS.md";
+                    std::string e;
+                    doc_msg = ui::WriteSettingsDoc(p, e) ? ("wrote " + p) : e;
+                }
+                if (!doc_msg.empty()) ImGui::TextDisabled("%s", doc_msg.c_str());
+
+                // The whole registry in one file, banks and all. Kept for the
+                // round-trip test and for taking a complete snapshot of a
+                // machine mid-session; not the thing to load on a show night.
+                if (ImGui::TreeNode("whole-registry dump")) {
+                    static std::vector<std::string> sets = ui::ListPresets();
+                    static char set_name[128] = "default";
+                    static std::string set_msg;
+                    ImGui::PushItemWidth(-90);
+                    if (ImGui::BeginCombo("load##set", "choose...")) {
+                        for (const std::string& nm : sets) {
+                            if (!ImGui::Selectable(nm.c_str())) continue;
+                            std::string e;
+                            if (ui::LoadPreset(ui::PresetDir() + "/" + nm + ".set", e)) {
+                                snprintf(set_name, sizeof(set_name), "%s", nm.c_str());
+                                set_msg = "loaded " + nm;
+                            } else {
+                                set_msg = e;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::InputText("name##set", set_name, sizeof(set_name));
+                    ImGui::PopItemWidth();
+                    if (ImGui::Button("save##set")) {
+                        std::string e;
+                        set_msg = ui::SavePreset(ui::PresetDir() + "/" + set_name + ".set", e)
+                                      ? ("saved " + std::string(set_name)) : e;
+                        sets = ui::ListPresets();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("rescan##set")) sets = ui::ListPresets();
+                    if (!set_msg.empty()) ImGui::TextDisabled("%s", set_msg.c_str());
+                    ImGui::TreePop();
+                }
             }
             ui::EndHeader();
             ImGui::End();
             if (panel_hidden) ImGui::PopStyleVar();
+
+            // --presettest, as a state machine over frames: a loaded value only
+            // lands when the control next declares itself, so each step here
+            // needs its own frame. Deliberately non-default values, all
+            // distinct, so a field that reads back *another* field's value is
+            // caught too and not just a field that is missing.
+            if (g_roots_roundtrip) {
+                static int rt_step = 0;
+                static rootsim::SimParams rt_want;
+                static int rt_bad = 0;
+                const std::string rt_path = ui::BankDir(ui::Bank::Roots) +
+                                            "/__roundtrip.roots";
+                rootsim::SimParams& SP = roots.simParams();
+                std::string rt_err;
+                switch (rt_step) {
+                    case 0:
+                        SP.speciesXml = "Glycine_max.xml";
+                        SP.N = 11;  SP.R0 = 17.5f; SP.Hh = 61.25f;
+                        SP.startFrac = 0.21f; SP.endFrac = 0.87f;
+                        SP.taperPower = 1.37f; SP.angleStepGoldenMult = 0.93f;
+                        SP.distStepFrac = 0.11f; SP.dwellDays = 23.5f;
+                        SP.weight = 0.77f; SP.mainTravelTrials = 19.f;
+                        SP.lateralWeight = 0.31f; SP.dwellWeight = 0.83f;
+                        SP.dwellLateralWeight = 0.71f; SP.sigma = 0.47f;
+                        SP.viewCylLen = 9.5f; SP.maxHopDays = 71.f;
+                        SP.reachMult = 1.9f; SP.travelPullReach = 1.45f;
+                        SP.coneSurfaceTravel = true; SP.coneShellThickness = 5.5f;
+                        SP.growthDt = 0.35f; SP.targetLift = 1.25f;
+                        SP.spawnBehind = 0.75f; SP.seed = 4242u;
+                        rt_want = SP;
+                        break;
+                    case 1:                     // the values are declared now
+                        if (!ui::SaveBank(ui::Bank::Roots, rt_path, rt_err)) {
+                            printf("  save: %s\n", rt_err.c_str()); ++rt_bad;
+                        }
+                        SP = rootsim::SimParams{};        // wipe to defaults
+                        break;
+                    case 2:
+                        if (!ui::LoadBank(ui::Bank::Roots, rt_path, rt_err)) {
+                            printf("  load: %s\n", rt_err.c_str()); ++rt_bad;
+                        }
+                        break;
+                    case 3: {                   // the loaded values have landed
+                        rootsim::SimParams got = SP, want = rt_want;
+                        auto cmp = [&](const char* n, auto& g, auto& w) {
+                            if constexpr (std::is_same_v<std::decay_t<decltype(g)>,
+                                                         std::string>) {
+                                if (g != w) {
+                                    printf("  MISMATCH %-22s %s != %s\n", n,
+                                           g.c_str(), w.c_str());
+                                    ++rt_bad;
+                                }
+                            } else if constexpr (std::is_floating_point_v<
+                                                     std::decay_t<decltype(g)>>) {
+                                if (std::fabs(double(g) - double(w)) > 1e-4) {
+                                    printf("  MISMATCH %-22s %g != %g\n", n,
+                                           double(g), double(w));
+                                    ++rt_bad;
+                                }
+                            } else {
+                                if (g != w) {
+                                    printf("  MISMATCH %-22s %lld != %lld\n", n,
+                                           (long long)g, (long long)w);
+                                    ++rt_bad;
+                                }
+                            }
+                        };
+                        // Walked from the field list rather than by hand, so a
+                        // field added to SimParams and forgotten in the panel
+                        // shows up here rather than in a rehearsal.
+                        rootsim::visitSimParams(got, [&](const char* n, auto& g) {
+                            rootsim::visitSimParams(want, [&](const char* n2, auto& w) {
+                                if (std::string(n) != n2) return;
+                                if constexpr (std::is_same_v<decltype(g), decltype(w)>)
+                                    cmp(n, g, w);
+                            });
+                        });
+                        remove(rt_path.c_str());
+                        printf("presettest: %s\n", rt_bad ? "FAIL" : "OK");
+                        fflush(stdout);
+                        glfwSetWindowShouldClose(win, 1);
+                        g_exit_code = rt_bad ? 1 : 0;
+                        break;
+                    }
+                }
+                ++rt_step;
+            }
+
+            if (g_write_settings_doc) {
+                const std::string p =
+                    std::string(MIRROR_APP_SRC_DIR) + "/../SETTINGS.md";
+                std::string e;
+                if (ui::WriteSettingsDoc(p, e)) {
+                    printf("settings doc: wrote %s (%d parameters)\n",
+                           p.c_str(), ui::DeclaredCount());
+                    if (!ui::UnassignedParams().empty())
+                        printf("settings doc: %zu parameter(s) in no bank\n",
+                               ui::UnassignedParams().size());
+                } else {
+                    fprintf(stderr, "settings doc: %s\n", e.c_str());
+                }
+                fflush(stdout);
+                glfwSetWindowShouldClose(win, 1);
+            }
 
             // --- camera mask: the rectangle, on the frame ------------------
             //
@@ -5297,5 +5630,5 @@ int main(int argc, char** argv) {
     ImGui::DestroyContext();
     glfwDestroyWindow(win);
     glfwTerminate();
-    return 0;
+    return g_exit_code;
 }

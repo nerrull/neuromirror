@@ -150,6 +150,11 @@ bool ColorEdit3(const char* label, float* rgb);
 // a radio group). Declares the value without drawing anything.
 void DeclareInt(const char* label, int* v, int lo, int hi);
 void DeclareFloat(const char* label, float* v, float lo, float hi);
+// A string-valued setting: a file name, a species. Saved as its literal value
+// rather than as an index into whatever list the panel happens to show, so
+// reordering that list does not silently repoint every preset that names it.
+// Not MIDI-bindable, for the obvious reason.
+void DeclareString(const char* label, std::string* v);
 
 // --- MIDI -------------------------------------------------------------------
 // A control-change message: routed to whatever is bound to it, or consumed by

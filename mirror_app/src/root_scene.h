@@ -98,14 +98,11 @@ public:
     void setSpeciesIndex(int i);
 
     // --- presets -----------------------------------------------------------
-    // Growth parameters to and from a flat key=value file. Deliberately not a
-    // binary blob or a versioned schema: an unknown key is skipped and a
-    // missing one keeps its default, so a preset written before a parameter
-    // existed still loads afterwards.
-    bool saveConfig(const std::string& path) const;
-    bool loadConfig(const std::string& path);
-    static std::string presetDir();
-    static std::vector<std::string> listPresets();
+    // There is no scene-specific preset file any more. Growth parameters are
+    // declared to the parameter registry like everything else and saved with
+    // the `roots` bank, so one file is the whole of a root look rather than the
+    // subset that happened to be in the panel plus the subset that happened to
+    // be in visitSimParams. See ui_params.h.
     bool simActive() const { return useSim_; }
     // The revealed masks, in render space. Exposed so the frames the faces are
     // placed on can be checked as numbers -- their orientation is not reliably
