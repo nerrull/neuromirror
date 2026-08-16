@@ -738,6 +738,12 @@ std::string g_show_err;
 // fitting phase showing the diagnostic fit view instead of the mirror is a
 // setting, not a rebuild. Indexed by show::Phase.
 int g_show_scene[(int)show::Phase::Count] = {0, 0, 2, 1};  // mirror,mirror,trans,roots
+
+// The diagnostic views (fit view, camera mask) are not phases -- nothing in the
+// piece ever cuts to them. They are a lens held over whatever the timeline is
+// doing, so they override the scene without touching the phase: -1 to follow
+// the phase, otherwise a Scene value.
+int g_view_override = -1;
 // Mean landmark error, in pixels, under which the identity fit counts as
 // converged. Above ~8 px the mask is visibly the wrong face; this is the
 // threshold the fitting phase waits on.
@@ -2790,7 +2796,14 @@ int main(int argc, char** argv) {
             // advanced after the scene was chosen would render one frame of the
             // phase it just left, which on the transition is a visible stutter
             // at exactly the moment the piece is meant to be seamless.
-            if (g_show_on) {
+            // The timeline is always the thing that decides what is on screen,
+            // whether or not it is advancing itself. "Run the show" means the
+            // edges are taken automatically; with it off the operator takes
+            // them from the phase navigator, and the piece is in a phase either
+            // way. There is no second, manual notion of "which scene" that the
+            // timeline could disagree with -- that disagreement is what a scene
+            // picker sitting beside a running timeline always turned into.
+            {
                 show::Signals sig;
                 sig.face_present = ShowFacePresent();
                 sig.fit_converged = ShowFitConverged();
@@ -2800,12 +2813,15 @@ int main(int argc, char** argv) {
                 if (scene == (int)Scene::Transition && trans.valid() && trans.done())
                     g_show.sceneDone();
 
-                const unsigned before = g_show.entries();
-                g_show.advance(dt);
+                if (g_show_on) g_show.advance(dt);
 
-                if (g_show.entries() != before) {
+                // Compared across frames rather than around advance(), so a
+                // phase the navigator jumped to is handled by the same code on
+                // the same footing as one the timeline reached on its own.
+                static unsigned handled_entries = ~0u;
+                if (g_show.entries() != handled_entries) {
+                    handled_entries = g_show.entries();
                     const show::Phase p = g_show.phase();
-                    scene = g_show_scene[(int)p];
                     if (g_show_log)
                         printf("show: %s (%s)\n", show::PhaseName(p),
                                g_show.lastReason().c_str());
@@ -2839,6 +2855,13 @@ int main(int argc, char** argv) {
                             break;
                     }
                 }
+
+                // Set every frame rather than on entry, so the diagnostic views
+                // are a lens over the running piece rather than a fourth thing
+                // that can be left switched on: drop the override and the phase
+                // is still whatever it was, still showing what it should.
+                scene = (g_view_override >= 0) ? g_view_override
+                                               : g_show_scene[(int)g_show.phase()];
             }
 
             // --- source overlay: upload the raw frame ---------------------
@@ -3252,7 +3275,16 @@ int main(int argc, char** argv) {
             else ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
             if (want_size_set) ImGui::SetNextWindowSize(want_size, ImGuiCond_Always);
             else ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
-            ImGui::Begin("neuromirror — controls", nullptr,
+            // The frame rate lives in the title, where it is readable with the
+            // panel scrolled anywhere and with the window collapsed. Everything
+            // before "###" is the visible title and everything after is the id,
+            // so the rate can change every frame without imgui.ini losing track
+            // of where this window was put -- a title that is also an id would
+            // make the panel a new window sixty times a second.
+            char panel_title[128];
+            snprintf(panel_title, sizeof(panel_title),
+                     "neuromirror — %.0f fps###controls", fpsShown);
+            ImGui::Begin(panel_title, nullptr,
                          panel_hidden ? (ImGuiWindowFlags_NoInputs |
                                          ImGuiWindowFlags_NoNav |
                                          ImGuiWindowFlags_NoFocusOnAppearing |
@@ -3274,7 +3306,7 @@ int main(int argc, char** argv) {
                 }
                 panel_was_detached = g_ui_detached;
             }
-            ImGui::Text("%.0f fps   t=%5.1fs", fpsShown, mirror.clock());
+            ImGui::Text("t=%5.1fs", mirror.clock());     // fps is in the title
             ImGui::SameLine();
             ImGui::Checkbox("own window", &g_ui_detached);
             if (ImGui::IsItemHovered())
@@ -3287,20 +3319,76 @@ int main(int argc, char** argv) {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Hide the whole UI. F1 or ` brings it back\n"
                                   "(on macOS F1 may need fn).");
-            ImGui::TextUnformatted("scene:"); ImGui::SameLine();
-            ImGui::RadioButton("mirror", &scene, (int)Scene::Mirror); ImGui::SameLine();
-            ImGui::RadioButton("roots",  &scene, (int)Scene::Roots); ImGui::SameLine();
-            ImGui::RadioButton("transition", &scene, (int)Scene::Transition);
-            ImGui::SameLine();
-            ImGui::RadioButton("fit view", &scene, (int)Scene::FitView);
-            ImGui::SameLine();
-            ImGui::RadioButton("cam mask", &scene, (int)Scene::CamMask);
+            // --- phase navigator ------------------------------------------
+            //
+            // Above the tabs and outside them, because it is not a setting: it
+            // is where the piece currently is. The tabs below are categories of
+            // parameter and nothing else -- opening the roots tab to adjust a
+            // fog value must not cut the projection to the root scene, which is
+            // what a tab that doubled as a scene picker did.
+            //
+            // Everything here goes through the timeline. "go" takes the phase's
+            // forward edge, which is the operator's cue; the named buttons force
+            // a phase outright. Both count as entries, so the scene restarts and
+            // the per-phase setup runs identically either way.
+            {
+                const show::Phase cur = g_show.phase();
+                ImGui::TextUnformatted("phase:");
+                for (int p = 0; p < (int)show::Phase::Count; ++p) {
+                    ImGui::SameLine();
+                    const bool on = (p == (int)cur) && g_view_override < 0;
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.26f, 0.45f, 0.30f, 1.f));
+                    if (ImGui::Button(show::PhaseName((show::Phase)p))) {
+                        g_view_override = -1;
+                        g_show.goTo((show::Phase)p);
+                    }
+                    if (on) ImGui::PopStyleColor();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("go >")) { g_view_override = -1; g_show.go(); }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Take this phase's forward edge now, whatever it was\n"
+                        "waiting for. The same cue as the MIDI CC and the key.");
+
+                ImGui::SameLine();
+                ImGui::TextDisabled("| %.1fs", g_show.phaseTime());
+                if (g_show.script()[cur].max_time > 0.f) {
+                    ImGui::SameLine();
+                    ImGui::ProgressBar(g_show.phaseProgress(), ImVec2(70, 0));
+                }
+
+                // The diagnostic views sit apart, and say so: they are not part
+                // of the running order and leaving one on is a mistake worth
+                // making visible rather than one more button in the same row.
+                ImGui::TextUnformatted("view:");
+                struct ViewBtn { const char* name; int scene; };
+                const ViewBtn views[] = {{"fit view",  (int)Scene::FitView},
+                                         {"cam mask",  (int)Scene::CamMask}};
+                for (const ViewBtn& v : views) {
+                    ImGui::SameLine();
+                    const bool on = (g_view_override == v.scene);
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.55f, 0.42f, 0.16f, 1.f));
+                    if (ImGui::Button(v.name))
+                        g_view_override = on ? -1 : v.scene;
+                    if (on) ImGui::PopStyleColor();
+                }
+                if (g_view_override >= 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                       "overriding %s", show::PhaseName(cur));
+                }
+            }
             ImGui::Separator();
 
             // --- show -----------------------------------------------------
             // Above everything else, because when it is on it is what is
             // choosing the scene: a panel that showed the radio buttons as the
             // authority while a timeline was reassigning them would be lying.
+            ImGui::BeginTabBar("panel", ImGuiTabBarFlags_None);
+            ui::BeginTab("show");
             ui::PushSection("show");
             {
                 if (ui::Checkbox("run the show", &g_show_on) && g_show_on)
@@ -3417,6 +3505,8 @@ int main(int argc, char** argv) {
             // --- screen ---------------------------------------------------
             // Always visible: the composition's shape is upstream of every
             // scene, the text's placement and the camera's crop.
+            ui::EndTab();
+            ui::BeginTab("machine");
             ui::PushSection("screen");
             ui::BeginHeader("screen orientation", /*default_open=*/false);
             {
@@ -3902,12 +3992,12 @@ int main(int argc, char** argv) {
             ui::PopSection();               // "face tracking"
             ImGui::Separator();
 
+            ui::EndTab();
+            ui::BeginTab("look");
             ui::PushSection("transition");
-            // Same as the mirror and roots pages: drawn only on its own scene,
-            // declared always. This section is the whole `look` bank's half of
-            // the transition, and gating the declaration meant a look preset
-            // saved from any other scene wrote none of it.
-            ui::BeginGate(scene == (int)Scene::Transition);
+            // The transition page is a category of settings, not a cue to
+            // play one: what is on screen is the phase navigator's business,
+            // so these declare and draw whenever the look tab is open.
             {
                 ImGui::Text("%s   t=%.2fs   emergence %.0f%%",
                             trans.phaseName(), trans.clock(), trans.emergence() * 100.f);
@@ -3959,7 +4049,8 @@ int main(int argc, char** argv) {
                                     (int)trans.cloth().pos.size(),
                                     trans.cloth().tris.size() / 3, trans.cloth().minZ());
             }
-            ui::EndGate();
+            // (the transition page is a category of settings, not a cue to
+            //  play one: what is on screen is the navigator's business)
             ui::PopSection();               // "transition"
 
             // --- text overlay -------------------------------------------
@@ -4030,7 +4121,7 @@ int main(int argc, char** argv) {
             // missing whenever the other scene was on, so a mirror preset
             // loaded from the roots page reached nothing and a save from there
             // wrote the mirror's values as they were last seen.
-            ui::BeginGate(scene == (int)Scene::Mirror);
+            ui::BeginTab("mirror");
             {
                 ui::PushSection("mirror");
                 mirror::PondParams& P = mirror.params();
@@ -4548,13 +4639,13 @@ int main(int argc, char** argv) {
                 ui::PopSection();
                 ui::PopSection();          // "mirror"
             }
-            ui::EndGate();
+            ui::EndTab();
 
-            ui::BeginGate(scene != (int)Scene::Mirror);
+            ui::BeginTab("roots");
             {
                 ui::PushSection("roots");
                 MetalRootRenderer& R = roots.renderer();
-                ImGui::Text("%.0f fps   t=%5.1fs", fpsShown, roots.clock());
+                ImGui::Text("t=%5.1fs", roots.clock());   // fps is in the title
                 ImGui::Text("render %d x %d -> %d x %d  (overdraw-bound)",
                             roots.width(), roots.height(), fbw, fbh);
                 // How hard to drive the GPU is a fact about this machine, not
@@ -5041,15 +5132,16 @@ int main(int argc, char** argv) {
                 ui::PopSection();
                 ui::PopSection();          // "roots"
             }
-            ui::EndGate();
+            ui::EndTab();
 
+            ui::EndTab();
+            ui::BeginTab("settings");
             // --- settings: MIDI and presets -------------------------------
             //
-            // Last in the panel on purpose. It is the section that is set up
-            // once and then left alone, and putting it above the controls it
-            // binds would push those further from the top every session.
-            ImGui::Separator();
-            ui::BeginHeader("settings", /*default_open=*/false);
+            // Last tab on purpose. It is the page that is set up once and then
+            // left alone, and putting it first would push the controls it binds
+            // one tab further away every session. No collapsing header inside
+            // it any more: the tab already is the fold.
             {
                 ImGui::Text("MIDI");
                 ImGui::SameLine();
@@ -5296,7 +5388,8 @@ int main(int argc, char** argv) {
                     ImGui::TreePop();
                 }
             }
-            ui::EndHeader();
+            ui::EndTab();
+            ImGui::EndTabBar();
             ImGui::End();
             if (panel_hidden) ImGui::PopStyleVar();
 

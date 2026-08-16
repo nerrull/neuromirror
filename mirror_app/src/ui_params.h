@@ -119,6 +119,15 @@ void EndHeader();
 void BeginGate(bool visible);
 void EndGate();
 
+// A tab in an ImGui tab bar, with the same contract as BeginHeader: the body
+// always runs, and being on an unselected tab hides a control without
+// undeclaring it. A tab bar is the strongest version of the trap this file
+// exists to avoid -- all but one page is invisible at any moment, so gating
+// declaration on selection would leave the registry holding roughly one tab's
+// worth of the app. Adds no path level; a tab is a view, not a name.
+void BeginTab(const char* label);
+void EndTab();
+
 // Everything declared until the matching EndRetired is kept working -- old
 // presets still load it, saves still write it -- but is not drawn unless the
 // operator asks to see retired controls. This is how a parameter stops

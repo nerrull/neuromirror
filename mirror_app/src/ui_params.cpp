@@ -440,6 +440,20 @@ void BeginGate(bool visible) {
 }
 void EndGate() { PopSection(); }
 
+void BeginTab(const char* label) {
+    const bool parent_draws = DrawHere();
+    const bool selected = parent_draws && ImGui::BeginTabItem(label);
+    PushSection("");
+    S().stack.back().visible = selected;
+}
+
+void EndTab() {
+    // EndTabItem pairs with a BeginTabItem that returned true, and nothing
+    // else -- which is exactly what this frame's visibility records.
+    if (!S().stack.empty() && S().stack.back().visible) ImGui::EndTabItem();
+    PopSection();
+}
+
 void BeginRetired(const char* label) {
     PushHeaderFrame(label, "", /*default_open=*/false, /*visible=*/true,
                     /*retired=*/true);
