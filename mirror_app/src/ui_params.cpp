@@ -440,6 +440,18 @@ void BeginGate(bool visible) {
 }
 void EndGate() { PopSection(); }
 
+void BeginTabBar(const char* id) {
+    const bool parent_draws = DrawHere();
+    const bool opened = parent_draws && ImGui::BeginTabBar(id);
+    PushSection("");
+    S().stack.back().visible = opened;
+}
+
+void EndTabBar() {
+    if (!S().stack.empty() && S().stack.back().visible) ImGui::EndTabBar();
+    PopSection();
+}
+
 void BeginTab(const char* label) {
     const bool parent_draws = DrawHere();
     const bool selected = parent_draws && ImGui::BeginTabItem(label);

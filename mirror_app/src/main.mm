@@ -744,6 +744,11 @@ int g_show_scene[(int)show::Phase::Count] = {0, 0, 2, 1};  // mirror,mirror,tran
 // doing, so they override the scene without touching the phase: -1 to follow
 // the phase, otherwise a Scene value.
 int g_view_override = -1;
+
+// The timeline held where it stands. Separate from g_show_on, which is a mode
+// and restarts from the top when it is switched back on: pausing keeps the
+// phase and its clock and resumes into them.
+bool g_show_paused = false;
 // Mean landmark error, in pixels, under which the identity fit counts as
 // converged. Above ~8 px the mask is visibly the wrong face; this is the
 // threshold the fitting phase waits on.
@@ -2619,8 +2624,11 @@ int main(int argc, char** argv) {
     mirror::TextOverlay text(ctx);
     mirror::TextParams textp;
 
+    // Camera is appended rather than inserted: g_show_scene holds these by
+    // number and is written into show presets, so renumbering would repoint
+    // every phase at a different scene.
     enum class Scene { Mirror = 0, Roots = 1, Transition = 2, FitView = 3,
-                       CamMask = 4 };
+                       CamMask = 4, Camera = 5 };
     int scene = (int)Scene::Mirror;
 
     // The running order off disk, falling back to the built-in one. A missing
@@ -2813,7 +2821,7 @@ int main(int argc, char** argv) {
                 if (scene == (int)Scene::Transition && trans.valid() && trans.done())
                     g_show.sceneDone();
 
-                if (g_show_on) g_show.advance(dt);
+                if (g_show_on && !g_show_paused) g_show.advance(dt);
 
                 // Compared across frames rather than around advance(), so a
                 // phase the navigator jumped to is handled by the same code on
@@ -2877,7 +2885,9 @@ int main(int argc, char** argv) {
             static std::vector<unsigned char> srcRGB, srcRGBA;
             bool srcFresh = false;
             int pipW = 0, pipH = 0;
-            const bool wantSource = g_show_source || scene == (int)Scene::CamMask;
+            const bool wantSource = g_show_source ||
+                                    scene == (int)Scene::CamMask ||
+                                    scene == (int)Scene::Camera;
             if (wantSource && SourceReady()) {
                 // Preview at the *composition's* aspect, not the source's.
                 // Once the frame is a different shape from the sensor, the crop
@@ -2891,7 +2901,9 @@ int main(int argc, char** argv) {
                 // 320 on the long edge is enough to see a face in the corner and
                 // cheap to box-filter down to; the editor gets a real resolution
                 // because edges are what is being placed there.
-                const int base = scene == (int)Scene::CamMask ? 960 : 320;
+                const bool full_frame = scene == (int)Scene::CamMask ||
+                                        scene == (int)Scene::Camera;
+                const int base = full_frame ? 960 : 320;
                 if (compW >= compH) {
                     pipW = base;
                     pipH = std::max(1, int(int64_t(base) * compH / compW));
@@ -3035,6 +3047,18 @@ int main(int argc, char** argv) {
                 } else {
                     fitview.clearMesh();
                 }
+                fitview.ensureSize(compW, compH);
+                sceneTex = fitview.render(cb);
+            } else if (scene == (int)Scene::Camera && fitview.valid()) {
+                // The camera, as it arrives, with nothing done to it. This is
+                // the view for answering "is the sensor actually working" and
+                // for setting the crop, and both questions are only answerable
+                // against an unprocessed frame: a preview that had already had
+                // the mask and the crop applied would agree with itself no
+                // matter what the camera was doing.
+                fitview.setBackground(srcTex);
+                fitview.clearMask();
+                fitview.clearMesh();
                 fitview.ensureSize(compW, compH);
                 sceneTex = fitview.render(cb);
             } else if (scene == (int)Scene::CamMask && fitview.valid()) {
@@ -3346,11 +3370,39 @@ int main(int argc, char** argv) {
                     if (on) ImGui::PopStyleColor();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("go >")) { g_view_override = -1; g_show.go(); }
+                if (ImGui::Button("go >")) {
+                    // A cue is still a cue while paused: freezing the clock
+                    // should stop the piece running away on its own, not take
+                    // the operator's hands off it.
+                    g_view_override = -1;
+                    g_show_paused = false;
+                    g_show.go();
+                }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip(
                         "Take this phase's forward edge now, whatever it was\n"
                         "waiting for. The same cue as the MIDI CC and the key.");
+
+                // Pause freezes the timeline where it stands. Distinct from
+                // unticking "run the show", which is a mode and re-arms from
+                // the top: this holds the current phase, at its current time,
+                // and resumes into it.
+                ImGui::SameLine();
+                const bool can_pause = g_show_on;
+                ImGui::BeginDisabled(!can_pause);
+                if (g_show_paused) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                         ImVec4(0.55f, 0.42f, 0.16f, 1.f));
+                if (ImGui::Button(g_show_paused ? "paused" : "pause"))
+                    g_show_paused = !g_show_paused;
+                if (g_show_paused) ImGui::PopStyleColor();
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        g_show_on ? "Hold the timeline where it is. The phase and\n"
+                                    "its clock keep their values and resume from\n"
+                                    "them; the scene carries on rendering."
+                                  : "Nothing to pause: the show is not running.\n"
+                                    "The phase buttons drive it by hand.");
 
                 ImGui::SameLine();
                 ImGui::TextDisabled("| %.1fs", g_show.phaseTime());
@@ -3364,7 +3416,8 @@ int main(int argc, char** argv) {
                 // making visible rather than one more button in the same row.
                 ImGui::TextUnformatted("view:");
                 struct ViewBtn { const char* name; int scene; };
-                const ViewBtn views[] = {{"fit view",  (int)Scene::FitView},
+                const ViewBtn views[] = {{"camera",    (int)Scene::Camera},
+                                         {"fit view",  (int)Scene::FitView},
                                          {"cam mask",  (int)Scene::CamMask}};
                 for (const ViewBtn& v : views) {
                     ImGui::SameLine();
@@ -3387,7 +3440,7 @@ int main(int argc, char** argv) {
             // Above everything else, because when it is on it is what is
             // choosing the scene: a panel that showed the radio buttons as the
             // authority while a timeline was reassigning them would be lying.
-            ImGui::BeginTabBar("panel", ImGuiTabBarFlags_None);
+            ui::BeginTabBar("panel");
             ui::BeginTab("show");
             ui::PushSection("show");
             {
@@ -4115,12 +4168,8 @@ int main(int argc, char** argv) {
             ui::EndHeader();
             ui::PopSection();               // "text"
 
-            // Both scene pages are built every frame and only one is drawn.
-            // Gating the *declaration* on the active scene was the same bug as
-            // a collapsed header, one level up: half the registry would go
-            // missing whenever the other scene was on, so a mirror preset
-            // loaded from the roots page reached nothing and a save from there
-            // wrote the mirror's values as they were last seen.
+            ui::EndTab();
+
             ui::BeginTab("mirror");
             {
                 ui::PushSection("mirror");
@@ -5134,14 +5183,12 @@ int main(int argc, char** argv) {
             }
             ui::EndTab();
 
-            ui::EndTab();
-            ui::BeginTab("settings");
-            // --- settings: MIDI and presets -------------------------------
+            ui::BeginTab("midi");
+            // --- midi ------------------------------------------------------
             //
-            // Last tab on purpose. It is the page that is set up once and then
-            // left alone, and putting it first would push the controls it binds
-            // one tab further away every session. No collapsing header inside
-            // it any more: the tab already is the fold.
+            // Near the end on purpose. It is the page that is set up once and
+            // then left alone, and putting it first would push the controls it
+            // binds one tab further away every session.
             {
                 ImGui::Text("MIDI");
                 ImGui::SameLine();
@@ -5215,6 +5262,17 @@ int main(int argc, char** argv) {
                     ImGui::TreePop();
                 }
 
+            }
+            ui::EndTab();
+
+            // --- save --------------------------------------------------------
+            //
+            // Its own tab, not a footer under the MIDI setup. Saving is the one
+            // thing here done *during* a session rather than once before it, and
+            // having to scroll past the device list to reach it every time was
+            // the reason presets went unsaved.
+            ui::BeginTab("save");
+            {
                 // --- presets, by bank -------------------------------------
                 //
                 // One box per bank rather than one for everything, because the
@@ -5389,7 +5447,7 @@ int main(int argc, char** argv) {
                 }
             }
             ui::EndTab();
-            ImGui::EndTabBar();
+            ui::EndTabBar();
             ImGui::End();
             if (panel_hidden) ImGui::PopStyleVar();
 
@@ -5503,6 +5561,89 @@ int main(int argc, char** argv) {
             // is a piece of set dressing aimed at a real room, and placing it
             // by numbers in a list means looking away from the thing being
             // aimed at.
+            // --- camera debug: is it working, and where is the crop -------
+            //
+            // Two questions that are usually asked together and are usually
+            // both answered "I think so" from the composition alone, which
+            // cannot distinguish a closed sensor from a stale frame from a
+            // tracker that is running but pointed at nothing. So this draws the
+            // numbers rather than an impression: frame size, how long since the
+            // last one, whether a face is believed and how long it has been
+            // held -- over the raw frame, with the boxes on top.
+            if (g_ui_visible && scene == (int)Scene::Camera) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetNextWindowPos(vp->WorkPos);
+                ImGui::SetNextWindowSize(vp->WorkSize);
+                ImGui::Begin("##camera_debug", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoBackground |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoInputs);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 o = vp->WorkPos, sz = vp->WorkSize;
+                auto box = [&](float cx, float cy, float hx, float hy,
+                               ImU32 col, float th) {
+                    dl->AddRect(ImVec2(o.x + (cx - hx) * sz.x, o.y + (cy - hy) * sz.y),
+                                ImVec2(o.x + (cx + hx) * sz.x, o.y + (cy + hy) * sz.y),
+                                col, 0.f, 0, th);
+                };
+
+                // The raw detection, thin and grey, and the smoothed padded box
+                // the fit is actually handed, bright. Both, because the gap
+                // between them *is* what "pad" and "head smoothing" do -- with
+                // only one drawn those two sliders are guesswork.
+                if (g_face.valid) {
+                    box(g_face.centre_x, g_face.centre_y,
+                        0.5f * (g_face.max_x - g_face.min_x),
+                        0.5f * (g_face.max_y - g_face.min_y),
+                        IM_COL32(170, 170, 170, 170), 1.5f);
+                }
+                if (g_head_valid) {
+                    const ImU32 c = g_face_held ? IM_COL32(255, 210, 100, 235)
+                                                : IM_COL32(120, 235, 150, 235);
+                    box(g_head_cx, g_head_cy, g_head_hx, g_head_hy, c, 2.5f);
+                    dl->AddLine(ImVec2(o.x + g_head_cx * sz.x, o.y),
+                                ImVec2(o.x + g_head_cx * sz.x, o.y + sz.y),
+                                IM_COL32(255, 255, 255, 40), 1.f);
+                    dl->AddLine(ImVec2(o.x, o.y + g_head_cy * sz.y),
+                                ImVec2(o.x + sz.x, o.y + g_head_cy * sz.y),
+                                IM_COL32(255, 255, 255, 40), 1.f);
+                }
+                // Where the camera mask will cut, if it is on: the crop has to
+                // be set inside it or the fit is handed pixels that the rest of
+                // the app has already blacked out.
+                if (g_cam_mask_on) {
+                    dl->AddRect(ImVec2(o.x + g_cam_x0 * sz.x, o.y + g_cam_y0 * sz.y),
+                                ImVec2(o.x + g_cam_x1 * sz.x, o.y + g_cam_y1 * sz.y),
+                                IM_COL32(255, 120, 120, 150), 0.f, 0, 1.5f);
+                }
+
+                char l1[192], l2[192];
+                snprintf(l1, sizeof(l1), "camera  %s   %dx%d",
+                         SourceReady() ? "ready" : "NO FRAMES", pipW, pipH);
+                if (!g_track_on)
+                    snprintf(l2, sizeof(l2), "tracking off");
+                else if (g_face_held)
+                    snprintf(l2, sizeof(l2), "face held %.2fs of %.2f",
+                             nowT - g_face_last_seen, g_face_hold_secs);
+                else if (g_face.valid)
+                    snprintf(l2, sizeof(l2), "face  streak %d   crop %s",
+                             g_face_streak, HaveCrop() ? "live" : "off");
+                else
+                    snprintf(l2, sizeof(l2), "no face  (streak %d of %d)",
+                             g_face_streak, g_face_acquire);
+                const ImVec2 at(o.x + 14.f, o.y + 14.f);
+                dl->AddRectFilled(ImVec2(at.x - 6, at.y - 4),
+                                  ImVec2(at.x + 330, at.y + 40),
+                                  IM_COL32(0, 0, 0, 150), 4.f);
+                dl->AddText(at, SourceReady() ? IM_COL32(200, 240, 210, 255)
+                                              : IM_COL32(255, 130, 130, 255), l1);
+                dl->AddText(ImVec2(at.x, at.y + 19), IM_COL32(220, 220, 220, 255), l2);
+                ImGui::End();
+            }
+
             if (g_ui_visible && scene == (int)Scene::CamMask) {
                 const ImGuiViewport* vp = ImGui::GetMainViewport();
                 ImGui::SetNextWindowPos(vp->WorkPos);

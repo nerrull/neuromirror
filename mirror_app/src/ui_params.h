@@ -125,6 +125,13 @@ void EndGate();
 // exists to avoid -- all but one page is invisible at any moment, so gating
 // declaration on selection would leave the registry holding roughly one tab's
 // worth of the app. Adds no path level; a tab is a view, not a name.
+// The bar the tabs live in. Wrapped rather than called directly because
+// ImGui::BeginTabBar can fail -- a collapsed or fully clipped window is the
+// usual way -- and EndTabBar must not be called when it did. Wrapping it keeps
+// that pairing in one place and, since a failed bar reads as "not drawing",
+// the tabs inside it go on declaring exactly as they do when unselected.
+void BeginTabBar(const char* id);
+void EndTabBar();
 void BeginTab(const char* label);
 void EndTab();
 
