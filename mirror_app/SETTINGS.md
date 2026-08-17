@@ -50,7 +50,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## show (9 parameters)
+## show (18 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -63,6 +63,15 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots` | int | 0 .. 4 | 1 |
 | `show/run the show` | bool | -- | 0 |
 | `show/transition` | int | 0 .. 4 | 2 |
+| `sound/fall (s)` | float | 0.05 .. 4 | 0.55 |
+| `sound/far (face height)` | float | 0.02 .. 0.4 | 0.12 |
+| `sound/key (MIDI note)` | float | 24 .. 84 | 48 |
+| `sound/level` | float | 0 .. 1 | 1 |
+| `sound/movement full scale` | float | 0.2 .. 4 | 1.2 |
+| `sound/near (face height)` | float | 0.1 .. 0.9 | 0.45 |
+| `sound/phases post their own events` | bool | -- | 1 |
+| `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
+| `sound/sound on` | bool | -- | 1 |
 
 ## look (31 parameters)
 
