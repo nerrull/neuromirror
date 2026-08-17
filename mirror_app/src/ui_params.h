@@ -1,5 +1,8 @@
 // ui_params — every control in the app, by name, in one place.
 //
+// >>> Building or editing the panel? Read ../PANEL.md first. It is the rules
+// >>> in full, with the mistakes they exist to prevent. This header is the API.
+//
 // Three features want the same thing and would otherwise each invent it:
 //
 //   MIDI          a knob has to reach a specific parameter, which means the

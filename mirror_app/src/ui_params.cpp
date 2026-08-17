@@ -87,6 +87,9 @@ const BankRule kBankRules[] = {
     {"face tracking", Bank::Machine},
 
     {"show",          Bank::Show},
+    // The piece's audio, not the room's: which key it is in and how loud it
+    // runs travel with the show, the same way its timings do.
+    {"sound",         Bank::Show},
 
     {"text",          Bank::Look},
     {"transition",    Bank::Look},

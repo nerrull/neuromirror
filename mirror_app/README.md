@@ -34,9 +34,18 @@ composition:
 - **F1** or **`** hides and reveals the whole UI — panel, cam-mask handles and
   source PiP — and there is a **hide** button next to the checkbox. Two keys
   because macOS eats F1 for screen brightness unless F-keys are set to behave as
-  function keys. `--no-panel` starts hidden. Hidden still means *submitted*:
-  MIDI and preset values reach a control as it draws (see `ui_params.h`), so the
-  knobs keep working with nothing on screen.
+  function keys. `--no-panel` starts hidden. Hidden still means *declared*:
+  every control registers itself every frame whether or not it is drawn, so MIDI
+  and preset values reach it with the panel hidden, the tab unselected or the
+  header folded.
+
+The tabs are categories of parameter — they line up with the preset banks and
+change nothing but what the panel shows. What is on screen comes from the phase
+navigator above them. **[PANEL.md](PANEL.md) is how the panel is built**: the
+declare-is-not-draw rule, the naming contract, the banks, and the tests that
+catch a section drawing when it should not. Read it before adding a control.
+[SETTINGS.md](SETTINGS.md) lists every parameter and its bank, and is generated
+(`--settings-doc`) rather than maintained.
 
 While attached, the panel is pinned inside the main window and capped to its
 height (ImGui only merges a window that the main one contains whole, and this
@@ -84,9 +93,68 @@ Headless checks: `mirror_app --selftest` (MLX→texture path), `mirror_app
 (step the live CPlantBox growth then render), `mirror_app --taptest [tapId]
 [seconds]` (list the Wwise onset taps that are publishing, watch one, and print
 the hits it delivers -- the way to tell a missing plug-in from a wrong Tap ID
-from a threshold nothing clears), and `mlp_parity_test mirror_app/tests/fixtures`
+from a threshold nothing clears), `mirror_app --audiotest [seconds] [out.wav]`
+(run the piece's whole arc through the embedded Wwise engine with no window --
+see [Sound](#sound) below), and `mlp_parity_test mirror_app/tests/fixtures`
 (MLP vs Python reference).
 Regenerate the pond weights with `assets/gen_pond_weights.py` (needs neuromirror's venv).
+
+## Sound
+
+The piece's audio is the Wwise project at `../WwiseProject`, and **its engine
+runs inside this app** — `src/wwise_audio.h` has the reasoning, but the short
+version is that an installation should not depend on Wwise Authoring (a Windows
+app under CrossOver here) staying up for the length of an exhibition. At showtime
+this binary loads `GeneratedSoundBanks/Mac/{Init,Racine}.bnk` and needs no Wwise
+at all.
+
+What the project holds:
+
+| | |
+|---|---|
+| **Busses** | `Mirror`, `Roots`, `Transition` under the main bus; `Mirror_Verb` / `Roots_Verb` aux busses, one Wwise RoomVerb each — long and open for the mirror, shorter and darker for the roots |
+| **Beds** | `Amb_Mirror` and `Amb_Roots`, each a Blend Container layering a Macro Oscillator voice over a Random Container of recorded texture |
+| **One-shots** | `Play_Pluck`, `Play_Bell`, `Play_Drop` (a random container of three modal drops, tuned to the key) |
+| **The handoff** | `Play_Transition` / `Stop_Transition` |
+| **Game Parameters** | `Proximity`, `Movement`, `Centering`, `HeadYaw`, `HeadTilt` (the room) · `FitLevel`, `SceneProgress` (the piece) · `Key`, `Intensity` (the operator) |
+| **States** | `Phase` = `Idle` \| `Fitting` \| `Transition` \| `Roots`, set from the same edge that switches the scene |
+
+The pads are Macro Oscillator sources with **Triggered off** — free-running
+rather than plucked — and their amplitude comes from a Wwise envelope modulator
+on voice volume (6 s in for the mirror pad, 10 s for the root drone, released by
+the Stop event's fade). Pitch follows `Key` everywhere: the mirror pad at the
+key, the root drone an octave below, plucks and drops in the octaves above, so
+one slider retunes the whole piece.
+
+### Where the numbers come from
+
+`src/presence.h` turns the tracker's landmarks into the five room parameters:
+proximity from how much of the frame the face fills, movement from landmark
+travel *measured in face widths* (so leaning in does not read as movement), yaw
+from the nose against the silhouette, tilt from the eye line. Everything is
+asymmetrically smoothed — quick to rise, slow to fall — because a filter driven
+by raw landmarks buzzes, and a movement signal that spikes on a dropped frame
+reads as somebody lunging. The panel shows smoothed against raw side by side,
+which is the only way to tune the time constants.
+
+`FitLevel` is the identity fit's mean landmark error against the threshold the
+fitting phase waits on, at half scale exactly on the threshold: converged is
+where the sound gets interesting, not where it stops.
+
+### When it is silent
+
+`mirror_app --audiotest 30 /tmp/out.wav` walks the arc — mirror bed, drops,
+pluck, bell, transition, roots, let go — sweeping every parameter, with no
+window and no camera in the way. Silence there with no error printed means a
+plug-in that is in the bank but not linked into this binary: check
+`GeneratedSoundBanks/Mac/PluginInfo.json` against the factory headers included
+by `src/wwise_audio.cpp`. An unregistered plug-in loads fine and plays nothing.
+
+The app links the **Profile** Wwise configuration, so Wwise Authoring's profiler
+connects to it and shows the live busses, voices and RTPC values — the
+visibility that would otherwise be lost by moving the engine out of Authoring.
+Build the plug-ins for whichever configuration you link (`../wwise_plugins/README.md`);
+`Release` is the one for an unattended install.
 
 ## Raindrops, and driving them from audio
 

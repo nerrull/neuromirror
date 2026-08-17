@@ -36,6 +36,8 @@
 #include "text_overlay.h"
 #include "screen_layout.h"
 #include "show_timeline.h"
+#include "presence.h"
+#include "wwise_audio.h"
 #include "LeafMesh.h"
 
 #include <algorithm>
@@ -767,6 +769,22 @@ bool g_show_log = true;
 std::vector<unsigned char> g_track_rgb;
 std::vector<unsigned char> g_fit_mask;
 int64_t g_track_ts = 0;         // must increase monotonically for video mode
+
+// --- the sound --------------------------------------------------------------
+//
+// The Wwise engine, running in this process (see wwise_audio.h). It is fed from
+// two places and only two: the phase-entry switch below posts the events, and
+// the per-frame block after it pushes the continuous parameters. Nothing else
+// in the app talks to it, which is what keeps "what does the piece sound like"
+// a question with one answer in the Wwise project rather than a behaviour
+// spread across the render code.
+mirror::WwiseAudio g_audio;
+mirror::Presence   g_presence;    // the room, as numbers the synth can use
+bool  g_audio_on   = true;        // send anything at all
+bool  g_audio_auto = true;        // the phases post their own events
+float g_audio_key  = 48.f;        // MIDI note: the piece's base pitch
+float g_audio_intensity = 1.f;    // master, on the main bus
+std::string g_audio_err;
 
 // The neural texture the mask wears: per-vertex RGB sampled from the mirror's
 // own output at the fitted mesh's projected positions. Lives here rather than
@@ -2021,6 +2039,100 @@ static int taptest(uint32_t tapId, double seconds) {
     return hits > 0 ? 0 : 1;
 }
 
+// --audiotest: does the Wwise engine in this process actually make a sound?
+//
+// The mirror image of --taptest, and for the same reason: when nothing is
+// audible the causes are a bank that did not load, a plug-in that is in the
+// bank but not linked into this binary, an event name that no longer matches
+// the project, or a bus sitting at -96 -- and from inside a running show they
+// are indistinguishable. This walks the piece's arc with no window, no camera
+// and no scenes in the way: start the mirror bed, sweep the room parameters
+// across their whole range, hand off through the transition to the roots, and
+// let go.
+//
+// It is deliberately audible. Silence here with no error printed means the
+// signal chain is broken somewhere Wwise considers legal, which is exactly the
+// case a return code cannot tell you about.
+static int audiotest(double seconds, const char* wav_out) {
+    mirror::WwiseAudio audio;
+    std::string err;
+    if (!audio.init(mirror::WwiseAudio::DefaultBankDir(), err)) {
+        fprintf(stderr, "audiotest: %s\n", err.c_str());
+        return 1;
+    }
+    printf("audiotest: engine up, banks from %s\n", audio.bankDir().c_str());
+    if (wav_out && *wav_out) {
+        if (audio.startCapture(wav_out)) printf("audiotest: recording to %s\n", wav_out);
+        else fprintf(stderr, "audiotest: could not record to %s\n", wav_out);
+    }
+
+    // Not glfwGetTime(): GLFW is not initialised on this path and reads a
+    // constant 0 until it is, which is an infinite loop rather than a wrong
+    // number. (Same reason as taptest above.)
+    const auto clock_now = [] {
+        using namespace std::chrono;
+        return duration<double>(steady_clock::now().time_since_epoch()).count();
+    };
+
+    struct Beat { double at; const char* phase; const char* event; };
+    const Beat beats[] = {
+        {0.00, "Idle",       "Play_Amb_Mirror"},
+        {0.30, "Fitting",    nullptr},
+        {0.42, nullptr,      "Play_Drop"},
+        {0.50, nullptr,      "Play_Pluck"},
+        {0.58, nullptr,      "Play_Bell"},
+        {0.65, "Transition", "Play_Transition"},
+        {0.78, "Roots",      "Play_Amb_Roots"},
+        {0.80, nullptr,      "Stop_Amb_Mirror"},
+        {0.96, nullptr,      "Stop_Amb_Roots"},
+    };
+    size_t next = 0;
+
+    const double t0 = clock_now();
+    double t = 0.0;
+    while (t < seconds) {
+        const double u = t / seconds;   // 0..1 through the whole run
+
+        while (next < IM_ARRAYSIZE(beats) && u >= beats[next].at) {
+            if (beats[next].phase) {
+                printf("  %5.1fs  phase %s\n", t, beats[next].phase);
+                audio.setState("Phase", beats[next].phase);
+            }
+            if (beats[next].event) {
+                printf("  %5.1fs  %s\n", t, beats[next].event);
+                audio.post(beats[next].event);
+            }
+            ++next;
+        }
+
+        // Every parameter swept, each at its own rate, so a stuck one is
+        // audible as the one thing that stopped moving rather than hidden in a
+        // single ramp everything follows.
+        mirror::AudioParams p;
+        p.proximity      = 0.5f - 0.5f * std::cos((float)u * 6.2831853f);
+        p.movement       = 0.5f - 0.5f * std::cos((float)u * 12.566371f);
+        p.centering      = std::sin((float)u * 6.2831853f);
+        p.head_yaw       = 60.f * std::sin((float)u * 3.1415927f);
+        p.head_tilt      = 45.f * std::sin((float)u * 9.4247780f);
+        p.fit_level      = std::min(1.f, (float)u * 2.f);
+        p.scene_progress = (float)u;
+        p.key            = 48.f;
+        p.intensity      = 1.f;
+        audio.update(p);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        t = clock_now() - t0;
+    }
+
+    printf("audiotest: %lu events posted over %.0f s. If that was silent, check\n"
+           "  GeneratedSoundBanks/Mac/PluginInfo.json against the factory headers\n"
+           "  included by wwise_audio.cpp -- an unregistered plug-in loads fine\n"
+           "  and plays nothing.\n", audio.eventsPosted(), seconds);
+    audio.stopCapture();
+    audio.term();
+    return 0;
+}
+
 static int textshot(const char* path, const char* str, float warp,
                     float reveal, float softness) {
     MetalContext ctx;
@@ -2138,6 +2250,11 @@ int main(int argc, char** argv) {
             const uint32_t tap = (i + 1 < argc) ? (uint32_t)atoi(argv[i + 1]) : 0;
             const double secs = (i + 2 < argc) ? atof(argv[i + 2]) : 10.0;
             return taptest(tap, secs);
+        }
+        if (a == "--audiotest") {
+            const double secs = (i + 1 < argc) ? atof(argv[i + 1]) : 30.0;
+            const char* wav = (i + 2 < argc) ? argv[i + 2] : nullptr;
+            return audiotest(secs, wav);
         }
         if (a == "--fitviewtest") {
             // The fit view's shaders are loaded from disk at run time, so a
@@ -2620,6 +2737,14 @@ int main(int argc, char** argv) {
                                         std::max(CGFloat(1), size.y * s));
         };
 
+    // The sound engine, as early as the rest of the subsystems. A failure here
+    // is reported and carried past: a missing bank should cost the show its
+    // audio, not its picture.
+    if (!g_audio.init(mirror::WwiseAudio::DefaultBankDir(), g_audio_err))
+        fprintf(stderr, "wwise: %s\n", g_audio_err.c_str());
+    else
+        printf("wwise: engine up, banks from %s\n", g_audio.bankDir().c_str());
+
     printf("mirror_app — Metal shell up (device: %s)\n", device.name.UTF8String);
     printf("panel: F1 or ` hides/reveals the UI; "
            "\"own window\" puts it in its own OS window "
@@ -2875,6 +3000,42 @@ int main(int argc, char** argv) {
                         default:
                             break;
                     }
+
+                    // The sound follows the same edge as the scene, from the
+                    // same place, so there is no second notion of "which phase
+                    // is up" that could drift from this one.
+                    //
+                    // Each phase says what it wants *playing*, not what to
+                    // change: posting the mirror bed's Play on every entry into
+                    // Idle would restack a second voice on top of the one
+                    // already running. So the beds are started on the entry
+                    // that first needs them and stopped on the entry that does
+                    // not, and the crossfades are the Stop actions' fade times
+                    // in Wwise, not something timed here.
+                    if (g_audio_on && g_audio_auto) {
+                        g_audio.setState("Phase", show::PhaseName(p));
+                        switch (p) {
+                            case show::Phase::Idle:
+                                g_audio.post("Play_Amb_Mirror");
+                                g_audio.post("Stop_Amb_Roots");
+                                break;
+                            case show::Phase::Fitting:
+                                // Same bed as Idle, still running: the fitting
+                                // phase is a change in the room, not a change
+                                // of music, and FitLevel carries it.
+                                g_audio.post("Play_Amb_Mirror");
+                                break;
+                            case show::Phase::Transition:
+                                g_audio.post("Play_Transition");
+                                break;
+                            case show::Phase::Roots:
+                                g_audio.post("Play_Amb_Roots");
+                                g_audio.post("Stop_Amb_Mirror");
+                                break;
+                            default:
+                                break;
+                        }
+                    }
                 }
 
                 // Set every frame rather than on entry, so the diagnostic views
@@ -2883,6 +3044,39 @@ int main(int argc, char** argv) {
                 // is still whatever it was, still showing what it should.
                 scene = (g_view_override >= 0) ? g_view_override
                                                : g_show_scene[(int)g_show.phase()];
+            }
+
+            // --- the room, to the sound engine ---------------------------
+            //
+            // After the show block so SceneProgress is this frame's, and after
+            // the tracker so the presence signals are too. Every frame whether
+            // or not a face is present: an empty room is a value, and one that
+            // has to keep arriving for the smoothing to walk the sound down.
+            {
+                g_presence.update(g_face,
+                                  g_track_h > 0 ? (float)g_track_w / (float)g_track_h : 1.f,
+                                  (float)dt);
+                const mirror::PresenceSignals& ps = g_presence.signals();
+
+                mirror::AudioParams ap;
+                ap.proximity = ps.proximity;
+                ap.movement  = ps.movement;
+                ap.centering = ps.centering;
+                ap.head_yaw  = ps.head_yaw;
+                ap.head_tilt = ps.head_tilt;
+                // How well she has been captured, as one number: the mean
+                // landmark error against the threshold the fitting phase waits
+                // on. Half scale at exactly the threshold, so the sound keeps
+                // tightening after the piece has already accepted the fit --
+                // converged is where it gets interesting, not where it stops.
+                ap.fit_level = (g_id_residual < 0.f)
+                    ? 0.f
+                    : std::clamp(1.f - g_id_residual / std::max(0.01f, 2.f * g_show_fit_px),
+                                 0.f, 1.f);
+                ap.scene_progress = g_show.phaseProgress();
+                ap.key = g_audio_key;
+                ap.intensity = g_audio_on ? g_audio_intensity : 0.f;
+                g_audio.update(ap);
             }
 
             // --- source overlay: upload the raw frame ---------------------
@@ -3566,6 +3760,107 @@ int main(int argc, char** argv) {
                 ui::EndHeader();
             }
             ui::PopSection();               // "show"
+            ImGui::Separator();
+
+            // --- sound ----------------------------------------------------
+            // In the show tab because that is what it is: the piece's audio,
+            // not the machine's. The Wwise project holds every mapping from
+            // these numbers to a filter or an oscillator -- what is here is the
+            // handful of things an operator sets on the night (key, level) and
+            // the readout that answers "is it hearing the room".
+            ui::PushSection("sound");
+            ui::BeginHeader("sound (Wwise)", /*default_open=*/false);
+            {
+                if (ui::Visible()) {
+                    if (g_audio.ready()) {
+                        ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                           "engine up");
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %lu events", g_audio.eventsPosted());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.f, 0.7f, 0.5f, 1.f), "silent");
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %s", g_audio_err.c_str());
+                        if (ImGui::Button("retry")) {
+                            // The usual reason to be here is that the banks had
+                            // not been generated yet when the app started.
+                            if (g_audio.init(mirror::WwiseAudio::DefaultBankDir(),
+                                             g_audio_err))
+                                g_audio_err.clear();
+                        }
+                    }
+                }
+
+                ui::Checkbox("sound on", &g_audio_on);
+                ui::Checkbox("phases post their own events", &g_audio_auto);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Off leaves the beds to the buttons below -- for\n"
+                        "auditioning a scene's sound without moving the piece\n"
+                        "through its phases.");
+                }
+                ui::SliderFloat("key (MIDI note)", &g_audio_key, 24.f, 84.f, "%.0f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The base pitch everything is tuned from: the pad plays\n"
+                        "it, the drone an octave below, the drops and plucks in\n"
+                        "the octaves above. 48 is C3.");
+                }
+                ui::SliderFloat("level", &g_audio_intensity, 0.f, 1.f);
+
+                if (ui::Visible()) {
+                    ImGui::SeparatorText("post");
+                    if (ImGui::Button("mirror bed")) g_audio.post("Play_Amb_Mirror");
+                    ImGui::SameLine();
+                    if (ImGui::Button("roots bed")) g_audio.post("Play_Amb_Roots");
+                    ImGui::SameLine();
+                    if (ImGui::Button("transition")) g_audio.post("Play_Transition");
+                    if (ImGui::Button("pluck")) g_audio.post("Play_Pluck");
+                    ImGui::SameLine();
+                    if (ImGui::Button("bell")) g_audio.post("Play_Bell");
+                    ImGui::SameLine();
+                    if (ImGui::Button("drop")) g_audio.post("Play_Drop");
+                    ImGui::SameLine();
+                    if (ImGui::Button("stop all")) g_audio.stopAll();
+
+                    ImGui::SeparatorText("the room, as Wwise sees it");
+                    const mirror::AudioParams& a = g_audio.lastSent();
+                    const mirror::PresenceSignals& raw = g_presence.raw();
+                    // Smoothed against raw, side by side: the time constants
+                    // below are unturnable without seeing both.
+                    ImGui::Text("Proximity  %.2f", a.proximity);
+                    ImGui::SameLine(); ImGui::TextDisabled("(raw %.2f)", raw.proximity);
+                    ImGui::Text("Movement   %.2f", a.movement);
+                    ImGui::SameLine(); ImGui::TextDisabled("(raw %.2f)", raw.movement);
+                    ImGui::Text("Centering  %+.2f", a.centering);
+                    ImGui::Text("HeadYaw    %+.0f deg", a.head_yaw);
+                    ImGui::SameLine();
+                    ImGui::Text("HeadTilt %+.0f deg", a.head_tilt);
+                    ImGui::Text("FitLevel   %.2f", a.fit_level);
+                    ImGui::SameLine();
+                    ImGui::Text("SceneProgress %.2f", a.scene_progress);
+                }
+
+                mirror::Presence::Config& pc = g_presence.config();
+                ui::BeginHeader("presence tuning", /*default_open=*/false);
+                {
+                    ui::SliderFloat("far (face height)", &pc.far_span, 0.02f, 0.4f);
+                    ui::SliderFloat("near (face height)", &pc.near_span, 0.1f, 0.9f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The two numbers worth retuning per room: how much\n"
+                            "of the frame a face fills standing back, and\n"
+                            "standing at the mirror. Everything Proximity\n"
+                            "drives is stretched between them.");
+                    }
+                    ui::SliderFloat("movement full scale", &pc.move_full, 0.2f, 4.f);
+                    ui::SliderFloat("rise (s)", &pc.rise_tau, 0.01f, 1.f, "%.2f");
+                    ui::SliderFloat("fall (s)", &pc.fall_tau, 0.05f, 4.f, "%.2f");
+                }
+                ui::EndHeader();
+            }
+            ui::EndHeader();
+            ui::PopSection();               // "sound"
             ImGui::Separator();
 
             // --- screen ---------------------------------------------------
@@ -5898,6 +6193,11 @@ int main(int argc, char** argv) {
         fpsAccum += now - lastTime; lastTime = now; fpsFrames++;
         if (fpsAccum >= 0.5) { fpsShown = fpsFrames / fpsAccum; fpsAccum = 0; fpsFrames = 0; }
     }
+
+    // Before the window goes: the engine owns a real audio device and a couple
+    // of threads, and leaving it running past the last RenderAudio() is how a
+    // quit turns into a stuck tone.
+    g_audio.term();
 
     ImGui_ImplMetal_Shutdown();
     ImGui_ImplGlfw_Shutdown();

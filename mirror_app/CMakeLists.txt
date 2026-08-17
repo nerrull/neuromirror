@@ -101,6 +101,7 @@ add_library(mirror_core STATIC
     src/screen_layout.cpp
     src/show_timeline.cpp
     src/drop_spawner.cpp
+    src/presence.cpp
     src/pond_state.cpp)
 target_include_directories(mirror_core PUBLIC src ${MLX_INCLUDE_DIRS})
 # external/ is gitignored: face_basis.bin and the MediaPipe dylib are both
@@ -173,6 +174,78 @@ else()
 endif()
 
 target_link_libraries(mirror_app PRIVATE mirror_core)
+
+# --- Wwise sound engine ------------------------------------------------------
+# The piece's audio is a Wwise project (../WwiseProject) whose engine runs
+# *inside this app* rather than inside Wwise Authoring -- see src/wwise_audio.h
+# for why. Optional, like MediaPipe and the Kinect: without the SDK the app
+# builds and runs, silently.
+#
+# The Profile configuration, not Release, on purpose. It is the same optimised
+# engine plus the communication module, which is what lets Wwise Authoring's
+# profiler connect to this app and show the live busses, voices and RTPC values
+# -- the visibility that would otherwise be lost by moving the engine out of
+# Authoring. Switch to Release for an unattended install.
+set(WWISE_SDK "/Applications/Audiokinetic/Wwise_2025.1.10.9233/SDK"
+    CACHE PATH "Path to the Wwise SDK")
+set(WWISE_CONFIG "Profile" CACHE STRING "Wwise SDK configuration (Debug/Profile/Release)")
+set(_ak_lib ${WWISE_SDK}/Mac_Xcode2600/${WWISE_CONFIG}/lib)
+set(_ak_samples ${WWISE_SDK}/samples/SoundEngine)
+set(_mi_plugins ${CMAKE_CURRENT_SOURCE_DIR}/../wwise_plugins)
+
+# The plug-in static libs are built separately (see ../wwise_plugins/README.md)
+# and only for the configurations somebody has actually built -- a fresh
+# checkout has none. Checking here rather than discovering the gap at link time
+# makes the failure legible.
+set(_ak_have_all TRUE)
+foreach(_l ${_ak_lib}/libAkSoundEngine.a ${_ak_lib}/libMacroOscillatorSource.a)
+    if(NOT EXISTS ${_l})
+        set(_ak_have_all FALSE)
+    endif()
+endforeach()
+
+target_sources(mirror_app PRIVATE src/wwise_audio.cpp)
+if(_ak_have_all)
+    target_sources(mirror_app PRIVATE
+        ${_ak_samples}/POSIX/AkDefaultIOHookDeferred.cpp
+        ${_ak_samples}/Common/AkMultipleFileLocation.cpp
+        ${_ak_samples}/Common/AkFileLocationBase.cpp
+        ${_ak_samples}/Common/AkGeneratedSoundBanksResolver.cpp)
+    target_include_directories(mirror_app PRIVATE
+        ${WWISE_SDK}/include
+        ${_ak_samples}/POSIX
+        ${_ak_samples}/Common
+        # Each plug-in's *Factory.h is one AK_STATIC_LINK_PLUGIN, and they live
+        # beside the plug-in sources rather than in the SDK.
+        ${_mi_plugins}/MacroOscillator/SoundEnginePlugin
+        ${_mi_plugins}/DrumSynth/SoundEnginePlugin
+        ${_mi_plugins}/ModalVoice/SoundEnginePlugin
+        ${_mi_plugins}/RacineComb/SoundEnginePlugin)
+    # The plug-ins before the engine: they call into it, not the other way
+    # round, and a static link resolves left to right.
+    target_link_libraries(mirror_app PRIVATE
+        ${_ak_lib}/libMacroOscillatorSource.a
+        ${_ak_lib}/libDrumSynthSource.a
+        ${_ak_lib}/libModalVoiceFX.a
+        ${_ak_lib}/libRacineCombFX.a
+        ${_ak_lib}/libAkRoomVerbFX.a
+        ${_ak_lib}/libAkMemoryMgr.a
+        ${_ak_lib}/libAkStreamMgr.a
+        ${_ak_lib}/libAkSoundEngine.a
+        "-framework AudioUnit" "-framework AudioToolbox"
+        "-framework CoreAudio" "-framework AVFoundation")
+    if(NOT WWISE_CONFIG STREQUAL "Release")
+        # Profiling. Only Debug/Profile carry it; a Release engine defines
+        # AK_OPTIMIZED and compiles those calls away.
+        target_link_libraries(mirror_app PRIVATE ${_ak_lib}/libCommunicationCentral.a)
+    endif()
+    target_compile_definitions(mirror_app PRIVATE MIRROR_HAVE_WWISE=1)
+    message(STATUS "mirror_app: Wwise sound engine enabled (${WWISE_CONFIG})")
+else()
+    message(STATUS "mirror_app: Wwise sound engine disabled (nothing in ${_ak_lib} "
+                   "-- build the plug-ins for this configuration, see "
+                   "../wwise_plugins/README.md)")
+endif()
 
 # --- mirror_sim (live CPlantBox root growth) ---------------------------------
 # GL-free "mask relay" growth, reusing sdf_viewer's MaskCavities/RootAttractors
@@ -261,6 +334,12 @@ target_link_libraries(screen_layout_test PRIVATE mirror_core)
 # debounce with somebody standing in front of the piece.
 add_executable(show_timeline_test tests/show_timeline_test.cpp)
 target_link_libraries(show_timeline_test PRIVATE mirror_core)
+
+# Landmarks -> the room, as the five numbers Wwise is driven by. Synthetic
+# faces, so the ground truth is known by construction and no camera (and no
+# sound engine) is involved.
+add_executable(presence_test tests/presence_test.cpp)
+target_link_libraries(presence_test PRIVATE mirror_core)
 
 # The text overlay's distance transform, against an analytically known shape.
 # Pure geometry: no Metal, no fonts, no MLX.
