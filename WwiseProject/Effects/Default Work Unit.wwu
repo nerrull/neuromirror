@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}" SchemaVersion="133">
+	<Effects>
+		<WorkUnit Name="Default Work Unit" ID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}" PersistMode="Standalone">
+			<ChildrenList>
+				<Folder Name="Racine" ID="{1147A572-5928-4479-B79E-07BBFFEC125F}" ShortID="304456862">
+					<ChildrenList>
+						<Effect Name="Mirror_Room" ID="{8A524DC8-3609-42A3-9E81-CD4536C31776}" PluginName="Wwise RoomVerb" CompanyID="0" PluginID="118" PluginType="3">
+							<PropertyList>
+								<Property Name="DecayTime" Type="Real32" Value="6"/>
+								<Property Name="Density" Type="Real32" Value="90"/>
+								<Property Name="Diffusion" Type="Real32" Value="90"/>
+								<Property Name="ERLevel" Type="Real32" Value="-12"/>
+								<Property Name="HFDamping" Type="Real32" Value="3"/>
+								<Property Name="PreDelay" Type="Real32" Value="40"/>
+								<Property Name="ReverbLevel" Type="Real32" Value="-6"/>
+							</PropertyList>
+						</Effect>
+						<Effect Name="Roots_Room" ID="{08BAD109-E74B-4C3D-A85D-2AAF7BA18480}" PluginName="Wwise RoomVerb" CompanyID="0" PluginID="118" PluginType="3">
+							<PropertyList>
+								<Property Name="DecayTime" Type="Real32" Value="3"/>
+								<Property Name="Density" Type="Real32" Value="100"/>
+								<Property Name="ERLevel" Type="Real32" Value="-9"/>
+								<Property Name="HFDamping" Type="Real32" Value="4.5"/>
+								<Property Name="PreDelay" Type="Real32" Value="15"/>
+								<Property Name="ReverbLevel" Type="Real32" Value="-6"/>
+								<Property Name="StereoWidth" Type="Real32" Value="120"/>
+							</PropertyList>
+						</Effect>
+					</ChildrenList>
+				</Folder>
+			</ChildrenList>
+		</WorkUnit>
+	</Effects>
+</WwiseDocument>

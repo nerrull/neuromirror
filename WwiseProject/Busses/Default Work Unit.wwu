@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{2529ADEC-4896-444F-A149-D2621B74D725}" SchemaVersion="133">
+	<Busses>
+		<WorkUnit Name="Default Work Unit" ID="{2529ADEC-4896-444F-A149-D2621B74D725}" PersistMode="Standalone">
+			<ChildrenList>
+				<Bus Name="Main Audio Bus" ID="{1514A4D8-1DA6-412A-A17E-75CA0C2149F3}">
+					<ReferenceList>
+						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
+							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
+						</Reference>
+					</ReferenceList>
+					<ChildrenList>
+						<Bus Name="Mirror" ID="{58C3B2FD-A29D-4B9D-9D17-14BC78ECD02B}">
+							<ChildrenList>
+								<AuxBus Name="Mirror_Verb" ID="{0BB50E19-4CE9-4784-B385-D54D488BC07D}">
+									<ObjectLists>
+										<ObjectList Name="Effects">
+											<EffectSlot Name="" ID="{2DAAB95E-3A5B-42BF-B4B7-3DE628E4DDD4}" ShortID="45014288">
+												<ReferenceList>
+													<Reference Name="Effect" PluginName="Wwise RoomVerb" CompanyID="0" PluginID="118" PluginType="3">
+														<ObjectRef Name="Mirror_Room" ID="{8A524DC8-3609-42A3-9E81-CD4536C31776}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+													</Reference>
+												</ReferenceList>
+											</EffectSlot>
+										</ObjectList>
+									</ObjectLists>
+								</AuxBus>
+							</ChildrenList>
+						</Bus>
+						<Bus Name="Roots" ID="{D3557D67-7B30-4654-9CD9-38ED5B1D022A}">
+							<ChildrenList>
+								<AuxBus Name="Roots_Verb" ID="{D9B23565-D004-48C3-B43D-51A53AFD0CA6}">
+									<ObjectLists>
+										<ObjectList Name="Effects">
+											<EffectSlot Name="" ID="{0D5CD5A5-8540-42B4-810E-3520062A3FE0}" ShortID="168322825">
+												<ReferenceList>
+													<Reference Name="Effect" PluginName="Wwise RoomVerb" CompanyID="0" PluginID="118" PluginType="3">
+														<ObjectRef Name="Roots_Room" ID="{08BAD109-E74B-4C3D-A85D-2AAF7BA18480}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+													</Reference>
+												</ReferenceList>
+											</EffectSlot>
+										</ObjectList>
+									</ObjectLists>
+								</AuxBus>
+							</ChildrenList>
+						</Bus>
+						<Bus Name="Transition" ID="{B39C741D-0E18-4EC3-A893-06EAABCF5C6E}"/>
+					</ChildrenList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{1ECBD8DF-A992-4B2B-8206-2320408271ED}" ShortID="546302114">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Volume"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Intensity" ID="{D263DE1C-CBDB-4890-B6BB-DD95929EFAE3}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{D50F8DAF-4A73-4390-903B-02108D0BE236}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="3"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>-48</YPos>
+														<Flags>5</Flags>
+														<SegmentShape>SCurve</SegmentShape>
+													</Point>
+													<Point>
+														<XPos>1</XPos>
+														<YPos>0</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
+				</Bus>
+				<Bus Name="RainBus" ID="{A1927C6D-1F0F-44F6-929D-95D8FBB31E65}">
+					<ReferenceList>
+						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
+							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
+						</Reference>
+					</ReferenceList>
+					<ObjectLists>
+						<ObjectList Name="Effects">
+							<EffectSlot Name="" ID="{0A880280-3642-433C-BA48-935BFB042E59}" ShortID="415694740">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+										<ObjectRef Name="Metallic_Ring" ID="{6A754BE9-E8CA-422D-B62B-5774BFA150ED}" WorkUnitID="{12EC78BE-4E90-4DCF-B4FB-20A345EEF9E7}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{0165D856-8B39-48AC-AA0E-178EF64B43A4}" ShortID="14903288">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Convolution Reverb" CompanyID="0" PluginID="127" PluginType="3">
+										<ObjectRef Name="Colossal_Cathedral_Stereo" ID="{512A7648-07B6-486E-9D3E-8B7323C79E8C}" WorkUnitID="{9D68BE5F-8CA6-43E0-BCE2-C7D59F63E582}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+						</ObjectList>
+					</ObjectLists>
+				</Bus>
+				<Bus Name="New Main Bus" ID="{85488F62-263B-40F6-903A-55D64E03AF60}">
+					<ReferenceList>
+						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
+							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
+						</Reference>
+					</ReferenceList>
+				</Bus>
+				<Bus Name="ResonatorBus" ID="{BCE144C6-E0C6-495F-AF7F-3B54374098EF}">
+					<ReferenceList>
+						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
+							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
+						</Reference>
+					</ReferenceList>
+					<ObjectLists>
+						<ObjectList Name="Effects">
+							<EffectSlot Name="" ID="{7242AC19-B85E-4B0D-B85D-D05997257545}" ShortID="484625689">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Modal Voice" CompanyID="64" PluginID="8166" PluginType="3">
+										<ObjectRef Name="Blown_Metallic" ID="{846AE9FD-9075-42D6-B73E-805EE3FFCA5C}" WorkUnitID="{C1B03F27-4074-46F1-8E53-F6C448F35F90}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+						</ObjectList>
+					</ObjectLists>
+				</Bus>
+			</ChildrenList>
+		</WorkUnit>
+	</Busses>
+</WwiseDocument>

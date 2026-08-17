@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{74AE0489-E3BF-4D0E-B420-BECCB9516FBF}" SchemaVersion="133">
+	<States>
+		<WorkUnit Name="Default Work Unit" ID="{74AE0489-E3BF-4D0E-B420-BECCB9516FBF}" PersistMode="Standalone">
+			<ChildrenList>
+				<StateGroup Name="Phase" ID="{E6437614-1C55-4844-A1CC-80A50D557BFF}">
+					<ChildrenList>
+						<State Name="None" ID="{12EE3E69-DDA0-460C-A967-49FE08E17214}"/>
+						<State Name="Idle" ID="{10DBB79E-E719-47C3-912A-2FE727B2AD1D}"/>
+						<State Name="Fitting" ID="{BCB69103-9F5F-4E31-A696-C6F079449A40}"/>
+						<State Name="Transition" ID="{59265A4E-313B-4C84-A818-A6A9F9684A53}"/>
+						<State Name="Roots" ID="{B91EF538-B3AC-4A69-A485-40A53E1E8169}"/>
+					</ChildrenList>
+				</StateGroup>
+			</ChildrenList>
+		</WorkUnit>
+	</States>
+</WwiseDocument>

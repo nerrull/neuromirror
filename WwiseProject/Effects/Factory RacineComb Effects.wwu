@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{12EC78BE-4E90-4DCF-B4FB-20A345EEF9E7}" SchemaVersion="133">
+	<Effects>
+		<WorkUnit Name="Factory RacineComb Effects" ID="{12EC78BE-4E90-4DCF-B4FB-20A345EEF9E7}" PersistMode="Standalone">
+			<ChildrenList>
+				<Effect Name="Metallic_Ring" ID="{6A754BE9-E8CA-422D-B62B-5774BFA150ED}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="15.5"/>
+						<Property Name="Feedback" Type="Real32" Value="98"/>
+						<Property Name="Frequency" Type="Real32" Value="186"/>
+						<Property Name="Glide" Type="Real32" Value="265"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Slow_Flange_Sweep" ID="{69D524B2-4366-4730-AF78-99D9080FE06C}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="40"/>
+						<Property Name="Feedback" Type="Real32" Value="65"/>
+						<Property Name="Glide" Type="Real32" Value="1500"/>
+						<Property Name="WetDryMix" Type="Real32" Value="50"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Hollow_Odd_Harmonics" ID="{89D64782-496F-4E1A-B1E8-7E5FFF8A8A57}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="25"/>
+						<Property Name="Feedback" Type="Real32" Value="-88"/>
+						<Property Name="Frequency" Type="Real32" Value="110"/>
+						<Property Name="Glide" Type="Real32" Value="10"/>
+						<Property Name="WetDryMix" Type="Real32" Value="80"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Subtle_Body_Resonance" ID="{B6D7A82B-27B0-4AD2-9562-90E8E2053E49}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="2.5"/>
+						<Property Name="Feedback" Type="Real32" Value="96"/>
+						<Property Name="Frequency" Type="Real32" Value="637"/>
+						<Property Name="Glide" Type="Real32" Value="50"/>
+					</PropertyList>
+				</Effect>
+			</ChildrenList>
+		</WorkUnit>
+	</Effects>
+</WwiseDocument>

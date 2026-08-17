@@ -1,0 +1,19 @@
+# What is tracked here is the *project*: the .wwu work units and the .wproj,
+# which are text, diff usefully, and are the only part anybody authors.
+#
+# Everything below is either generated from those, or media that does not belong
+# in a git repo at this size (Originals alone is 1.4 GB, most of it the BOOM and
+# Audiokinetic convolution IR libraries, which are licensed downloads rather than
+# anything made here).
+#
+# The consequence worth knowing: a fresh clone has the project but not the audio
+# it points at, so SoundBank generation will fail on the missing sources until
+# the libraries are reinstalled and the piece's own recordings are put back under
+# Originals/SFX (their downloads are in ../audio).
+Originals/
+GeneratedSoundBanks/
+.cache/
+
+# Per-machine, rewritten constantly, and named for the machine that wrote them.
+*.validationcache
+*.wsettings

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "wwise": {
+      "command": "/Users/erichan/Documents/Development/Wwise-MCP/.venv/bin/python",
+      "args": [
+        "/Users/erichan/Documents/Development/Wwise-MCP/app/scripts/wwise_mcp.py"
+      ]
+    }
+  }
+}

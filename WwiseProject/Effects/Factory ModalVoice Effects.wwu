@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{C1B03F27-4074-46F1-8E53-F6C448F35F90}" SchemaVersion="133">
+	<Effects>
+		<WorkUnit Name="Factory ModalVoice Effects" ID="{C1B03F27-4074-46F1-8E53-F6C448F35F90}" PersistMode="Standalone">
+			<ChildrenList>
+				<Effect Name="Struck_Wood_Block" ID="{29E53655-517B-43AA-BF8C-F5B087EB0C35}" PluginName="Modal Voice" CompanyID="64" PluginID="8166" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="0.6"/>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="Geometry" Type="Real32" Value="0.3"/>
+						<Property Name="Position" Type="Real32" Value="0.4"/>
+						<Property Name="StrikeLevel" Type="Real32" Value="0.7"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Bowed_Drone" ID="{53CDA638-4B07-4886-9BEA-F938CE7ACCA5}" PluginName="Modal Voice" CompanyID="64" PluginID="8166" PluginType="3">
+					<PropertyList>
+						<Property Name="BowLevel" Type="Real32" Value="0.8"/>
+						<Property Name="Brightness" Type="Real32" Value="0.6"/>
+						<Property Name="Damping" Type="Real32" Value="0.3"/>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="Geometry" Type="Real32" Value="0.6"/>
+						<Property Name="StrikeLevel" Type="Real32" Value="0"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Blown_Metallic" ID="{846AE9FD-9075-42D6-B73E-805EE3FFCA5C}" PluginName="Modal Voice" CompanyID="64" PluginID="8166" PluginType="3">
+					<PropertyList>
+						<Property Name="BlowLevel" Type="Real32" Value="0.7"/>
+						<Property Name="BlowMeta" Type="Real32" Value="0.7"/>
+						<Property Name="Brightness" Type="Real32" Value="0.7"/>
+						<Property Name="Damping" Type="Real32" Value="0.4"/>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="ExternalExciter" Type="bool" Value="False"/>
+						<Property Name="Gate" Type="bool" Value="True"/>
+						<Property Name="Pitch" Type="Real32" Value="67"/>
+						<Property Name="StrikeLevel" Type="Real32" Value="0"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="External_Resonant_Filter" ID="{2B553768-43BB-404F-98B0-D758BA4F1FB6}" PluginName="Modal Voice" CompanyID="64" PluginID="8166" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="0.5"/>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="Level" Type="Real32" Value="3"/>
+					</PropertyList>
+				</Effect>
+			</ChildrenList>
+		</WorkUnit>
+	</Effects>
+</WwiseDocument>

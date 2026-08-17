@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}" SchemaVersion="133">
+	<GameParameters>
+		<WorkUnit Name="Default Work Unit" ID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}" PersistMode="Standalone">
+			<ChildrenList>
+				<GameParameter Name="Proximity" ID="{F1DB357A-C548-4559-992D-E60509AAA589}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Movement" ID="{8B8E8DDD-D331-4736-9C06-93D35A3225E3}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Centering" ID="{7E8C7713-4776-4E8D-9E73-FFF1837BA235}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+						<Property Name="Min" Type="Real64" Value="-1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="HeadYaw" ID="{A8D3EECF-1F7E-4DBA-9E29-4895C58404A5}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="60"/>
+						<Property Name="Min" Type="Real64" Value="-60"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="HeadTilt" ID="{640E989A-93A4-4DBD-8C80-B34D8A602F1C}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="45"/>
+						<Property Name="Min" Type="Real64" Value="-45"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="FitLevel" ID="{2CE266D5-AC89-4C0C-AFCB-661984A2C3AC}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="SceneProgress" ID="{BF250C41-367A-4D76-8E52-6336AA85760D}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="48"/>
+						<Property Name="Max" Type="Real64" Value="84"/>
+						<Property Name="Min" Type="Real64" Value="24"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Intensity" ID="{D263DE1C-CBDB-4890-B6BB-DD95929EFAE3}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="1"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+			</ChildrenList>
+		</WorkUnit>
+	</GameParameters>
+</WwiseDocument>

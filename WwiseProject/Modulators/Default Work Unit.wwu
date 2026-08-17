@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{0CF0EFC1-D71F-4ED7-9631-29961E0CE861}" SchemaVersion="133">
+	<Modulators>
+		<WorkUnit Name="Default Work Unit" ID="{0CF0EFC1-D71F-4ED7-9631-29961E0CE861}" PersistMode="Standalone">
+			<ChildrenList>
+				<ModulatorEnvelope Name="Pad_Env" ID="{4D7A7B0C-2B42-42F5-8CD8-B6BAD79DBBD9}" ShortID="17908717">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="6"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="8"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Drone_Env" ID="{0FB796DD-92A3-4749-A71C-F6598FEAD6CD}" ShortID="835969601">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="10"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="10"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Sweep_Env" ID="{93CCE75D-5939-4460-B77B-668259D78194}" ShortID="872473969">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="3"/>
+						<Property Name="EnvelopeAutoRelease" Type="bool" Value="True"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0.5"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="3"/>
+						<Property Name="EnvelopeSustainLevel" Type="Real64" Value="80"/>
+						<Property Name="EnvelopeSustainTime" Type="Real64" Value="1.5"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+			</ChildrenList>
+		</WorkUnit>
+	</Modulators>
+</WwiseDocument>

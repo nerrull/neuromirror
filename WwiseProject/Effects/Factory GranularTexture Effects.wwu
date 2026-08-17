@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{FF55A9B9-7A42-49EA-9350-655851002F6C}" SchemaVersion="133">
+	<Effects>
+		<WorkUnit Name="Factory GranularTexture Effects" ID="{FF55A9B9-7A42-49EA-9350-655851002F6C}" PersistMode="Standalone">
+			<ChildrenList>
+				<Effect Name="Frozen_Texture_Pad" ID="{EEF66F93-74A1-4C7E-B19F-C4ECAAAAFDBC}" PluginName="Granular Texture" CompanyID="64" PluginID="11577" PluginType="3">
+					<PropertyList>
+						<Property Name="Density" Type="Real32" Value="0.7"/>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="Freeze" Type="bool" Value="True"/>
+						<Property Name="Size" Type="Real32" Value="0.8"/>
+						<Property Name="Texture" Type="Real32" Value="0.3"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Time_Stretch_Drone" ID="{F47E7330-EA0B-44AD-8070-3FC5F0ACB3DA}" PluginName="Granular Texture" CompanyID="64" PluginID="11577" PluginType="3">
+					<PropertyList>
+						<Property Name="DryWet" Type="Real32" Value="100"/>
+						<Property Name="Pitch" Type="Real32" Value="-12"/>
+						<Property Name="PlaybackMode" Type="int32" Value="1"/>
+						<Property Name="Size" Type="Real32" Value="0.9"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Lo_Fi_Looping_Delay" ID="{C69CA841-B273-44B6-ADD4-2C4C77733849}" PluginName="Granular Texture" CompanyID="64" PluginID="11577" PluginType="3">
+					<PropertyList>
+						<Property Name="Feedback" Type="Real32" Value="0.6"/>
+						<Property Name="PlaybackMode" Type="int32" Value="2"/>
+						<Property Name="Texture" Type="Real32" Value="0.2"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Spectral_Shimmer" ID="{B1A7B01C-CFA0-47E5-A63B-3D3A06D51012}" PluginName="Granular Texture" CompanyID="64" PluginID="11577" PluginType="3">
+					<PropertyList>
+						<Property Name="DryWet" Type="Real32" Value="70"/>
+						<Property Name="Pitch" Type="Real32" Value="12"/>
+						<Property Name="PlaybackMode" Type="int32" Value="3"/>
+						<Property Name="Reverb" Type="Real32" Value="0.5"/>
+					</PropertyList>
+				</Effect>
+			</ChildrenList>
+		</WorkUnit>
+	</Effects>
+</WwiseDocument>

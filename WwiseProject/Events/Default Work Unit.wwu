@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" SchemaVersion="133">
+	<Events>
+		<WorkUnit Name="Default Work Unit" ID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" PersistMode="Standalone">
+			<ChildrenList>
+				<Folder Name="Racine" ID="{A33B9E6A-0CC5-4A51-809F-609023F79B46}" ShortID="616608266">
+					<ChildrenList>
+						<Event Name="Play_Amb_Mirror" ID="{FF5CD6D1-3080-4A2E-A543-85BD85EE7338}">
+							<ChildrenList>
+								<Action Name="Play_Amb_Mirror" ID="{903AA4F5-010B-4B1C-8B3B-34E07962538C}" ShortID="526133521">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Amb_Mirror" ID="{0B4B243C-4317-402A-A04D-B81E46F199FC}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Stop_Amb_Mirror" ID="{2F84643D-6AD4-433F-8F4C-23A68D331BB4}">
+							<ChildrenList>
+								<Action Name="Stop_Amb_Mirror" ID="{6D3A7A90-A345-4075-A93D-7FD3BD8ACE9D}" ShortID="318041571">
+									<PropertyList>
+										<Property Name="ActionType" Type="int16" Value="2"/>
+										<Property Name="FadeTime" Type="Real64" Value="6"/>
+									</PropertyList>
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Amb_Mirror" ID="{0B4B243C-4317-402A-A04D-B81E46F199FC}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Play_Amb_Roots" ID="{77A223DC-AB6C-4DC3-A4CD-4729C9C8D236}">
+							<ChildrenList>
+								<Action Name="Play_Amb_Roots" ID="{F6FCA6D5-F734-40CF-A927-5ACC9CEE1A7D}" ShortID="42921762">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Amb_Roots" ID="{BE444231-1889-4D3D-969B-F5F5BA70A039}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Stop_Amb_Roots" ID="{D3F42767-57D0-4A35-9BA9-6D50EF4D700C}">
+							<ChildrenList>
+								<Action Name="Stop_Amb_Roots" ID="{C46697AB-7D9C-40E5-9D90-B44C2738AC8A}" ShortID="289914041">
+									<PropertyList>
+										<Property Name="ActionType" Type="int16" Value="2"/>
+										<Property Name="FadeTime" Type="Real64" Value="8"/>
+									</PropertyList>
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Amb_Roots" ID="{BE444231-1889-4D3D-969B-F5F5BA70A039}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Play_Transition" ID="{11D6A5B4-C315-4AF2-8D18-496E5A95E891}">
+							<ChildrenList>
+								<Action Name="Play_Transition" ID="{0A37F292-57EE-4B41-BE2F-36A35A833381}" ShortID="941782370">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Transition_Sweep" ID="{E906874E-D2D1-43CC-BDD5-7CA7F73E21B0}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Stop_Transition" ID="{661DBBBC-A350-4807-8808-0CACB23FD781}">
+							<ChildrenList>
+								<Action Name="Stop_Transition" ID="{21A3D08B-E011-43E4-AEF7-B462322A2F3B}" ShortID="254398619">
+									<PropertyList>
+										<Property Name="ActionType" Type="int16" Value="2"/>
+										<Property Name="FadeTime" Type="Real64" Value="2"/>
+									</PropertyList>
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Transition_Sweep" ID="{E906874E-D2D1-43CC-BDD5-7CA7F73E21B0}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Play_Pluck" ID="{B199C9DD-65B7-4F22-97A8-D3B3A4BA1BA3}">
+							<ChildrenList>
+								<Action Name="Play_Pluck" ID="{8794BA93-34DF-4787-AAAF-482981B52D6D}" ShortID="233943012">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Pluck" ID="{B059049C-E209-46D0-AA6C-AE50F581828A}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Play_Bell" ID="{B1E91612-D710-4266-9E63-59ED3296CB95}">
+							<ChildrenList>
+								<Action Name="Play_Bell" ID="{3B64CF16-7DFD-4F3C-85D9-5F6A2EA838F4}" ShortID="450073389">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Bell" ID="{37B590A9-9301-4841-83B3-F6856CACAD68}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+						<Event Name="Play_Drop" ID="{134B8717-E5F1-4C9B-8BB3-BC91CD15B0AC}">
+							<ChildrenList>
+								<Action Name="Play_Drop" ID="{31C74107-5360-4FBB-B6F8-961F19857BD0}" ShortID="643479239">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Drop" ID="{EEC88CC5-B9D9-4B58-B19D-C84016593CAF}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
+					</ChildrenList>
+				</Folder>
+			</ChildrenList>
+		</WorkUnit>
+	</Events>
+</WwiseDocument>

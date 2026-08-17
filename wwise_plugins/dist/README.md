@@ -11,6 +11,14 @@ folder) and restart Wwise Authoring.
 
 ## Factory presets
 
+**The two source plug-ins' presets already exist in `../../WwiseProject`**, put
+there through WAAPI rather than imported: `\Containers\Default Work Unit\Racine\
+Presets\{MacroOscillator,DrumSynth}` holds all nine as ordinary Sound objects
+carrying exactly the parameter values in the XML below. That sidesteps the
+import path, which is the part that has never worked here — copy one of those
+Sounds to wherever it is wanted. The import machinery is only worth fixing if
+these need to reach a *different* project.
+
 `FactoryAssets/<Plugin>/` has 4-5 starter presets per plug-in. To install,
 copy a plug-in's `FactoryAssets/<Plugin>` folder (the whole thing, including
 `Manifest.xml`) into
