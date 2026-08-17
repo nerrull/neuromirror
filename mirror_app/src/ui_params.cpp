@@ -1,5 +1,7 @@
 #include "ui_params.h"
 
+#include "imgui_internal.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -42,6 +44,10 @@ struct Frame {
     Bank bank = Bank::Unassigned;
     bool retired = false;
     bool visible = true;
+    // What SkipItems was before this frame turned it on, and the window it was
+    // turned on in, so it is put back exactly where it was found.
+    ImGuiWindow* skip_win = nullptr;
+    bool skip_prev = false;
 };
 
 struct State {
@@ -392,7 +398,36 @@ void PushSection(const char* name) {
     S().stack.push_back(std::move(f));
 }
 
-void PopSection() { if (!S().stack.empty()) S().stack.pop_back(); }
+// Hiding has to stop *ImGui* drawing, not just the ui:: wrappers.
+//
+// The bodies of these sections run whether or not they are shown -- that is the
+// whole design -- and they are not made only of wrapped controls. Every raw
+// ImGui::Text, Button, Combo and SeparatorText in a hidden body would otherwise
+// draw anyway: six tab pages of loose widgets laid out on top of each other,
+// with the duplicate labels among them colliding on id.
+//
+// SkipItems is exactly the switch for it, and ImGui's own: it is what a
+// collapsed window sets, and every widget tests it and returns immediately --
+// no drawing, no layout, no id. Begin/End-style calls still pair correctly,
+// because they all report failure while it is set.
+void ApplySkip(Frame& f) {
+    if (f.visible) return;
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    if (!w || w->SkipItems) return;      // already skipping; leave it to the owner
+    f.skip_win = w;
+    f.skip_prev = w->SkipItems;
+    w->SkipItems = true;
+}
+
+void ReleaseSkip(Frame& f) {
+    if (f.skip_win) f.skip_win->SkipItems = f.skip_prev;
+}
+
+void PopSection() {
+    if (S().stack.empty()) return;
+    ReleaseSkip(S().stack.back());
+    S().stack.pop_back();
+}
 
 void SetBank(Bank b) { if (!S().stack.empty()) S().stack.back().bank = b; }
 Bank CurrentBank() {
@@ -419,6 +454,7 @@ void PushHeaderFrame(const char* label, const char* path_name,
     PushSection(path_name);
     S().stack.back().visible = shown && open;
     if (retired) S().stack.back().retired = true;
+    ApplySkip(S().stack.back());
 }
 
 }  // namespace
@@ -437,6 +473,7 @@ void BeginGate(bool visible) {
     const bool parent_draws = DrawHere();
     PushSection("");
     S().stack.back().visible = parent_draws && visible;
+    ApplySkip(S().stack.back());
 }
 void EndGate() { PopSection(); }
 
@@ -445,6 +482,7 @@ void BeginTabBar(const char* id) {
     const bool opened = parent_draws && ImGui::BeginTabBar(id);
     PushSection("");
     S().stack.back().visible = opened;
+    ApplySkip(S().stack.back());
 }
 
 void EndTabBar() {
@@ -457,6 +495,7 @@ void BeginTab(const char* label) {
     const bool selected = parent_draws && ImGui::BeginTabItem(label);
     PushSection("");
     S().stack.back().visible = selected;
+    ApplySkip(S().stack.back());
 }
 
 void EndTab() {
@@ -484,7 +523,7 @@ void BeginFrame() {
     S().declared_this_frame = 0;
     S().unassigned.clear();
     for (auto& kv : S().params) kv.second.live = false;
-    S().stack.clear();
+    while (!S().stack.empty()) PopSection();
 }
 
 // --- controls ---------------------------------------------------------------

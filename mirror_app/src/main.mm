@@ -42,6 +42,10 @@
 #include <chrono>
 #include <cmath>
 #include <type_traits>
+
+// For the panel-height check in --paneltest: the layout cursor is the only
+// honest way to ask "did a hidden section draw anyway".
+#include "imgui_internal.h"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -840,6 +844,10 @@ bool  g_panel_cli   = false;   // the flags above were given, so do not restore
 bool  g_write_settings_doc = false;
 // --presettest: round-trip SimParams through the roots bank, then exit.
 bool  g_roots_roundtrip = false;
+// Height of the panel's content in the frame just built, for --paneltest.
+float g_panel_content_h = 0.f;
+// --paneltest: build a panel frame, check only one tab drew, exit.
+bool  g_panel_test = false;
 // What main() returns when one of the in-app tests above asks it to stop. They
 // have to run inside the real loop, so they cannot simply return from a branch.
 int   g_exit_code = 0;
@@ -2097,6 +2105,11 @@ int main(int argc, char** argv) {
         // for a frame -- the registry *is* the panel -- but only one, because
         // declaring no longer depends on what is open or which scene is up.
         if (a == "--settings-doc") { g_write_settings_doc = true; continue; }
+        // The panel drew what it should and nothing else. Separate from
+        // --uitest because it needs the real panel: the failure it exists for
+        // is a section that declares correctly and then draws when it should
+        // not, which no count of parameters can see.
+        if (a == "--paneltest") { g_panel_test = true; continue; }
         if (a == "--selftest") return selftest();
         if (a == "--roottest") return roottest();
         if (a == "--transhot") {
@@ -5448,6 +5461,18 @@ int main(int argc, char** argv) {
             }
             ui::EndTab();
             ui::EndTabBar();
+
+            // How tall the panel's content came out, which is the one number
+            // that catches a hidden section drawing anyway.
+            //
+            // Declaring without drawing is not something the parameter counts
+            // can check: a section that is declared *and* drawn while it should
+            // be hidden looks perfectly healthy to them, and looks like six tab
+            // pages of loose widgets stacked on top of each other on screen.
+            // With the tabs working this is one page; with the raw ImGui calls
+            // in the hidden bodies escaping, it was fourteen times that.
+            g_panel_content_h = ImGui::GetCurrentWindow()->DC.CursorMaxPos.y -
+                                ImGui::GetCurrentWindow()->Pos.y;
             ImGui::End();
             if (panel_hidden) ImGui::PopStyleVar();
 
@@ -5536,6 +5561,21 @@ int main(int argc, char** argv) {
                     }
                 }
                 ++rt_step;
+            }
+
+            if (g_panel_test) {
+                // One tab page. The threshold is loose on purpose -- this is
+                // not a layout test, it is the difference between one page and
+                // all of them, which was 171px against 2341px when the raw
+                // ImGui calls in hidden bodies were escaping.
+                const bool ok = g_panel_content_h > 40.f && g_panel_content_h < 900.f;
+                printf("paneltest: %s (content %.0f px, %d params declared)\n",
+                       ok ? "OK" : "FAIL", g_panel_content_h, ui::DeclaredCount());
+                if (!ok)
+                    printf("  a hidden section is drawing: expected one tab page\n");
+                fflush(stdout);
+                g_exit_code = ok ? 0 : 1;
+                glfwSetWindowShouldClose(win, 1);
             }
 
             if (g_write_settings_doc) {
