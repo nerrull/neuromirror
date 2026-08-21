@@ -142,6 +142,32 @@ struct MaskNode {
 // compressing the existing ones closer together.
 // taperPower: see SDF_Cone -- must match whatever confinement geometry the
 // masks are actually being placed on, or masks won't sit on the real surface.
+// One mask, at an explicit depth fraction and angle on the cone. Split out of
+// conePhyllotaxis so a layout that decides its own depths and angles can build
+// nodes without copying the frame maths -- which is the part that has to agree
+// with the confinement geometry, and so the part that must not be duplicated.
+inline MaskNode coneMaskAt(double t, double phi, double baseRadius, double height,
+                           double maskR, double tipRadius, double taperPower) {
+    double tp = std::pow(std::max(t, 1e-6), taperPower);
+    double radius = tipRadius + (baseRadius - tipRadius) * tp;
+    double cp = std::cos(phi), sp = std::sin(phi);
+    // local surface slope dradius/dz, accounting for the taper curve --
+    // a straight cone (taperPower=1) reduces to the old constant slope.
+    double slope = taperPower * (baseRadius - tipRadius)
+                 * std::pow(std::max(t, 1e-6), taperPower - 1.0) / height;
+
+    MaskNode m;
+    m.pos = Vector3d(radius * cp, radius * sp, -t * height);
+    // cone surface normal: radial component + slope back up toward the tip.
+    m.normal = Vector3d(cp, sp, slope).normalized();
+    m.tangent = Vector3d(-sp, cp, 0.0);                       // horizontal, around
+    m.bitangent = m.normal.cross(m.tangent).normalized();     // up the surface
+    m.r_depth = maskR * 0.55;    // shallow into the surface
+    m.r_width = maskR * 1.0;     // tangential half-width
+    m.r_height = maskR * 1.25;   // taller (oval)
+    return m;
+}
+
 inline std::vector<MaskNode> conePhyllotaxis(int n, double baseRadius, double height,
                                              double maskR, double startFrac = 0.12,
                                              double endFrac = 0.9, double tipRadius = 0.0,
@@ -154,26 +180,8 @@ inline std::vector<MaskNode> conePhyllotaxis(int n, double baseRadius, double he
     out.reserve(n);
     for (int i = 0; i < n; ++i) {
         double t = std::min(1.0, startFrac + dStep * (i + 0.5));   // 0(tip)..1(deep/wide)
-        double tp = std::pow(std::max(t, 1e-6), taperPower);
-        double z = -t * height;
-        double radius = tipRadius + (baseRadius - tipRadius) * tp;
-        double phi = i * angStep;
-        double cp = std::cos(phi), sp = std::sin(phi);
-
-        // local surface slope dradius/dz, accounting for the taper curve --
-        // a straight cone (taperPower=1) reduces to the old constant slope.
-        double slope = taperPower * (baseRadius - tipRadius) * std::pow(std::max(t, 1e-6), taperPower - 1.0) / height;
-
-        MaskNode m;
-        m.pos = Vector3d(radius * cp, radius * sp, z);
-        // cone surface normal: radial component + slope back up toward the tip.
-        m.normal = Vector3d(cp, sp, slope).normalized();
-        m.tangent = Vector3d(-sp, cp, 0.0);                       // horizontal, around
-        m.bitangent = m.normal.cross(m.tangent).normalized();     // up the surface
-        m.r_depth = maskR * 0.55;    // shallow into the surface
-        m.r_width = maskR * 1.0;     // tangential half-width
-        m.r_height = maskR * 1.25;   // taller (oval)
-        out.push_back(m);
+        out.push_back(coneMaskAt(t, i * angStep, baseRadius, height, maskR,
+                                 tipRadius, taperPower));
     }
     return out;
 }

@@ -73,7 +73,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/sound on` | bool | -- | 1 |
 
-## look (31 parameters)
+## look (47 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -96,17 +96,33 @@ land in `unassigned` and are listed below until somebody decides.
 | `text/turbulence` | float | 0 .. 1 | 0.8 |
 | `text/x` | float | -2 .. 2 | 0 |
 | `text/y` | float | -1 .. 1 | 0 |
-| `transition/emerge` | float | 0.2 .. 6 | 1.6 |
-| `transition/fade` | float | 0 .. 1 | 0.15 |
-| `transition/gravity back (-z)` | float | 0 .. 20 | 3.5 |
-| `transition/gravity down (-y)` | float | 0 .. 5 | 0.3 |
-| `transition/hold` | float | 0 .. 3 | 0.4 |
+| `transition/align mask` | bool | -- | 0 |
+| `transition/damping` | float | 0.9 .. 1 | 0.985 |
+| `transition/fall` | float | 0.5 .. 6 | 1.8 |
+| `transition/friction` | float | 0 .. 1 | 0.07 |
+| `transition/gravity back (-z)` | float | 0 .. 20 | 6 |
+| `transition/gravity down (-y)` | float | 0 .. 8 | 0 |
+| `transition/hold` | float | 0 .. 3 | 0.5 |
 | `transition/iterations` | int | 4 .. 64 | 24 |
-| `transition/refraction` | float | 0 .. 0.25 | 0.06 |
+| `transition/mask offset x` | float | -0.2 .. 0.2 | 0 |
+| `transition/mask offset y` | float | -0.2 .. 0.2 | 0 |
+| `transition/mask relief` | float | 0.2 .. 4 | 2.2 |
+| `transition/mask scale x` | float | 0.6 .. 1.4 | 1 |
+| `transition/mask scale y` | float | 0.6 .. 1.4 | 1 |
+| `transition/press` | float | 0.2 .. 6 | 1.6 |
+| `transition/press depth` | float | 0 .. 0.4 | 0.16 |
+| `transition/refraction` | float | 0 .. 0.25 | 0.05 |
+| `transition/release` | float | 0.05 .. 3 | 0.7 |
+| `transition/relief shading` | float | 0 .. 1 | 0.55 |
+| `transition/set (plasticity)` | float | 0 .. 8 | 2 |
 | `transition/settle` | float | 0 .. 2 | 0.3 |
+| `transition/shading span` | float | 1 .. 10 | 4 |
+| `transition/sheet oversize` | float | 1 .. 1.3 | 1.08 |
+| `transition/sheet res` | int | 16 .. 128 | 72 |
 | `transition/show cloth` | bool | -- | 1 |
+| `transition/show mask` | bool | -- | 1 |
+| `transition/stretch` | float | 0 .. 0.98 | 0.8 |
 | `transition/substeps` | int | 1 .. 8 | 2 |
-| `transition/velocity refraction` | float | 0 .. 3 | 0.5 |
 | `transition/wireframe` | bool | -- | 0 |
 
 ## mirror (72 parameters)
@@ -186,7 +202,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | -2 .. 2 | 0 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
 
-## roots (152 parameters)
+## roots (167 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -198,8 +214,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/camera/auto-orbit` | bool | -- | 1 |
 | `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 0.6 |
 | `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.35 |
+| `roots/camera/focus group` | int | -1 .. 7 | -1 |
 | `roots/camera/fov` | float | 0.2 .. 1.2 | 0.6 |
 | `roots/camera/frame automatically` | bool | -- | 1 |
+| `roots/camera/frame on masks` | bool | -- | 1 |
+| `roots/camera/group of` | int | 1 .. 9 | 3 |
+| `roots/camera/margin` | float | 0 .. 1.5 | 0.35 |
 | `roots/camera/orbit rate` | float | -1 .. 1 | 0.15 |
 | `roots/camera/radius` | float | 5 .. 120 | 42 |
 | `roots/camera/zoom` | float | 0.15 .. 5 | 1 |
@@ -208,6 +228,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/AO radius` | float | 0.2 .. 6 | 2.2 |
 | `roots/environment & material/AO samples` | int | 4 .. 24 | 10 |
 | `roots/environment & material/ambient occlusion` | bool | -- | 1 |
+| `roots/environment & material/background` | rgb | -- | 0.12 0.08 0.05 |
 | `roots/environment & material/env specular` | float | 0 .. 2 | 0.6 |
 | `roots/environment & material/fibre break-up` | float | 0 .. 1 | 0.45 |
 | `roots/environment & material/fibre scale` | float | 2 .. 40 | 20 |
@@ -264,16 +285,23 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/dwell` | float | 0 .. 1 | 0.92 |
 | `roots/growth/dwell days` | float | 2 .. 60 | 18 |
 | `roots/growth/dwell lateral` | float | 0 .. 1 | 0.92 |
+| `roots/growth/even nests` | bool | -- | 1 |
+| `roots/growth/feature clusters` | int | 1 .. 6 | 3 |
+| `roots/growth/group size` | int | 1 .. 9 | 3 |
+| `roots/growth/group spread` | float | 0.1 .. 1.2 | 0.55 |
+| `roots/growth/helix turns` | float | 0.25 .. 6 | 2 |
 | `roots/growth/hop days` | float | 10 .. 160 | 60 |
+| `roots/growth/host` | string | -- | cone |
 | `roots/growth/jitter` | float | 0 .. 1.2 | 0.35 |
 | `roots/growth/lateral` | float | 0 .. 1 | 0.2 |
 | `roots/growth/mask end` | float | 0 .. 1 | 0.94 |
 | `roots/growth/mask start` | float | 0 .. 1 | 0.15 |
 | `roots/growth/masks` | int | 1 .. 24 | 5 |
+| `roots/growth/pattern` | string | -- | phyllotaxis |
 | `roots/growth/pull reach` | float | 0.4 .. 3 | 1.2 |
 | `roots/growth/reach x` | float | 0.4 .. 4 | 1.6 |
 | `roots/growth/seed` | int | 0 .. 1.07374e+09 | 42 |
-| `roots/growth/shell` | float | 1 .. 20 | 7 |
+| `roots/growth/shell` | float | 1 .. 20 | 9 |
 | `roots/growth/spawn behind` | float | -10 .. 10 | 0 |
 | `roots/growth/species` | string | -- | Zea_mays_6_Leitner_2014.xml |
 | `roots/growth/spiral drift` | float | -0.5 .. 0.5 | 0 |
@@ -282,7 +310,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/taper` | float | 0.4 .. 2.5 | 1 |
 | `roots/growth/target lift` | float | -10 .. 10 | 0 |
 | `roots/growth/travel pull` | float | 0 .. 1 | 0.9 |
+| `roots/growth/travel slack` | float | 1 .. 4 | 2.5 |
 | `roots/growth/travel trials` | float | 1 .. 60 | 14 |
+| `roots/growth/tree relay` | bool | -- | 0 |
+| `roots/growth/tube radius` | float | 2 .. 20 | 7 |
 | `roots/growth/view cylinder` | float | 1 .. 30 | 8 |
 | `roots/lens & film/anamorphic streak` | float | 0 .. 1 | 0 |
 | `roots/lens & film/barrel <-> pincushion` | float | -0.4 .. 0.4 | 0 |

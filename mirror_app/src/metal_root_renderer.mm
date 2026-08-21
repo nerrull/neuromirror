@@ -83,13 +83,19 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
                                      const std::string& sharedHeaderPath, int w, int h)
     : device_(ctx.device()), w_(w), h_(h) {
     // Pipelines: each MSL pass compiled with root_shared.h prepended.
+    //
+    // The face and post passes also get face_shade.metal, which holds the mask's
+    // material and the display transform. Both are shared with the transition
+    // scene, which draws the same mask into the same look a moment before this
+    // renderer takes over -- see face_shade.metal.
+    const std::string faceShade = shaderDir + "/face_shade.metal";
     id<MTLLibrary> geomLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_geom.metal"});
-    id<MTLLibrary> faceLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_face.metal"});
+    id<MTLLibrary> faceLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_face.metal"});
     id<MTLLibrary> leafLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_leaf.metal"});
     id<MTLLibrary> fogLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_fog.metal"});
     id<MTLLibrary> aoLib   = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_ao.metal"});
     id<MTLLibrary> blmLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_bloom.metal"});
-    id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_post.metal"});
+    id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_post.metal"});
     if (!geomLib || !faceLib || !leafLib || !fogLib || !aoLib || !blmLib || !postLib) {
         fprintf(stderr, "MetalRootRenderer: shader compile failed\n"); return;
     }
@@ -558,7 +564,10 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     V3 rgt = (dot3(rawRgt, rawRgt) > 1e-8f) ? norm3(rawRgt) : V3{1.f, 0.f, 0.f};
     V3 up  = cross3(rgt, fwd);
 
-    const float nearZ = 0.01f, farZ = 500.0f;
+    // The far plane follows the camera distance. It was a constant, which is
+    // fine until a shot pulls back far enough that the structure crosses it and
+    // the scene simply stops being drawn -- "things disappearing at range".
+    const float nearZ = 0.01f, farZ = std::max(500.0f, radius * 5.0f);
     float f   = 1.0f / tanf(fov);
     float asp = (float)sw_ / (float)sh_;   // == w_/h_; the scene passes run supersampled
     float fn  = -(farZ + nearZ) / (farZ - nearZ);
@@ -656,7 +665,9 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gp.colorAttachments[0].clearColor =
         // Alpha 0: the background has no environment term for the AO to
         // attenuate (see root_geom.metal's alpha convention).
-        MTLClearColorMake(invert ? 0.0 : 0.12, invert ? 0.0 : 0.08, invert ? 0.0 : 0.05, 0.0);
+        MTLClearColorMake(invert ? 0.0 : env.background[0],
+                          invert ? 0.0 : env.background[1],
+                          invert ? 0.0 : env.background[2], 0.0);
     gp.colorAttachments[0].storeAction = MTLStoreActionStore;
     gp.depthAttachment.texture = rootDepthTex_;
     gp.depthAttachment.loadAction = MTLLoadActionClear;

@@ -163,6 +163,9 @@ public:
     // Environment and organic-shading terms, shared by the capsule/blade pass
     // and the mask pass so both sit in the same light.
     struct EnvParams {
+        // What the frame clears to behind the roots. Was hardcoded at the clear
+        // colour, which made "shoot this against black" a recompile.
+        float background[3]  = {0.12f, 0.08f, 0.05f};
         float skyColor[3]    = {0.16f, 0.19f, 0.24f};   // cool from above
         float groundColor[3] = {0.10f, 0.07f, 0.045f};  // warm bounce from below
         float hemiStrength   = 1.0f;

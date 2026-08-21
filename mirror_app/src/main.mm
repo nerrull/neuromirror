@@ -194,19 +194,55 @@ static int rootshot(const char* path, float az, float el, float rad, int mode, b
     return 0;
 }
 
+// Post-processing overrides by name, shared by the headless shots (defined
+// below, with the table of keys).
+static void applyPostOverride(RootScene& roots, const char* spec);
+
 // Headless live-growth check: steps the CPlantBox sim `steps` frames, then
 // renders to a PPM. Usage:
 //   --growshot <out.ppm> [steps] [az] [el] [radius] [faceScale] [targetY] [faceRecess]
 static int growshot(const char* path, int steps, float az, float el, float rad,
                     float faceScale = -1.f, float targetY = -1e9f,
-                    float faceRecess = 1e9f) {
+                    float faceRecess = 1e9f, int W = 960, int H = 540,
+                    const std::vector<std::pair<std::string, std::string>>& fields = {},
+                    float zoom = 1.f, float faces = 0.f, unsigned faceSeed = 7u,
+                    int focus = -1, int group = -1, int groupOf = 3) {
     MetalContext ctx;
     if (!ctx.device()) { fprintf(stderr, "growshot: no Metal device\n"); return 1; }
-    const int W = 960, H = 540;
     RootScene roots(ctx, W, H);
     if (!roots.valid()) { fprintf(stderr, "growshot: root scene invalid\n"); return 1; }
     printf("growshot: sim active = %d\n", roots.simActive() ? 1 : 0);
+    // Growth fields off the command line, so a look dialled in with root_sweep
+    // can be *seen* without going through the panel. Same names root_sweep and
+    // --rootpreset take.
+    if (!fields.empty()) {
+        rootsim::SimParams& SP = roots.simParams();
+        for (const auto& kv : fields) {
+            const std::string key = kv.first == "species" ? "speciesXml" : kv.first;
+            bool hit = false;
+            rootsim::visitSimParams(SP, [&](const char* name, auto& f) {
+                if (key != name) return;
+                hit = true;
+                using T = std::decay_t<decltype(f)>;
+                if constexpr (std::is_same_v<T, std::string>) f = kv.second;
+                else if constexpr (std::is_same_v<T, bool>) f = atoi(kv.second.c_str()) != 0;
+                else if constexpr (std::is_same_v<T, int>) f = atoi(kv.second.c_str());
+                else if constexpr (std::is_same_v<T, unsigned>)
+                    f = (unsigned)strtoul(kv.second.c_str(), nullptr, 10);
+                else f = (T)atof(kv.second.c_str());
+            });
+            if (!hit) fprintf(stderr, "growshot: no growth field '%s'\n", kv.first.c_str());
+        }
+        roots.regrow();
+    }
     roots.autoOrbit = false;
+    roots.zoom = zoom;
+    roots.focusMask = focus;
+    roots.focusGroup = group;
+    roots.focusGroupSize = groupOf;
+    // Same post-processing door --abshot uses, so a shot meant for looking at
+    // rather than diffing can lift the fog off the subject.
+    applyPostOverride(roots, getenv("GROWSHOT_POST"));
     if (rad > 0) roots.radius = rad;
     // Framing overrides, so a single mask can be filled the frame with. The
     // masks are a couple of centimetres on a fifty-centimetre cone, and their
@@ -217,6 +253,11 @@ static int growshot(const char* path, int steps, float az, float el, float rad,
     if (faceRecess < 1e8f) roots.faceRecess = faceRecess;
     if (targetY > -1e8f) roots.target[1] = targetY;
     roots.azimuth = az; roots.elevation = el;
+    // A different face on every mask, sampled from the morphable basis: the
+    // repo has no photo set to fit, and for testing layout and framing what
+    // matters is that the masks are visibly different people.
+    if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
+
     id<MTLTexture> tex = nil;
     for (int i = 0; i < steps; ++i) roots.advance(1.0 / 60.0);   // grow (no GPU work)
     for (int i = 0; i < 2; ++i) {
@@ -248,6 +289,441 @@ static int growshot(const char* path, int steps, float az, float el, float rad,
     fclose(fp);
     printf("growshot: wrote %s (%dx%d, %d steps, done=%d)\n",
            path, W, H, steps, roots.simDone() ? 1 : 0);
+    return 0;
+}
+
+
+
+// Growth fields by name, shared by --growshot, --rootpreset and --rootmovie.
+// The names are visitSimParams', plus "species" for the one the panel spells
+// differently.
+static void applyGrowthFields(RootScene& roots,
+                              const std::vector<std::pair<std::string, std::string>>& fields) {
+    if (fields.empty()) return;
+    rootsim::SimParams& SP = roots.simParams();
+    for (const auto& kv : fields) {
+        const std::string key = kv.first == "species" ? "speciesXml" : kv.first;
+        bool hit = false;
+        rootsim::visitSimParams(SP, [&](const char* name, auto& f) {
+            if (key != name) return;
+            hit = true;
+            using T = std::decay_t<decltype(f)>;
+            if constexpr (std::is_same_v<T, std::string>) f = kv.second;
+            else if constexpr (std::is_same_v<T, bool>) f = atoi(kv.second.c_str()) != 0;
+            else if constexpr (std::is_same_v<T, int>) f = atoi(kv.second.c_str());
+            else if constexpr (std::is_same_v<T, unsigned>)
+                f = (unsigned)strtoul(kv.second.c_str(), nullptr, 10);
+            else f = (T)atof(kv.second.c_str());
+        });
+        if (!hit) fprintf(stderr, "growth: no field '%s'\n", kv.first.c_str());
+    }
+    roots.regrow();
+}
+
+// RGBA16F texture -> binary PPM. `encoded` when the composite pass has already
+// made the texture display-referred, in which case applying gamma again would
+// wash it out.
+static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
+                            bool encoded) {
+    std::vector<uint16_t> px((size_t)W * H * 4);
+    [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
+       fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    auto h2f = [](uint16_t h) {
+        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, bits;
+        if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
+        float f; __builtin_memcpy(&f, &bits, 4); return f;
+    };
+    FILE* fp = fopen(path, "wb");
+    if (!fp) { fprintf(stderr, "cannot open %s\n", path); return false; }
+    fprintf(fp, "P6\n%d %d\n255\n", W, H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const uint16_t* p = &px[((size_t)y * W + x) * 4];
+            for (int c = 0; c < 3; ++c) {
+                float v = h2f(p[c]);
+                v = v <= 0.f ? 0.f : (v >= 1.f ? 1.f : v);
+                if (!encoded) v = powf(v, 1.0f / 2.2f);
+                fputc((unsigned char)(v * 255.0f + 0.5f), fp);
+            }
+        }
+    fclose(fp);
+    return true;
+}
+
+// The pull-back, as a moving camera rather than five stills.
+//
+//   --rootmovie <out.mp4> [seconds] [fps] [W] [H] [field=value ...]
+//
+// Four beats, and the anchor face is the centre of frame in every one of them:
+//
+//   1  the face alone      nothing has grown yet, tight on the mask
+//   2  the roots arrive    growth runs; the camera does not move, so the beat
+//                          ends framed exactly where beat 1 began
+//   3  the structure       the pull-back: the other masks come into frame while
+//                          the anchor face stays put
+//   4  the others          copies of the piece standing around this one
+//
+// Beats 1 and 2 share a framing on purpose. The move is beat 3, and it reads as
+// a move only because the anchor keeps one face nailed to the centre while the
+// radius grows around it -- a cut between framings cannot do that.
+static int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
+                     const std::vector<std::pair<std::string, std::string>>& fields,
+                     float faces, unsigned faceSeed) {
+    MetalContext ctx;
+    if (!ctx.device()) { fprintf(stderr, "rootmovie: no Metal device\n"); return 1; }
+    RootScene roots(ctx, W, H);
+    if (!roots.valid()) { fprintf(stderr, "rootmovie: root scene invalid\n"); return 1; }
+
+    applyGrowthFields(roots, fields);
+    applyPostOverride(roots, getenv("GROWSHOT_POST"));
+    if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
+
+    roots.autoOrbit = false;
+    // The movie authors its own camera. applyFraming() is built for the live
+    // app, where the shot has to follow whatever has been revealed so far --
+    // which makes the radius a staircase, one step per mask, and easing a
+    // staircase is a pump rather than a move. Here the layout is known from
+    // the first frame, so every value the camera takes is a smooth function of
+    // time and nothing has to be smoothed after the fact.
+    roots.autoFrame = false;
+
+    const auto& planned = roots.plannedMasks();
+    if (planned.empty()) { fprintf(stderr, "rootmovie: no masks\n"); return 1; }
+    const auto& anchor = planned.front();
+
+    // The three framings the move passes through, all measured from the anchor
+    // face so that it is the fixed point of the whole shot.
+    const float tightR = std::max(anchor.rWidth, anchor.rHeight) * 2.6f;
+    float structR = tightR;
+    float centroid[3] = {0, 0, 0};
+    for (const auto& m : planned) {
+        const float dx = m.pos[0] - anchor.pos[0], dy = m.pos[1] - anchor.pos[1],
+                    dz = m.pos[2] - anchor.pos[2];
+        structR = std::max(structR, std::sqrt(dx * dx + dy * dy + dz * dz)
+                                        + std::max(m.rWidth, m.rHeight));
+        for (int k = 0; k < 3; ++k) centroid[k] += m.pos[k] / float(planned.size());
+    }
+    structR *= 1.45f;
+    const float fieldR = structR * 2.2f;
+
+    // Beat 2 is a two-shot: the anchor face and the mask the root is growing
+    // to, both in frame, so the hop can be watched from end to end. Weighted
+    // toward the anchor rather than centred between them -- the face is still
+    // the subject, the destination is context.
+    float twoShotTarget[3] = {anchor.pos[0], anchor.pos[1], anchor.pos[2]};
+    float twoShotR = tightR;
+    if (planned.size() > 1) {
+        const auto& dest = planned[1];
+        const float dx = dest.pos[0] - anchor.pos[0], dy = dest.pos[1] - anchor.pos[1],
+                    dz = dest.pos[2] - anchor.pos[2];
+        const float gap = std::sqrt(dx * dx + dy * dy + dz * dz);
+        for (int k = 0; k < 3; ++k)
+            twoShotTarget[k] = anchor.pos[k] + (dest.pos[k] - anchor.pos[k]) * 0.32f;
+        twoShotR = (gap * 0.5f + std::max(dest.rWidth, dest.rHeight) * 2.2f) * 1.45f;
+    }
+
+    // Straight down the anchor's normal, so the face is square to camera and
+    // stays that way while the world grows around it.
+    const float alen = std::sqrt(anchor.normal[0] * anchor.normal[0] +
+                                 anchor.normal[1] * anchor.normal[1] +
+                                 anchor.normal[2] * anchor.normal[2]);
+    const float az0 = std::atan2(anchor.normal[0], anchor.normal[2]);
+    const float el0 = std::asin(std::clamp(anchor.normal[1] / std::max(1e-5f, alen), -1.f, 1.f));
+
+    const int frames = std::max(2, (int)std::lround(seconds * fps));
+    const double dt = 1.0 / fps;
+    // Beat boundaries, as fractions of the running time.
+    // 1 face alone | 2 the masks deal out | 3 follow the tip | 4 meander
+    const double b1 = 0.13, b2 = 0.30, b3 = 0.78;
+
+    // Growth pacing, per beat rather than one rate throughout. The first hop is
+    // the one the audience actually watches -- it is the root coming out of the
+    // face they have been looking at -- so it gets the whole of beat 2, and the
+    // remaining hops share beat 3. One flat rate makes the first hop a blur.
+    int simSteps = 0;
+    {
+        rootsim::SimParams probe = roots.simParams();
+        rootsim::RootSim sim;
+        if (sim.reset(probe))
+            while (!sim.done() && simSteps < 200000) { sim.step(); ++simSteps; }
+    }
+    const int hops = std::max(1, (int)planned.size() - 1);
+    const int firstHopSteps = std::max(1, simSteps / hops);
+    const int beat2Frames = std::max(1, (int)((b2 - b1) * frames));
+    const int beat3Frames = std::max(1, (int)((b3 - b2) * frames));
+    const int slowRate = std::max(1, (int)std::ceil(double(firstHopSteps) / beat2Frames));
+    const int fastRate = std::max(1, (int)std::ceil(double(simSteps - firstHopSteps) / beat3Frames));
+
+    auto smoothstep = [](double u) {
+        u = std::clamp(u, 0.0, 1.0);
+        return u * u * (3.0 - 2.0 * u);
+    };
+
+    // The camera tracks the centroid of what has actually been revealed, eased.
+    // Aiming at a fixed anchor was my misreading: it pins the composition and
+    // the shot stops being about the group. The reveals are discrete, so the
+    // centroid is a step function -- but here that is a subject moving, not a
+    // framing changing, and easing a moving subject is tracking rather than
+    // smearing a staircase.
+    float track[3] = {anchor.pos[0], anchor.pos[1], anchor.pos[2]};
+    const float trackTau = 1.1f;
+    // The pull-back schedule is a floor, not the answer. What the radius has to
+    // be is whatever contains the masks revealed so far -- otherwise the first
+    // face slides out of frame the moment the group's centroid moves away from
+    // it. Held as a running maximum so the camera never creeps back in, which
+    // would read as the shot breathing.
+    float heldR = tightR;
+    // What the tip-following beat is actually pointed at, eased.
+    float follow[3] = {anchor.pos[0], anchor.pos[1], anchor.pos[2]};
+
+    char dirTemplate[] = "/tmp/rootmovie.XXXXXX";
+    const char* dir = mkdtemp(dirTemplate);
+    if (!dir) { fprintf(stderr, "rootmovie: no temp dir\n"); return 1; }
+
+    bool neighboursAdded = false;
+
+    // Neighbour placements, decided up front so beat 4 can fly between them.
+    // They are cylinders like the subject, so "the nearest one" and "its
+    // normal" are well defined at any point on the path.
+    struct Neighbour { float x, z, yaw, scale; };
+    std::vector<Neighbour> hood;
+    {
+        std::mt19937 rng(99u);
+        std::uniform_real_distribution<float> U(0.f, 1.f);
+        const int count = 9;
+        const float ring = structR * 0.85f;
+        for (int i = 0; i < count; ++i) {
+            const float a = 6.2831853f * (float(i) / count) + (U(rng) - 0.5f) * 0.45f;
+            const float rr = ring * (0.85f + 0.5f * U(rng));
+            hood.push_back({track[0] + std::sin(a) * rr, track[2] + std::cos(a) * rr,
+                            U(rng) * 6.2831853f, 0.8f + 0.45f * U(rng)});
+        }
+    }
+
+    // Beat 4's itinerary: a few masks to visit, each on one of the cylinders.
+    // The camera eases toward the current one and moves on when it arrives, so
+    // the path is a meander rather than a set of cuts.
+    float eye[3] = {0, 0, 0}, look[3] = {0, 0, 0};
+    bool  eyePrimed = false;
+    int   waypoint = 0;
+
+    for (int f = 0; f < frames; ++f) {
+        const double t = double(f) / (frames - 1);
+        const double ts = t * seconds;
+
+        float radius = tightR;
+        float target[3] = {anchor.pos[0], anchor.pos[1], anchor.pos[2]};
+        float az = az0, el = el0;
+        bool  authoredEye = false;
+
+        // Every mask is on screen from the start: the deal-out is a move in its
+        // own right, and after it the structure is present and the roots are
+        // what arrives.
+        roots.showPlannedMasks = true;
+
+        if (t < b1) {
+            // Beat 1: one face. The rest of the structure is stacked behind it.
+            roots.simPaused = true;
+            roots.maskDeal = 0.f;
+            radius = tightR;
+        } else if (t < b2) {
+            // Beat 2: the masks slide out of it into their places while the
+            // camera opens to hold them. Still nothing growing.
+            roots.simPaused = true;
+            const float u = (float)smoothstep((t - b1) / (b2 - b1));
+            roots.maskDeal = u;
+            // Follow the deal rather than a schedule: the masks are exactly u
+            // of the way out, so the frame that holds them is u of the way out
+            // too, and they stay the same size on screen as they separate.
+            float spread = tightR;
+            for (const auto& m : roots.plannedMasks()) {
+                const float dx = m.pos[0] - anchor.pos[0], dy = m.pos[1] - anchor.pos[1],
+                            dz = m.pos[2] - anchor.pos[2];
+                spread = std::max(spread, std::sqrt(dx * dx + dy * dy + dz * dz) * u
+                                              + std::max(m.rWidth, m.rHeight));
+            }
+            radius = std::max(tightR, spread * 1.05f);
+            // Follow the middle of the constellation as it opens, or the group
+            // hangs off the bottom of frame: the first mask is at the top of
+            // the cylinder and everything deals downward from it.
+            for (int k = 0; k < 3; ++k)
+                target[k] = anchor.pos[k] + (centroid[k] - anchor.pos[k]) * u;
+        } else if (t < b3) {
+            // Beat 3: follow the tip. The camera tracks the growing end and
+            // faces the cylinder wall it is crawling on, so travelling from
+            // mask to mask carries the camera around the structure.
+            roots.simPaused = false;
+            roots.maskDeal = 1.f;
+            roots.simStepsPerFrame = fastRate;
+            radius = structR * 0.55f;
+
+            // Follow the tip while it is on its way; once it has arrived, stop
+            // chasing it -- the tip is now circling the mask it is wrapping, and
+            // following that is a camera going round in circles. Settle on the
+            // mask instead until the next hop sets off.
+            float tp[3];
+            const int cm = roots.currentMask();
+            const auto& pm = roots.plannedMasks();
+            if (roots.arrivedAtMask() && cm >= 0 && cm < (int)pm.size()) {
+                for (int k = 0; k < 3; ++k) target[k] = pm[size_t(cm)].pos[k];
+            } else if (roots.growthTip(tp)) {
+                for (int k = 0; k < 3; ++k) target[k] = tp[k];
+            } else {
+                for (int k = 0; k < 3; ++k) target[k] = track[k];
+            }
+            // Eased, or the switch between tip and mask is a jump.
+            {
+                const float kk = 1.f - std::exp(-float(dt) / 0.7f);
+                for (int k = 0; k < 3; ++k) follow[k] += (target[k] - follow[k]) * kk;
+                for (int k = 0; k < 3; ++k) target[k] = follow[k];
+            }
+            // The cylinder's normal at the tip: radial from its axis, which
+            // after the render-space remap is the world Y axis.
+            const float rx = target[0], rz = target[2];
+            const float rl = std::sqrt(rx * rx + rz * rz);
+            if (rl > 1e-3f) az = std::atan2(rx, rz);
+            el = 0.10f;
+        } else {
+            // Beat 4: out among the others, meandering. No longer about the
+            // first face at all -- the camera picks a mask on one of the
+            // cylinders, flies to it between the others, and moves on.
+            roots.simPaused = false;
+            roots.maskDeal = 1.f;
+            roots.simStepsPerFrame = fastRate;
+            if (!neighboursAdded) {
+                roots.addNeighbours(hood.size(), structR * 0.85f, 99u, track, az0);
+                roots.renderer().instanceCullPx = 0.5f;
+                roots.renderer().lodBias = 0.5f;
+                // The sub-pixel cull drops any capsule under about a pixel,
+                // which at this range is most of the laterals: the structures
+                // thin out and read as vanishing rather than as distant.
+                roots.renderer().subpixelCull = false;
+                neighboursAdded = true;
+            }
+
+            // Where we are heading: a mask, on one of the cylinders.
+            const auto& pm = roots.plannedMasks();
+            const int nWay = 4;
+            const double u = (t - b3) / (1.0 - b3);
+            waypoint = std::min(nWay - 1, (int)(u * nWay));
+            const Neighbour& cyl = hood[size_t((waypoint * 3 + 1) % hood.size())];
+            const auto& m = pm[size_t((waypoint * 3 + 2) % pm.size())];
+
+            // The mask, carried onto that cylinder.
+            float goal[3] = {cyl.x + (m.pos[0] - track[0]) * cyl.scale,
+                             m.pos[1] * cyl.scale,
+                             cyl.z + (m.pos[2] - track[2]) * cyl.scale};
+            // Stand off along that cylinder's own normal -- radial from its
+            // axis -- so we arrive square to the face rather than edge on.
+            float nx = goal[0] - cyl.x, nz = goal[2] - cyl.z;
+            const float nl = std::sqrt(nx * nx + nz * nz);
+            if (nl > 1e-3f) { nx /= nl; nz /= nl; } else { nx = 1.f; nz = 0.f; }
+            const float standoff = structR * 0.75f;
+            float wantEye[3] = {goal[0] + nx * standoff,
+                                goal[1] + structR * 0.12f,
+                                goal[2] + nz * standoff};
+
+            if (!eyePrimed) {
+                // Start from wherever beat 3 left the camera.
+                const float pr = structR * 0.55f;
+                eye[0] = track[0] + pr * std::cos(el0) * std::sin(az0);
+                eye[1] = track[1] + pr * std::sin(el0);
+                eye[2] = track[2] + pr * std::cos(el0) * std::cos(az0);
+                for (int k = 0; k < 3; ++k) look[k] = track[k];
+                eyePrimed = true;
+            }
+            // Ease both ends of the shot. Slower on the eye than on the look-at
+            // so the camera swings its attention to the next face before it has
+            // finished travelling, which is what makes a meander read as one
+            // move rather than a series of arrivals.
+            const float ke = 1.f - std::exp(-float(dt) / 2.6f);
+            const float kl = 1.f - std::exp(-float(dt) / 1.3f);
+            for (int k = 0; k < 3; ++k) eye[k] += (wantEye[k] - eye[k]) * ke;
+            for (int k = 0; k < 3; ++k) look[k] += (goal[k] - look[k]) * kl;
+
+            // eye + look-at -> the orbit parameters the renderer takes.
+            const float dx = eye[0] - look[0], dy = eye[1] - look[1], dz = eye[2] - look[2];
+            const float dist = std::max(1e-3f, std::sqrt(dx * dx + dy * dy + dz * dz));
+            for (int k = 0; k < 3; ++k) target[k] = look[k];
+            radius = dist;
+            az = std::atan2(dx, dz);
+            el = std::asin(std::clamp(dy / dist, -1.f, 1.f));
+            authoredEye = true;
+        }
+
+        // Track the revealed group's centroid, for the beats that use it.
+        {
+            const auto& rev = roots.revealedMasks();
+            float want[3] = {anchor.pos[0], anchor.pos[1], anchor.pos[2]};
+            if (!rev.empty()) {
+                float c[3] = {0, 0, 0};
+                for (const auto& m : rev)
+                    for (int k = 0; k < 3; ++k) c[k] += m.pos[k];
+                for (int k = 0; k < 3; ++k) want[k] = c[k] / float(rev.size());
+            }
+            const float kk = 1.f - std::exp(-float(dt) / trackTau);
+            for (int k = 0; k < 3; ++k) track[k] += (want[k] - track[k]) * kk;
+        }
+
+        if (!authoredEye) {
+            // Contain the masks on screen, and never creep back in.
+            const auto& pm = roots.plannedMasks();
+            float need = 0.f;
+            for (const auto& m : pm) {
+                const float dx = m.pos[0] - target[0], dy = m.pos[1] - target[1],
+                            dz = m.pos[2] - target[2];
+                need = std::max(need, std::sqrt(dx * dx + dy * dy + dz * dz)
+                                          + std::max(m.rWidth, m.rHeight));
+            }
+            need *= 1.35f * roots.maskDeal;
+            // Only while the masks are dealing out. Beat 3 is deliberately
+            // close on the growing tip, and forcing it to contain the whole
+            // layout would undo that.
+            if (t >= b1 && t < b2)
+                radius = std::max(radius, std::min(need, structR * 1.6f));
+
+            // A slow sway across the aim. In the room the viewer's own position
+            // does this; here it is what gives the frame parallax.
+            // Subtle: the frame is about a third of a radian across, so a sway
+            // of a tenth is half the picture, not parallax.
+            az += 0.035f * std::sin(6.2831853f * 0.055f * (float)ts)
+                + 0.015f * std::sin(6.2831853f * 0.017f * (float)ts + 2.1f);
+            el += 0.020f * std::sin(6.2831853f * 0.041f * (float)ts + 1.0f);
+        }
+
+        roots.target[0] = target[0];
+        roots.target[1] = target[1];
+        roots.target[2] = target[2];
+        roots.radius    = radius;
+        roots.azimuth   = az;
+        roots.elevation = el;
+
+        roots.advance(dt);
+
+        id<MTLTexture> tex = nil;
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            tex = roots.render(cb);
+            [cb commit]; [cb waitUntilCompleted];
+        }
+        if (!tex) { fprintf(stderr, "rootmovie: no texture\n"); return 1; }
+        char path[512];
+        snprintf(path, sizeof(path), "%s/f%05d.ppm", dir, f);
+        if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
+            return 1;
+        if ((f % 25) == 0) { printf("rootmovie: %d/%d\n", f, frames); fflush(stdout); }
+    }
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -loglevel error -framerate %d -i %s/f%%05d.ppm "
+             "-c:v libx264 -pix_fmt yuv420p -crf 18 %s",
+             fps, dir, outPath);
+    const int rc = system(cmd);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+    system(cmd);
+    if (rc != 0) { fprintf(stderr, "rootmovie: ffmpeg failed (%d)\n", rc); return 1; }
+    printf("rootmovie: wrote %s (%d frames, %dx%d @ %d fps)\n", outPath, frames, W, H, fps);
     return 0;
 }
 
@@ -293,6 +769,8 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "faceRough")  F.roughness = v;
         else if (k == "faceLight")  F.lightIntensity = v;
         else if (k == "smooth")     F.smoothNormals = v != 0.f;
+        else if (k == "bg")         { E.background[0] = E.background[1] =
+                                      E.background[2] = v; }
         else if (k == "hemi")       E.hemiStrength = v;
         else if (k == "envSpec")    E.envSpec = v;
         else if (k == "sssWrap")    E.sssWrap = v;
@@ -862,6 +1340,17 @@ bool  g_panel_cli   = false;   // the flags above were given, so do not restore
 bool  g_write_settings_doc = false;
 // --presettest: round-trip SimParams through the roots bank, then exit.
 bool  g_roots_roundtrip = false;
+// --rootpreset <name> [field=value ...]: set growth fields from the command
+// line, save the roots bank under that name, exit.
+//
+// A root look is dialled in headlessly -- tools/root_sweep.cpp grows the relay
+// with no window and reports which hops actually arrived -- and the numbers that
+// come out of that have to end up in a preset. Writing the file by hand would
+// mean writing parameter *names* by hand, and a key that matches nothing loads
+// as silence. This drives the real registry instead: the same save the panel's
+// button calls, so the file is a real bank dump rather than a plausible one.
+std::string g_root_preset_name;
+std::vector<std::pair<std::string, std::string>> g_root_preset_kv;
 // Height of the panel's content in the frame just built, for --paneltest.
 float g_panel_content_h = 0.f;
 // --paneltest: build a panel frame, check only one tab drew, exit.
@@ -1763,7 +2252,9 @@ static int mirrorclip(const char* prefix, float secs, const char* photo, int fps
 // The full 4-phase transition, offscreen. Mirrors cloth_cpp's `--shots`, but
 // against live assets: the pond is a real MirrorScene fitted to the photo, and
 // the face is the real fitted NVF mesh rather than a baked heightmap.
-static int transhot(const char* prefix, int frames, const char* photo, float fps) {
+static int transhot(const char* prefix, int frames, const char* photo, float fps,
+                    bool align = false, const float reg[4] = nullptr,
+                    float yawDeg = 14.f) {
     MetalContext ctx;
     if (!ctx.device()) { fprintf(stderr, "transhot: no Metal device\n"); return 1; }
 
@@ -1809,7 +2300,13 @@ static int transhot(const char* prefix, int frames, const char* photo, float fps
                     float res = -1.f;
                     fitter.fitIdentity(&res);
                     fitter.update(face, W, H);
-                    trans.setFaceMesh(fitter.vertices(), fitter.basis().triangles());
+                    // The fit's own projection as the mask's uv, so the film
+                    // lands on the photo's face pixel for pixel -- the same
+                    // path the live app takes, with an identity pin transform
+                    // because a still photo has no head mode to undo.
+                    std::vector<float> mask_uv;
+                    fitter.projectNormalised(W, H, 1.f, 0.f, 0.f, mask_uv);
+                    trans.setFaceMesh(fitter.vertices(), fitter.basis().triangles(), mask_uv);
                     printf("transhot: face fitted (residual %.2f px), %d verts\n",
                            res, fitter.basis().vertexCount());
                 } else {
@@ -1823,10 +2320,39 @@ static int transhot(const char* prefix, int frames, const char* photo, float fps
         printf("transhot: mirror fitted, loss %.5f\n", mirror.lastLoss());
     }
 
+    // No photo, or no face found in it: the transition still plays, against the
+    // basis's neutral mask. There is no faceless mode -- the gesture is a film
+    // coming off a mask, and an empty frame is not a shorter version of it.
+    if (!trans.hasFace()) {
+        mirror::FaceBasis basis;
+        std::string berr;
+        if (basis.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", berr))
+            trans.setFaceMesh(basis.neutral(), basis.triangles());
+        else
+            printf("transhot: no face basis (%s)\n", berr.c_str());
+    }
+
+    // The alignment hold: the mask fully through a flat film, both on screen,
+    // the timeline going nowhere. This is the state the registration is set in,
+    // and having it headless is what makes a chosen scale checkable against a
+    // still rather than only by eye on a moving sheet.
+    if (align) {
+        trans.alignMask = true;
+        if (reg) {
+            trans.maskScale[0] = reg[0]; trans.maskScale[1] = reg[1];
+            trans.maskOffset[0] = reg[2]; trans.maskOffset[1] = reg[3];
+        }
+    }
+
     const double dt = 1.0 / double(fps);
     for (int f = 0; f < frames; ++f) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            // A little side-to-side, so the drape has an asymmetric solid to
+            // come off. A photo cannot turn its head; a person in front of the
+            // piece does, and the mesh carries that on its own.
+            trans.maskYaw = yawDeg * (float(M_PI) / 180.f)
+                          * std::sin(float(f) / float(fps) * 2.f * float(M_PI) * 0.22f);
             mirror.advance(dt);
             if (mirror.pond().fitting()) mirror.fitSteps(1, 3e-3f);
             id<MTLTexture> pond = mirror.render();
@@ -2224,12 +2750,33 @@ int main(int argc, char** argv) {
         if (a == "--paneltest") { g_panel_test = true; continue; }
         if (a == "--selftest") return selftest();
         if (a == "--roottest") return roottest();
+        // --transalign <photo> <out.ppm> [scaleX scaleY offX offY]
+        //
+        // One frame of the alignment hold, for setting the mask's registration
+        // against a still. See TransitionScene::maskScale.
+        if (a == "--transalign") {
+            const char* photo = (i + 1 < argc) ? argv[i + 1] : "";
+            const char* out   = (i + 2 < argc) ? argv[i + 2] : "transalign.ppm";
+            float reg[4] = {1.f, 1.f, 0.f, 0.f};
+            for (int k = 0; k < 4; ++k)
+                if (i + 3 + k < argc) reg[k] = (float)atof(argv[i + 3 + k]);
+            printf("transalign: scale (%.3f, %.3f) offset (%+.3f, %+.3f)\n",
+                   reg[0], reg[1], reg[2], reg[3]);
+            // One frame is all it is; the prefix path is reused so the shot
+            // lands on the exact same pipeline the clip does.
+            std::string pre(out);
+            const size_t dot = pre.rfind(".ppm");
+            if (dot != std::string::npos) pre = pre.substr(0, dot);
+            return transhot(pre.c_str(), 1, photo, 30.f, /*align=*/true, reg, /*yawDeg=*/0.f);
+        }
         if (a == "--transhot") {
             const char* prefix = (i + 1 < argc) ? argv[i + 1] : "trans_";
             int n = (i + 2 < argc) ? atoi(argv[i + 2]) : 150;
             const char* photo = (i + 3 < argc) ? argv[i + 3] : "";
             float fps = (i + 4 < argc) ? (float)atof(argv[i + 4]) : 30.f;
-            return transhot(prefix, n, photo, fps);
+            // Degrees of test yaw; 0 for a head-on still.
+            float yaw = (i + 5 < argc) ? (float)atof(argv[i + 5]) : 14.f;
+            return transhot(prefix, n, photo, fps, false, nullptr, yaw);
         }
         if (a == "--orientshot") {
             const char* pre = (i + 1 < argc) ? argv[i + 1] : "orient";
@@ -2381,16 +2928,63 @@ int main(int argc, char** argv) {
             int bh = (i + 4 < argc) ? atoi(argv[i + 4]) : 1080;
             return rootbench(ds, fr, bw, bh);
         }
+        if (a == "--rootmovie") {
+            std::vector<std::string> pos;
+            std::vector<std::pair<std::string, std::string>> fields;
+            float faces = 0.f; unsigned faceSeed = 7u;
+            for (int j = i + 1; j < argc; ++j) {
+                std::string t = argv[j];
+                const size_t eq = t.find('=');
+                if (eq == std::string::npos) { pos.push_back(t); continue; }
+                std::string k = t.substr(0, eq), v = t.substr(eq + 1);
+                if (k == "faces") faces = (float)atof(v.c_str());
+                else if (k == "facesSeed") faceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
+                else fields.emplace_back(k, v);
+            }
+            auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
+            return rootmovie(at(0) ? at(0) : "roots.mp4",
+                             at(1) ? atof(at(1)) : 18.0,
+                             at(2) ? atoi(at(2)) : 30,
+                             at(3) ? atoi(at(3)) : 900,
+                             at(4) ? atoi(at(4)) : 900,
+                             fields, faces, faceSeed);
+        }
         if (a == "--growshot") {
-            const char* path = (i + 1 < argc) ? argv[i + 1] : "grow.ppm";
-            int steps = (i + 2 < argc) ? atoi(argv[i + 2]) : 400;
-            float az  = (i + 3 < argc) ? atof(argv[i + 3]) : 0.6f;
-            float el  = (i + 4 < argc) ? atof(argv[i + 4]) : 0.2f;
-            float rad = (i + 5 < argc) ? atof(argv[i + 5]) : -1.f;
-            float fs  = (i + 6 < argc) ? atof(argv[i + 6]) : -1.f;
-            float ty  = (i + 7 < argc) ? atof(argv[i + 7]) : -1e9f;
-            float rc  = (i + 8 < argc) ? atof(argv[i + 8]) : 1e9f;
-            return growshot(path, steps, az, el, rad, fs, ty, rc);
+            // Positional args stop at the first key=value: the growth fields
+            // are optional and there are twenty-odd of them, so they are named
+            // rather than counted.
+            std::vector<std::string> pos;
+            std::vector<std::pair<std::string, std::string>> fields;
+            int gw = 960, gh = 540;
+            float gzoom = 1.f, gfaces = 0.f;
+            unsigned gfaceSeed = 7u;
+            int gfocus = -1, ggroup = -1, ggroupOf = 3;
+            for (int j = i + 1; j < argc; ++j) {
+                std::string t = argv[j];
+                const size_t eq = t.find('=');
+                if (eq == std::string::npos) { pos.push_back(t); continue; }
+                std::string k = t.substr(0, eq), v = t.substr(eq + 1);
+                if (k == "w") gw = atoi(v.c_str());
+                else if (k == "h") gh = atoi(v.c_str());
+                else if (k == "zoom") gzoom = (float)atof(v.c_str());
+                else if (k == "faces") gfaces = (float)atof(v.c_str());
+                else if (k == "facesSeed") gfaceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
+                else if (k == "focus") gfocus = atoi(v.c_str());
+                else if (k == "group") ggroup = atoi(v.c_str());
+                else if (k == "groupOf") ggroupOf = atoi(v.c_str());
+                else fields.emplace_back(k, v);
+            }
+            auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
+            const char* path = at(0) ? at(0) : "grow.ppm";
+            int steps = at(1) ? atoi(at(1)) : 400;
+            float az  = at(2) ? atof(at(2)) : 0.6f;
+            float el  = at(3) ? atof(at(3)) : 0.2f;
+            float rad = at(4) ? atof(at(4)) : -1.f;
+            float fs2 = at(5) ? atof(at(5)) : -1.f;
+            float ty2 = at(6) ? atof(at(6)) : -1e9f;
+            float rc2 = at(7) ? atof(at(7)) : 1e9f;
+            return growshot(path, steps, az, el, rad, fs2, ty2, rc2, gw, gh,
+                            fields, gzoom, gfaces, gfaceSeed, gfocus, ggroup, ggroupOf);
         }
         if (a == "--leafshot") {
             const char* path = (i + 1 < argc) ? argv[i + 1] : "leaf.ppm";
@@ -2606,6 +3200,15 @@ int main(int argc, char** argv) {
         // has to run the real panel -- which is also the only honest way to
         // check it, since the panel is where declaration happens.
         if (a == "--presettest") { g_roots_roundtrip = true; continue; }
+        if (a == "--rootpreset") {
+            if (i + 1 < argc) g_root_preset_name = argv[++i];
+            while (i + 1 < argc && strchr(argv[i + 1], '=')) {
+                std::string kv = argv[++i];
+                const size_t eq = kv.find('=');
+                g_root_preset_kv.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
+            }
+            continue;
+        }
         if (a == "--maskframes") {
             // The mask frames as numbers. A face is placed as
             // p + tangent*x + bitangent*y + normal*z, so the bitangent is the
@@ -3287,8 +3890,52 @@ int main(int argc, char** argv) {
                 mirror.ensureSize(compW / std::max(1, downscale), compH / std::max(1, downscale));
                 mirror.advance(dt);
                 trans.setPondTexture(mirror.render());
-                if (g_track_on && g_fitter.valid() && g_face.valid && !trans.hasFace())
-                    trans.setFaceMesh(g_fitter.vertices(), g_fitter.basis().triangles());
+
+                // The mask, re-sent every frame rather than latched when the
+                // phase opened. Two things depend on that: the head keeps
+                // turning during the transition and the drape is far more
+                // interesting off an asymmetric solid, and the film only lines
+                // up if the mesh is placed by *this* frame's projection.
+                //
+                // The uv is the fit's own projection of each vertex into the
+                // frame, taken at the pinned position for the same reason the
+                // root scene's texture is -- the tracker says where the face
+                // was seen, the mirror draws it wherever the head mode put it,
+                // and the mask has to land on the drawn one.
+                if (g_fitter.valid()) {
+                    const bool first = !trans.hasFace();
+                    if (g_track_on && g_face.valid) {
+                        float ps = 1.f, uo = 0.f, vo = 0.f;
+                        PinTransform(ps, uo, vo);
+                        static std::vector<float> mask_uv;
+                        g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, mask_uv);
+                        trans.setFaceMesh(g_fitter.vertices(),
+                                          first ? g_fitter.basis().triangles()
+                                                : std::vector<int>(),
+                                          mask_uv);
+                    } else if (first) {
+                        // Nobody in front of the piece: the basis's neutral
+                        // face, centred. Still the real mask -- the transition
+                        // never falls back to an oval, because no part of it
+                        // is built from one.
+                        trans.setFaceMesh(g_fitter.basis().neutral(),
+                                          g_fitter.basis().triangles());
+                    }
+                }
+                // The mask's material, taken from the root scene rather than
+                // kept alongside it. The transition ends with the mask alone on
+                // screen and the roots phase begins with the same mask in a
+                // tangle; sharing the struct is what makes that cut land on one
+                // object instead of two that happen to be tuned alike, and it
+                // means the mask panel tunes both.
+                trans.faceMat = roots.renderer().face;
+                trans.env     = roots.renderer().env;
+                trans.exposure = roots.renderer().post.exposure;
+                trans.tonemap  = roots.renderer().post.tonemap;
+                trans.keyDir[0] = roots.lightDir[0];
+                trans.keyDir[1] = roots.lightDir[1];
+                trans.keyDir[2] = roots.lightDir[2];
+
                 trans.ensureSize(compW, compH);
                 trans.advance(dt);
                 sceneTex = trans.render(cb);
@@ -4360,51 +5007,172 @@ int main(int argc, char** argv) {
             // play one: what is on screen is the phase navigator's business,
             // so these declare and draw whenever the look tab is open.
             {
-                ImGui::Text("%s   t=%.2fs   emergence %.0f%%",
-                            trans.phaseName(), trans.clock(), trans.emergence() * 100.f);
+                ImGui::Text("%s   t=%.2fs   press %.0f%%   release %.0f%%",
+                            trans.phaseName(), trans.clock(), trans.press() * 100.f,
+                            trans.release() * 100.f);
                 ImGui::SameLine();
                 if (ImGui::Button("replay")) trans.restart();
                 if (!trans.hasFace()) {
-                    ImGui::TextDisabled("no fitted face -- enable face tracking");
-                    ImGui::TextDisabled("(the pond alone still plays)");
+                    ImGui::TextDisabled("no mask -- load face_basis.bin");
+                } else if (!g_track_on || !g_face.valid) {
+                    ImGui::TextDisabled("no tracked face -- showing the neutral mask");
                 }
                 ImGui::SeparatorText("timing (seconds)");
                 ImGui::PushItemWidth(110);
-                ui::SliderFloat("hold",   &trans.timing.hold,   0.f, 3.f);
+                ui::SliderFloat("hold",    &trans.timing.hold,    0.f, 3.f);
                 ImGui::SameLine();
-                ui::SliderFloat("emerge", &trans.timing.emerge, 0.2f, 6.f);
-                ui::SliderFloat("settle", &trans.timing.settle, 0.f, 2.f);
+                ui::SliderFloat("press",   &trans.timing.press,   0.2f, 6.f);
+                ui::SliderFloat("settle",  &trans.timing.settle,  0.f, 2.f);
                 ImGui::SameLine();
-                ui::SliderFloat("fade",   &trans.timing.fade,   0.f, 1.f);
+                ui::SliderFloat("release", &trans.timing.release, 0.05f, 3.f);
+                ui::SliderFloat("fall",    &trans.timing.fall,    0.5f, 6.f);
                 ImGui::PopItemWidth();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Crossfade across the swap. The sheet is held flat for\n"
-                        "its whole duration, so the blend is between two\n"
-                        "pixel-identical images -- letting gravity start on the\n"
-                        "swap frame would make it a blend of two different ones\n"
-                        "and the seam would show through regardless.");
+                        "hold: the flat film, which is the pond exactly.\n"
+                        "press: the mask advancing through it, tenting it.\n"
+                        "settle: held taut at full press.\n"
+                        "release: the pins letting go, corners first.\n"
+                        "fall: draping off the face and away.");
                 }
                 ImGui::SeparatorText("look");
                 ui::SliderFloat("refraction", &trans.refract, 0.f, 0.25f);
-                ui::SliderFloat("velocity refraction", &trans.refractVel, 0.f, 3.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Scales refraction by how fast the face is moving\n"
-                        "through the film. The prototype used a fixed constant,\n"
-                        "so the distortion peaked at the midpoint of the\n"
-                        "timeline no matter how the emergence was paced.");
+                        "How much the film bends the image where the fabric\n"
+                        "bends. Driven by the cloth's own normals, so it is\n"
+                        "exactly zero on the flat sheet -- the opening frame\n"
+                        "has to be the pond, not a displaced copy of it.");
                 }
+                ui::SliderFloat("press depth", &trans.pressProud, 0.f, 0.4f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far proud of the film the mask ends up. More\n"
+                        "tents the fabric harder before the pins let go.");
+                }
+                ui::SliderFloat("mask relief", &trans.depthScale, 0.2f, 4.f);
+                ui::SliderFloat("shading span", &trans.shadeSpan, 1.f, 10.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The size the mask is shaded at, in the root scene's\n"
+                        "world units. Its marble, light falloff and spot cone\n"
+                        "are world-space quantities tuned against a mask about\n"
+                        "four units across; this scene places the mask by\n"
+                        "projection at whatever size the fit gives it, so the\n"
+                        "shading space is scaled back to that reference rather\n"
+                        "than every parameter being re-tuned.");
+                }
+                ImGui::TextDisabled("material: the roots' mask (look -> roots -> mask)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The mask's material, environment, exposure and tonemap\n"
+                        "are the root scene's own, copied in every frame -- not\n"
+                        "a second set of knobs. The transition ends with the\n"
+                        "mask alone on screen and the roots phase begins with\n"
+                        "the same mask in a tangle; sharing them is what makes\n"
+                        "that cut land on one object rather than two that\n"
+                        "happen to be tuned alike.\n\n"
+                        "The film is deliberately not on that material: it is\n"
+                        "the mirror's output, display-referred, and has to stay\n"
+                        "identical to the scene the piece cuts from.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Depth exaggeration of the mask. 1 is the fit's own\n"
+                        "proportions; the fit is solved from one view, so a\n"
+                        "little more relief often reads better on screen.");
+                }
+                ImGui::SeparatorText("registration");
+                ui::Checkbox("align mask", &trans.alignMask);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Hold the mask fully pressed through a flat film and\n"
+                        "stop the timeline, so the mask and the face it is\n"
+                        "supposed to sit on are both on screen. This is the\n"
+                        "state to set the scale and offset in; everywhere else\n"
+                        "the mask is either hidden behind the sheet or moving.");
+                }
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("mask scale x", &trans.maskScale[0], 0.6f, 1.4f);
+                ImGui::SameLine();
+                ui::SliderFloat("mask scale y", &trans.maskScale[1], 0.6f, 1.4f);
+                ui::SliderFloat("mask offset x", &trans.maskOffset[0], -0.2f, 0.2f);
+                ImGui::SameLine();
+                ui::SliderFloat("mask offset y", &trans.maskOffset[1], -0.2f, 0.2f);
+                ImGui::PopItemWidth();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The mask is placed by the fit's projection, which is a\n"
+                        "2D similarity -- no perspective, no out-of-plane\n"
+                        "foreshortening. On a face looking at the camera it\n"
+                        "lands on the features; on a head with real pitch it\n"
+                        "comes out too tall, eyes high and mouth low, and\n"
+                        "nothing downstream can recover that. Scale is per-axis\n"
+                        "because the error is.\n\n"
+                        "The texture moves with the geometry, so correcting\n"
+                        "where the mask sits keeps it wearing what it covers.");
+                }
+                if (ImGui::Button("reset registration")) {
+                    trans.maskScale[0] = trans.maskScale[1] = 1.f;
+                    trans.maskOffset[0] = trans.maskOffset[1] = 0.f;
+                }
+
                 ImGui::SeparatorText("cloth");
                 ui::Checkbox("show cloth", &trans.showCloth);
                 ImGui::SameLine();
+                ui::Checkbox("show mask", &trans.showFace);
+                ImGui::SameLine();
                 ui::Checkbox("wireframe", &trans.wireframe);
                 ui::SliderFloat("gravity back (-z)", &trans.gravityBack, 0.f, 20.f);
-                ui::SliderFloat("gravity down (-y)", &trans.gravityDown, 0.f, 5.f);
+                ui::SliderFloat("gravity down (-y)", &trans.gravityDown, 0.f, 8.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Zero by default. A -y pull drags the whole film out of\n"
+                        "frame, so the mask ends up uncovered by something that\n"
+                        "has nothing to do with it. With gravity straight back,\n"
+                        "what takes the film off is the mask's own asymmetry --\n"
+                        "a turned head makes the tangential forces stop\n"
+                        "cancelling, and the fabric peels from the shallow side.");
+                }
+                ui::SliderFloat("friction", &trans.friction, 0.f, 1.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Tangential grip where the sheet touches the mask.\n"
+                        "This is what makes it drape over the brow and the\n"
+                        "nose instead of sliding off them like glass.");
+                }
+                ui::SliderFloat("stretch", &trans.stretch, 0.f, 0.98f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How freely the film lengthens. At 0 it is\n"
+                        "inextensible and bridges the face instead of\n"
+                        "wrapping it; toward 1 it stretches over the form\n"
+                        "the way a dipped film does. Compression stays stiff\n"
+                        "either way, which is what keeps the canvas taut.");
+                }
+                ui::SliderFloat("set (plasticity)", &trans.plastic, 0.f, 8.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How fast a held stretch becomes the sheet's own\n"
+                        "shape. At 0 every bit of tension stored during the\n"
+                        "press comes back at once when the pins let go, and\n"
+                        "the sheet snaps off the face.");
+                }
+                ui::SliderFloat("damping", &trans.damping, 0.9f, 1.f);
+                ui::SliderFloat("relief shading", &trans.reliefShade, 0.f, 1.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far shading swings either side of the flat\n"
+                        "sheet's value. The flat sheet always reads 1, so\n"
+                        "this changes how much the folds show without ever\n"
+                        "changing the film's overall brightness.");
+                }
+                ui::SliderFloat("sheet oversize", &trans.oversize, 1.f, 1.3f);
                 ImGui::PushItemWidth(110);
                 ui::SliderInt("substeps", &trans.substeps, 1, 8);
                 ImGui::SameLine();
                 ui::SliderInt("iterations", &trans.iterations, 4, 64);
+                ui::SliderInt("sheet res", &trans.sheetRes, 16, 128);
                 ImGui::PopItemWidth();
                 ImGui::TextDisabled("%d verts, %zu tris, minZ %.2f",
                                     (int)trans.cloth().pos.size(),
@@ -5054,6 +5822,73 @@ int main(int argc, char** argv) {
                     }
                     ImGui::PopItemWidth();
 
+                    // --- host and pattern -----------------------------
+                    // Two axes, not one: the host is what the roots crawl on,
+                    // the pattern is where the masks sit in its coordinates.
+                    // Any pattern composes with any host -- a helix is a curve
+                    // on a cylinder, not a topology of its own.
+                    ui::DeclareString("host", &SP.host);
+                    ui::DeclareString("pattern", &SP.pattern);
+                    {
+                        static const char* kHosts[] = {"cone", "cylinder", "sphere",
+                                                       "torus", "lobes"};
+                        static const char* kPatterns[] = {"phyllotaxis", "helix",
+                                                          "rosette", "feature"};
+                        ImGui::PushItemWidth(-90);
+                        if (ui::Visible() && ImGui::BeginCombo("host", SP.host.c_str())) {
+                            for (const char* h : kHosts)
+                                if (ImGui::Selectable(h, SP.host == h)) {
+                                    SP.host = h; roots.regrow();
+                                }
+                            ImGui::EndCombo();
+                        }
+                        // Lobes have no surface, so they have no (u, v) for a
+                        // pattern to place into -- the grouping is the layout.
+                        ui::BeginGate(SP.host != "lobes");
+                        if (ui::Visible() && ImGui::BeginCombo("pattern", SP.pattern.c_str())) {
+                            for (const char* q : kPatterns)
+                                if (ImGui::Selectable(q, SP.pattern == q)) {
+                                    SP.pattern = q; roots.regrow();
+                                }
+                            ImGui::EndCombo();
+                        }
+                        ui::EndGate();
+                        ImGui::PopItemWidth();
+                    }
+
+                    ImGui::PushItemWidth(110);
+                    ui::BeginGate(SP.pattern == "helix" && SP.host != "lobes");
+                    ui::SliderFloat("helix turns", &SP.helixTurns, 0.25f, 6.f, "%.2f");
+                    ui::EndGate();
+                    ui::BeginGate(SP.host == "lobes" || SP.pattern == "rosette");
+                    ui::SliderInt("group size", &SP.groupSize, 1, 9);
+                    ui::EndGate();
+                    ui::BeginGate(SP.pattern == "rosette" && SP.host != "lobes");
+                    ImGui::SameLine();
+                    ui::SliderFloat("group spread", &SP.groupSpread, 0.1f, 1.2f);
+                    ui::EndGate();
+                    ui::BeginGate(SP.pattern == "feature" && SP.host != "lobes");
+                    ui::SliderInt("feature clusters", &SP.featureClusters, 1, 6);
+                    ui::EndGate();
+                    ui::BeginGate(SP.host == "torus" || SP.host == "lobes");
+                    ui::SliderFloat("tube radius", &SP.tubeRadius, 2.f, 20.f, "%.1f cm");
+                    ui::EndGate();
+                    ImGui::PopItemWidth();
+
+                    ui::Checkbox("tree relay", &SP.treeRelay);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Each hop leaves from the revealed mask NEAREST the\n"
+                            "next one, rather than from the one just left: the\n"
+                            "system branches instead of threading.\n\n"
+                            "Changes nothing on a spiral, where the nearest mask\n"
+                            "already is the previous one. It is for the clustered\n"
+                            "layouts -- and it currently costs reach there, since\n"
+                            "the hop starts inside a crowded neighbourhood it has\n"
+                            "to escape.");
+                    }
+                    ImGui::Separator();
+
                     ImGui::PushItemWidth(110);
                     ui::SliderInt("masks", &SP.N, 1, 24);
                     ImGui::SameLine();
@@ -5074,8 +5909,43 @@ int main(int argc, char** argv) {
                     ui::SliderFloat("dwell days", &SP.dwellDays, 2.f, 60.f);
                     ImGui::SameLine();
                     ui::SliderFloat("hop days", &SP.maxHopDays, 10.f, 160.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Ceiling, not the budget. How long a hop's travel\n"
+                            "actually gets is worked out from how far it has to\n"
+                            "go and how fast this species elongates -- this only\n"
+                            "stops a hop that is never going to arrive from\n"
+                            "growing the whole system into a ball.");
+                    }
+                    ui::SliderFloat("travel slack", &SP.travelSlack, 1.f, 4.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How much longer the root's real path is than the\n"
+                            "straight line to the mask. It wanders -- the tropism\n"
+                            "is a random walk with a pull -- and it steers around\n"
+                            "the masks already revealed, so a budget that assumes\n"
+                            "a straight line runs out short of every target.\n\n"
+                            "Too low and late masks get revealed with the root\n"
+                            "still halfway there; too high only costs days on a\n"
+                            "hop that was never going to make it.");
+                    }
                     ImGui::PopItemWidth();
 
+                    ui::Checkbox("even nests", &SP.evenNests);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The same amount of root at every mask.\n\n"
+                            "The dwell is already the same everywhere, but the\n"
+                            "nest is not: laterals grow during the travel too,\n"
+                            "and travel gets longer as the cone widens -- so the\n"
+                            "last mask ends up with about twice the root of the\n"
+                            "first. This pads every hop out to one age, so the\n"
+                            "early masks wait instead of the late ones being\n"
+                            "fuller.\n\n"
+                            "It costs days, and the days are what make the system\n"
+                            "bushy: turning it on wants a shorter dwell to hold\n"
+                            "the same density.");
+                    }
                     ui::Checkbox("crawl the cone surface", &SP.coneSurfaceTravel);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -5209,6 +6079,32 @@ int main(int argc, char** argv) {
                         ui::SliderFloat("zoom", &roots.zoom, 0.15f, 5.f, "%.2fx");
                         ImGui::SameLine();
                         if (ImGui::SmallButton("reset zoom")) roots.zoom = 1.f;
+
+                        // The middle shot: one cluster rather than one face or
+                        // the whole piece. -1 is off, so the focus combo above
+                        // keeps its meaning.
+                        ImGui::SetNextItemWidth(110);
+                        ui::SliderInt("focus group", &roots.focusGroup, -1, 7);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                        ui::SliderInt("group of", &roots.focusGroupSize, 1, 9);
+
+                        ui::Checkbox("frame on masks", &roots.frameOnMasks);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Frame on the masks rather than on every root\n"
+                                "node.\n\n"
+                                "The roots trail: a couple of laterals hanging a\n"
+                                "long way below the last nest drag the bounding\n"
+                                "box down, and the piece shrinks into the middle\n"
+                                "of the frame to accommodate two threads nobody\n"
+                                "is looking at.");
+                        }
+                        ui::BeginGate(roots.frameOnMasks);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                        ui::SliderFloat("margin", &roots.frameMargin, 0.f, 1.5f, "%.2f");
+                        ui::EndGate();
                     }
                     ui::EndGate();
                     ui::Checkbox("auto-orbit", &roots.autoOrbit); ImGui::SameLine();
@@ -5323,6 +6219,7 @@ int main(int argc, char** argv) {
                     ui::SliderFloat("key direction Z", &roots.lightDir[2], -1.0f, 1.0f);
                     ImGui::Separator();
                     ImGui::TextUnformatted("ambient (hemisphere)");
+                    ui::ColorEdit3("background", R.env.background);
                     ui::ColorEdit3("sky color", R.env.skyColor);
                     ui::ColorEdit3("ground color", R.env.groundColor);
                     ui::SliderFloat("hemisphere", &R.env.hemiStrength, 0.0f, 3.0f);
@@ -5795,6 +6692,7 @@ int main(int argc, char** argv) {
                         SP.lateralWeight = 0.31f; SP.dwellWeight = 0.83f;
                         SP.dwellLateralWeight = 0.71f; SP.sigma = 0.47f;
                         SP.viewCylLen = 9.5f; SP.maxHopDays = 71.f;
+                        SP.travelSlack = 2.65f; SP.evenNests = false;
                         SP.reachMult = 1.9f; SP.travelPullReach = 1.45f;
                         SP.coneSurfaceTravel = true; SP.coneShellThickness = 5.5f;
                         SP.growthDt = 0.35f; SP.targetLift = 1.25f;
@@ -5856,6 +6754,56 @@ int main(int argc, char** argv) {
                     }
                 }
                 ++rt_step;
+            }
+
+            // --rootpreset: apply the growth fields, let them declare, save.
+            //
+            // Two frames, for the same reason --presettest needs them: a value
+            // written into SimParams here only becomes a registry value when
+            // the panel next declares the control that owns it, and saving
+            // before that writes the previous frame's numbers.
+            if (!g_root_preset_name.empty()) {
+                static int rp_step = 0;
+                rootsim::SimParams& SP = roots.simParams();
+                if (rp_step == 0) {
+                    for (const auto& kv : g_root_preset_kv) {
+                        const std::string key =
+                            kv.first == "species" ? "speciesXml" : kv.first;
+                        bool hit = false;
+                        rootsim::visitSimParams(SP, [&](const char* name, auto& f) {
+                            if (key != name) return;
+                            hit = true;
+                            using T = std::decay_t<decltype(f)>;
+                            if constexpr (std::is_same_v<T, std::string>) f = kv.second;
+                            else if constexpr (std::is_same_v<T, bool>)
+                                f = atoi(kv.second.c_str()) != 0;
+                            else if constexpr (std::is_same_v<T, int>)
+                                f = atoi(kv.second.c_str());
+                            else if constexpr (std::is_same_v<T, unsigned>)
+                                f = (unsigned)strtoul(kv.second.c_str(), nullptr, 10);
+                            else f = (T)atof(kv.second.c_str());
+                        });
+                        if (!hit) {
+                            fprintf(stderr, "rootpreset: no growth field '%s'\n",
+                                    kv.first.c_str());
+                            g_exit_code = 1;
+                        }
+                    }
+                } else {
+                    const std::string path = ui::BankDir(ui::Bank::Roots) + "/" +
+                                             g_root_preset_name + ui::BankExt(ui::Bank::Roots);
+                    std::string err;
+                    if (ui::SaveBank(ui::Bank::Roots, path, err)) {
+                        printf("rootpreset: wrote %s (%d parameters in the bank)\n",
+                               path.c_str(), ui::BankCount(ui::Bank::Roots));
+                    } else {
+                        fprintf(stderr, "rootpreset: %s\n", err.c_str());
+                        g_exit_code = 1;
+                    }
+                    fflush(stdout);
+                    glfwSetWindowShouldClose(win, 1);
+                }
+                ++rp_step;
             }
 
             if (g_panel_test) {

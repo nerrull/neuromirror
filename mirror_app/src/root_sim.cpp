@@ -3,6 +3,7 @@
 #include "RootSystem.h"
 #include "SegmentAnalyser.h"
 #include "MaskCavities.h"
+#include "MaskHosts.h"
 #include "RootAttractors.h"
 
 #include <algorithm>
@@ -29,9 +30,72 @@ namespace rootsim {
 // whose subject is human faces is not a free choice.
 static Vector3d toYup(const Vector3d& v) { return Vector3d(v.x, v.z, -v.y); }
 
+// How far the travelling root actually has to go, in grow space.
+//
+// The straight chord between two masks is the wrong number whenever travel is
+// confined to the cone shell: the chord dips inside the cone, and the shell
+// pushes the path back out onto the surface, which is longer -- much longer for
+// a big angular step, where the chord cuts across and the path wraps around.
+// Sampling the surface between the two points in (depth, angle) parameter space
+// and summing the segments is a good enough geodesic for a time budget.
+static double conePathLength(const Vector3d& a, const Vector3d& b, double R0,
+                             double Hh, double tipR, double taper) {
+    auto param = [&](const Vector3d& v, double& t, double& phi) {
+        t = std::clamp(-v.z / std::max(1.0, Hh), 0.0, 1.0);
+        phi = std::atan2(v.y, v.x);
+    };
+    auto surface = [&](double t, double phi) {
+        double r = tipR + (R0 - tipR) * std::pow(std::max(t, 1e-6), taper);
+        return Vector3d(r * std::cos(phi), r * std::sin(phi), -t * Hh);
+    };
+    double ta, pa, tb, pb;
+    param(a, ta, pa); param(b, tb, pb);
+    // The short way round, so a hop across the seam is not measured the long way.
+    double dphi = pb - pa;
+    while (dphi >  M_PI) dphi -= 2.0 * M_PI;
+    while (dphi < -M_PI) dphi += 2.0 * M_PI;
+
+    const int kSteps = 24;
+    double len = 0.0;
+    Vector3d prev = surface(ta, pa);
+    for (int i = 1; i <= kSteps; ++i) {
+        double f = double(i) / kSteps;
+        Vector3d cur = surface(ta + (tb - ta) * f, pa + dphi * f);
+        len += cur.minus(prev).length();
+        prev = cur;
+    }
+    return len;
+}
+
 static double minDist(const std::vector<Vector3d>& nodes, const Vector3d& p) {
     double best = std::numeric_limits<double>::max();
     for (const auto& n : nodes) best = std::min(best, n.minus(p).length());
+    return best;
+}
+
+// How deep into the mask's own volume the closest root node is: the mask
+// ellipsoid, inflated by `inflate`, evaluated in the mask's frame. < 1 means a
+// node is inside it, which is what "arrived" should mean.
+//
+// This used to be a distance to a *point* against one scalar threshold, which
+// is the wrong shape twice over. A mask is 1.4 cm deep and 3.3 cm tall, so a
+// sphere big enough to be reachable across the tall axis reaches nearly two and
+// a half centimetres clear of the face along the normal -- and every hop
+// declared arrival at whatever distance it happened to trip that sphere, so no
+// two dwells started from the same place.
+static double maskVolumeK(const std::vector<Vector3d>& nodes, const MaskNode& m,
+                          double inflate) {
+    const double rd = std::max(1e-3, m.r_depth  * inflate);
+    const double rw = std::max(1e-3, m.r_width  * inflate);
+    const double rh = std::max(1e-3, m.r_height * inflate);
+    double best = std::numeric_limits<double>::max();
+    for (const auto& n : nodes) {
+        Vector3d d = n.minus(m.pos);
+        double a = d.times(m.normal) / rd;
+        double b = d.times(m.tangent) / rw;
+        double c = d.times(m.bitangent) / rh;
+        best = std::min(best, std::sqrt(a * a + b * b + c * c));
+    }
     return best;
 }
 
@@ -46,30 +110,165 @@ struct RootSim::Impl {
     std::string paramPath;
     double tipRadius = 0.0;
 
+    // The host the masks sit on, and that travel is confined to. Null for a
+    // placement that has no surface (lobes) -- travel is then bounded only by
+    // the mask cavities.
+    std::shared_ptr<HostSurface> host;
+    std::vector<std::pair<double, double>> maskUV;   // per mask, when there is a host
+
+    // The travelling root's own growth law, read off the species file once:
+    // elongation rate, maximal length, and the function relating the two. The
+    // hop budget is derived from these -- see travelDaysFor.
+    double tapRate = 1.0, tapLmax = 0.0;      // subType 1, the travelling root
+    double latRate = 1.0, latLmax = 0.0;      // subType 2, what carries on past it
+    std::shared_ptr<GrowthFunction> tapGrowth;
+
     std::vector<MaskNode> masks;      // grow space
     std::vector<MaskNode> revealed;   // grow space
     std::vector<SimMask>  revealedRender;
+    std::vector<SimMask>  plannedRender;    // every mask, from reset
     std::vector<FrozenHop> frozen;
 
     // Current hop state.
     std::shared_ptr<RootSystem> rs;
     std::shared_ptr<Tropism>    base;
     int    hop = 0;
-    Vector3d prevPos{0, 0, 0};
     Vector3d offset{0, 0, 0};
     Vector3d localTarget{0, 0, 0};
     MaskNode localTargetNode;
     std::vector<MaskNode> localRevealed;
-    double hopLen = 0.0, hopMaxDays = 0.0;
+    double hopLen = 0.0, hopPath = 0.0, hopTravelDays = 0.0, hopMaxDays = 0.0;
+    double evenAgeDays = 0.0;         // commonAge(), which walks every mask
     double day = 0.0, reachedDay = -1.0;
     bool   reached = false;
     bool   doneFlag = false;
     bool   ok = false;
+    bool   seedHop = false;           // hop 0, wrapping the first mask
+    HopReport report;                 // the hop in flight
+    std::vector<HopReport> reports;
 
     // Live snapshot (grow-global) refreshed each step.
     std::vector<Vector3d> liveNodes;
     std::vector<Vector2i> liveSegs;
     std::vector<double>   liveRadii;
+
+    // Days this species needs to carry a tip `len` centimetres from the seed.
+    //
+    // The reason a hop misses its mask is almost never that it was pointed the
+    // wrong way -- it is that it was given sixty days to cover a distance this
+    // plant cannot cover in sixty days, or cannot cover at all. Two facts about
+    // the parameter sets drive that, and both are per species:
+    //
+    //   * roots elongate on a negative exponential toward lmax, so days are
+    //     wildly non-linear in distance -- for Anagallis (lmax 33 cm, r 4
+    //     cm/day) twenty centimetres is eight days and thirty is nineteen;
+    //   * the tap root stops at lmax, and past that the front is carried on by
+    //     a first-order lateral, at the lateral's own much slower rate. That
+    //     hand-off is why Anagallis, whose tap root gives out at 33 cm, still
+    //     arrives at a mask 36 cm away and not at one 39 cm away.
+    //
+    // So: the tap root for as far as it goes, laterals for the remainder.
+    double travelDaysFor(double len) const {
+        const double rTap = std::max(1e-3, tapRate);
+        if (tapLmax <= 0.0) return len / rTap;              // no ceiling declared
+        const double byTap = std::min(len, 0.9 * tapLmax);  // the asymptote is not reachable
+        double days = tapGrowth ? tapGrowth->getAge(byTap, rTap, tapLmax, nullptr)
+                                : byTap / rTap;
+        if (!std::isfinite(days) || days < 0.0) days = byTap / rTap;
+        const double rest = len - byTap;
+        if (rest > 0.0) days += rest / std::max(1e-3, latRate);
+        return days;
+    }
+
+    // Past this the mask is not reachable at all, however many days it is
+    // given: the tap root and one lateral together do not span it.
+    bool beyondReach(double len) const {
+        if (tapLmax <= 0.0) return false;
+        return len > 0.9 * tapLmax + 0.9 * latLmax;
+    }
+
+    // Where the travelling root starts a hop: just behind the mask it is
+    // leaving, or the seed for the first one.
+    Vector3d hopStart(int h) const {
+        // The seed hop starts on the first mask itself: its job is to put a
+        // root system around that face before anything travels anywhere.
+        if (h == 0) {
+            if (!p.growFromFirstMask || masks.empty()) return Vector3d(0, 0, 0);
+            const MaskNode& m = masks[0];
+            return m.pos.minus(m.normal.times(m.r_depth + (double)p.spawnBehind))
+                        .minus(m.bitangent.times(m.r_height * (double)p.spawnRim));
+        }
+        int from = h - 1;
+        if (p.treeRelay) {
+            // Out of whichever revealed mask is nearest, rather than out of the
+            // one just left: the system branches instead of threading, and no
+            // hop is ever longer than the gap to its closest neighbour.
+            double best = std::numeric_limits<double>::max();
+            for (int i = 0; i < h; ++i) {
+                double d = masks[i].pos.minus(masks[h].pos).length();
+                if (d < best) { best = d; from = i; }
+            }
+        }
+        const MaskNode& m = masks[from];
+        // Behind the surface, and down at the chin: emerging from the rim is
+        // what makes it read as growing out of this face.
+        return m.pos.minus(m.normal.times(m.r_depth + (double)p.spawnBehind))
+                    .minus(m.bitangent.times(m.r_height * (double)p.spawnRim));
+    }
+
+    // Which mask a hop leaves from -- the same choice as hopStart, for the
+    // surface-path estimate that needs its (u, v).
+    int hopFrom(int h) const {
+        if (h <= 0 || !p.treeRelay) return h - 1;
+        int from = h - 1;
+        double best = std::numeric_limits<double>::max();
+        for (int i = 0; i < h; ++i) {
+            double d = masks[i].pos.minus(masks[h].pos).length();
+            if (d < best) { best = d; from = i; }
+        }
+        return from;
+    }
+
+    // The distance a hop has to cover: over the cone surface when travel is
+    // confined to the shell, the straight line otherwise.
+    double hopPathFor(int h) const {
+        Vector3d a = hopStart(h);
+        Vector3d b = masks[h].pos.plus(Vector3d(0, 0, (double)p.targetLift));
+        const int from = hopFrom(h);
+        // Over the host when travel is confined to it and both ends have
+        // surface coordinates; the chord otherwise, which is all the first hop
+        // (out of the seed, which is on no surface) can be measured by.
+        if (p.coneSurfaceTravel && host && from >= 0 &&
+            from < (int)maskUV.size() && h < (int)maskUV.size())
+            return host->pathBetween(maskUV[from].first, maskUV[from].second,
+                                     maskUV[h].first, maskUV[h].second);
+        return b.minus(a).length();
+    }
+
+    // One age for every hop to finish at, so the nests match.
+    //
+    // The reference is the longest travel the mask layout implies, taken from
+    // the growth law on the *chord* rather than on the surface path the budget
+    // uses. The budget has to be safe, so it takes the long way round; this is
+    // an estimate of what travel will really cost, and the tip does not take
+    // the long way -- the shell has thickness and it cuts the corner. Measured
+    // against the chord the growth law is close enough to read off: 6.1 days
+    // predicted against 6.0 actual for maize's last hop, 12.9 against 12.8 for
+    // kale. Against the surface path it is two to three times too big, and
+    // padding every hop out to that trebles the root mass of the whole system.
+    //
+    // Plus the dwell, which every hop gets in full either way: this only ever
+    // makes a hop wait longer, never shorter.
+    double commonAge() const {
+        double worst = 0.0;
+        for (int h = 0; h < (int)masks.size(); ++h) {
+            Vector3d a = hopStart(h);
+            Vector3d b = masks[h].pos.plus(Vector3d(0, 0, (double)p.targetLift));
+            worst = std::max(worst, std::min((double)p.maxHopDays,
+                                             travelDaysFor(b.minus(a).length())));
+        }
+        return worst + std::max(0.0, (double)p.dwellDays);
+    }
 
     void rebuildTropism(double mainW, double latW, bool travel, double dwellThreshold) {
         auto geom = buildCavityGeometry(localRevealed, p.R0, p.Hh, false, 2.0,
@@ -82,10 +281,9 @@ struct RootSim::Impl {
         //
         // The global cone apex sits at -offset in this hop's local coordinates.
         std::shared_ptr<SignedDistanceFunction> growGeom = geom;
-        if (p.coneSurfaceTravel && travel) {
-            auto shell = buildConeShell(p.R0, p.Hh, tipRadius, p.taperPower,
-                                        p.coneShellThickness, offset.times(-1.0));
-            growGeom = std::make_shared<CPlantBox::SDF_Intersection>(geom, shell);
+        if (p.coneSurfaceTravel && travel && host) {
+            auto sh = host->shell(p.coneShellThickness, offset.times(-1.0));
+            growGeom = std::make_shared<CPlantBox::SDF_Intersection>(geom, sh);
         }
         rs->setGeometry(growGeom);
         std::vector<Attractor> attrs;
@@ -106,7 +304,8 @@ struct RootSim::Impl {
         }
     }
 
-    void pushRevealedRender(const MaskNode& m) {
+    // MaskNode (grow space) -> SimMask (render space).
+    SimMask toSimMask(const MaskNode& m) const {
         Vector3d pos = toYup(m.pos), n = toYup(m.normal);
         // The mask frame carries through toYup unchanged. MaskCavities builds
         // the bitangent as "up the cone surface", i.e. toward the apex at grow
@@ -122,8 +321,10 @@ struct RootSim::Impl {
         sm.tangent[0] = (float)t.x; sm.tangent[1] = (float)t.y; sm.tangent[2] = (float)t.z;
         sm.bitangent[0] = (float)b.x; sm.bitangent[1] = (float)b.y; sm.bitangent[2] = (float)b.z;
         sm.rDepth = (float)m.r_depth; sm.rWidth = (float)m.r_width; sm.rHeight = (float)m.r_height;
-        revealedRender.push_back(sm);
+        return sm;
     }
+
+    void pushRevealedRender(const MaskNode& m) { revealedRender.push_back(toSimMask(m)); }
 
     void initHop(int h) {
         Vector3d maskGlobal = masks[h].pos;
@@ -139,7 +340,15 @@ struct RootSim::Impl {
         rs->initialize(false);
         auto seedNodes = rs->getNodes();
         Vector3d localSeed = seedNodes.empty() ? Vector3d(0, 0, 0) : seedNodes[0];
-        offset = prevPos.minus(localSeed);
+        // Where this hop's root actually starts. It used to come from a
+        // `prevPos` member updated at the end of the previous hop, which had
+        // two bugs in it: growing out of the first mask left it at the world
+        // origin (nothing had finished yet), so the opening root sprouted from
+        // the seed point sixteen centimetres away from the face it was supposed
+        // to be leaving; and tree relay only ever changed the *estimated* path,
+        // never the spawn, so a branching relay still grew from the last mask.
+        // hopStart() is the single answer to "where does hop h begin".
+        offset = hopStart(h).minus(localSeed);
         localTarget = targetGlobal.minus(offset);
 
         localRevealed.clear();
@@ -152,9 +361,44 @@ struct RootSim::Impl {
 
         base = std::make_shared<Gravitropism>(rs, 1.0, p.sigma);
         hopLen = localTarget.minus(localSeed).length();
-        rebuildTropism(p.weight, p.lateralWeight, true, -1.0);
-        hopMaxDays = p.maxHopDays * std::max(1.0, hopLen / std::max(1.0, (double)p.R0));
-        day = 0.0; reachedDay = -1.0; reached = false;
+        hopPath = hopPathFor(h);
+
+        // The seed hop: a root system that wraps the first mask and goes
+        // nowhere. Without it the face the piece opens on is the one bare mask
+        // in the structure -- the relay leaves it immediately and never comes
+        // back, so the shot the whole sequence is anchored on has no roots.
+        // It arrives by construction: it is already there.
+        seedHop = (h == 0 && p.growFromFirstMask);
+        if (seedHop) {
+            revealed.push_back(masks[0]);
+            pushRevealedRender(masks[0]);
+            localRevealed.push_back(localTargetNode);
+            reached = true; reachedDay = 0.0;
+            rebuildTropism(p.dwellWeight, p.dwellLateralWeight, false, 0.0);
+        } else {
+            rebuildTropism(p.weight, p.lateralWeight, true, -1.0);
+        }
+
+        // The travel budget: what the distance costs this species, allowing for
+        // the fact that the root does not travel in a straight line, capped by
+        // hop days so a hop that cannot arrive still ends. Everything past the
+        // budget is dwell, so the whole hop is budget + dwell.
+        const double reachLen = hopPath * std::max(1.0, (double)p.travelSlack);
+        const double need = travelDaysFor(reachLen);
+        hopTravelDays = std::min((double)p.maxHopDays, need);
+        hopMaxDays = hopTravelDays + std::max(0.0, (double)p.dwellDays);
+        if (p.evenNests) hopMaxDays = std::max(hopMaxDays, evenAgeDays);
+
+        if (!seedHop) { day = 0.0; reachedDay = -1.0; reached = false; }
+        else          { day = 0.0; }
+        report = HopReport{};
+        report.mask = h;
+        report.chord = (float)hopLen;
+        report.path  = (float)hopPath;
+        report.budgetDays = (float)hopTravelDays;
+        report.needDays   = (float)need;
+        report.outOfReach = beyondReach(hopPath);
+        report.reachDist  = 1e9f;   // normalised mask-volume depth; see maskVolumeK
         snapshotLive();
     }
 
@@ -177,9 +421,10 @@ struct RootSim::Impl {
         fh.segs = ana.segments;
         fh.radii = radii;
         frozen.push_back(std::move(fh));
-
-        prevPos = masks[hop].pos.minus(masks[hop].normal.times(
-            masks[hop].r_depth + (double)p.spawnBehind));
+        report.days = (float)day;
+        report.dwellDays = reached ? (float)(day - reachedDay) : 0.f;
+        report.nodes = (int)frozen.back().nodes.size();
+        reports.push_back(report);
 
         liveNodes.clear(); liveSegs.clear(); liveRadii.clear();
         hop++;
@@ -193,12 +438,20 @@ struct RootSim::Impl {
         rs->simulate(dt, false);
         day += dt;
 
-        bool forced = !reached && day > 0.6 * hopMaxDays;
+        // Out of travel budget: reveal the mask and dwell where we are,
+        // rather than stall the whole relay on one mask nobody can reach.
+        bool forced = !reached && day > hopTravelDays;
         if (!reached) {
-            double d = minDist(rs->getNodes(), localTarget);
-            double thr = p.reachMult * std::max(masks[hop].r_width, masks[hop].r_height);
-            if (d < thr || forced) {
+            // Arrival is a geometric fact -- the tip is in the mask's volume --
+            // and the day budget is only the give-up rule for a mask that
+            // cannot be reached at all.
+            double k = maskVolumeK(rs->getNodes(), localTargetNode, p.reachMult);
+            report.reachDist = (float)std::min((double)report.reachDist, k);
+            report.threshold = 1.f;
+            if (k < 1.0 || forced) {
                 reached = true; reachedDay = day;
+                report.forced = (k >= 1.0);
+                report.travelDays = (float)day;
                 localRevealed.push_back(localTargetNode);
                 revealed.push_back(masks[hop]);
                 pushRevealedRender(masks[hop]);
@@ -206,7 +459,11 @@ struct RootSim::Impl {
             }
         }
         snapshotLive();
-        if ((reached && day - reachedDay > p.dwellDays) || day >= hopMaxDays)
+        // The dwell in full, and then -- with even nests on -- however much
+        // longer it takes to reach the age the other hops will reach.
+        double dwellEnd = reachedDay + p.dwellDays;
+        if (p.evenNests) dwellEnd = std::max(dwellEnd, evenAgeDays);
+        if ((reached && day > dwellEnd) || day >= hopMaxDays)
             finalizeHop();
     }
 };
@@ -221,29 +478,83 @@ bool RootSim::reset(const SimParams& p) {
     impl_->masks.clear();
     impl_->revealed.clear();
     impl_->revealedRender.clear();
+    impl_->plannedRender.clear();
     impl_->frozen.clear();
     impl_->liveNodes.clear(); impl_->liveSegs.clear(); impl_->liveRadii.clear();
+    impl_->reports.clear();
     impl_->hop = 0;
-    impl_->prevPos = Vector3d(0, 0, 0);
     impl_->doneFlag = false;
     impl_->ok = false;
 
     const double goldenRad = M_PI * (3.0 - std::sqrt(5.0));
     const double maskR = 2.6;
-    impl_->masks = conePhyllotaxis(p.N, p.R0, p.Hh, maskR, p.startFrac, p.endFrac,
-                                   impl_->tipRadius, p.angleStepGoldenMult * goldenRad,
-                                   p.distStepFrac, p.taperPower);
+    // Host and pattern, composed. Anything unrecognised falls back to the cone
+    // and the spiral rather than to an empty scene: a preset from a later build
+    // naming a host this one does not have should still grow something.
+    const double angStep = p.angleStepGoldenMult * goldenRad;
+    impl_->host.reset();
+    impl_->maskUV.clear();
+
+    if (p.host == "lobes") {
+        // No host surface: the roots fill the volume between the faces instead
+        // of crawling a sheet, which is the whole point of a lobe.
+        impl_->masks = lobePlacement(p.N, p.R0 * 0.55, p.Hh, p.tubeRadius,
+                                     p.groupSize, maskR, angStep);
+    } else {
+        if (p.host == "cylinder")    impl_->host = std::make_shared<CylinderHost>(p.R0, p.Hh);
+        else if (p.host == "sphere") impl_->host = std::make_shared<SphereHost>(p.R0);
+        else if (p.host == "torus")  impl_->host = std::make_shared<TorusHost>(p.R0, p.tubeRadius);
+        else impl_->host = std::make_shared<ConeHost>(p.R0, p.Hh, impl_->tipRadius, p.taperPower);
+
+        if (p.pattern == "helix")
+            impl_->maskUV = patternHelix(p.N, p.startFrac, p.endFrac, p.helixTurns);
+        else if (p.pattern == "rosette")
+            impl_->maskUV = patternRosettes(p.N, p.startFrac, p.endFrac,
+                                            p.groupSize, p.groupSpread, angStep);
+        else if (p.pattern == "feature")
+            impl_->maskUV = patternFeatureClusters(p.N, p.startFrac, p.endFrac, {},
+                                                   p.seed, p.featureClusters);
+        else
+            impl_->maskUV = patternPhyllotaxis(p.N, p.startFrac, p.endFrac,
+                                               angStep, p.distStepFrac);
+
+        impl_->masks.clear();
+        impl_->masks.reserve(impl_->maskUV.size());
+        for (const auto& uv : impl_->maskUV)
+            impl_->masks.push_back(impl_->host->maskAt(uv.first, uv.second, maskR));
+    }
     if (impl_->masks.empty()) return false;
 
     // Probe the parameter file: readParameters throws if the XML is missing.
+    // The probe also carries the one thing the hop budget needs out of the
+    // species file -- how the main root (subType 1, the tap root in every one
+    // of these parameter sets) elongates.
     try {
         auto probe = std::make_shared<RootSystem>();
         probe->readParameters(impl_->paramPath, "plant", true, false);
         probe->initialize(false);
+        if (auto tap = probe->getRootRandomParameter(1)) {
+            impl_->tapRate   = tap->r;
+            impl_->tapLmax   = tap->lmax;
+            impl_->tapGrowth = tap->f_gf;
+            impl_->latRate   = tap->r;
+            impl_->latLmax   = 0.0;
+        }
+        if (auto lat = probe->getRootRandomParameter(2)) {
+            impl_->latRate = lat->r;
+            impl_->latLmax = lat->lmax;
+        }
     } catch (...) {
         return false;
     }
     impl_->ok = true;
+    for (const auto& m : impl_->masks) impl_->plannedRender.push_back(impl_->toSimMask(m));
+    impl_->evenAgeDays = impl_->commonAge();
+
+    // Hop 0 is the seed hop when growing out of the first mask: it reveals
+    // that mask and wraps it, rather than travelling to it. initHop does the
+    // revealing, so nothing is pre-revealed here.
+    impl_->hop = 0;
     impl_->initHop(0);
     return true;
 }
@@ -272,5 +583,36 @@ void RootSim::geometry(std::vector<float>& nodesXYZ,
 }
 
 const std::vector<SimMask>& RootSim::revealedMasks() const { return impl_->revealedRender; }
+
+int RootSim::currentMask() const {
+    if (impl_->doneFlag || !impl_->ok) return -1;
+    return impl_->hop;
+}
+
+bool RootSim::arrivedAtMask() const {
+    return !impl_->doneFlag && impl_->ok && impl_->reached;
+}
+
+bool RootSim::tip(float out[3]) const {
+    const auto& live = impl_->liveNodes;
+    if (live.empty() || impl_->doneFlag) return false;
+    // Furthest from the hop's own start, rather than the last node in the
+    // array: SegmentAnalyser's order is not growth order, and the laterals are
+    // in there too.
+    const Vector3d from = impl_->hopStart(impl_->hop);
+    double best = -1.0;
+    Vector3d bestNode = live.front();
+    for (const auto& n : live) {
+        const double d = n.minus(from).length();
+        if (d > best) { best = d; bestNode = n; }
+    }
+    const Vector3d y = toYup(bestNode);
+    out[0] = (float)y.x; out[1] = (float)y.y; out[2] = (float)y.z;
+    return true;
+}
+
+const std::vector<SimMask>& RootSim::plannedMasks() const { return impl_->plannedRender; }
+
+const std::vector<HopReport>& RootSim::hops() const { return impl_->reports; }
 
 }  // namespace rootsim

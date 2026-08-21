@@ -99,6 +99,68 @@ see [Sound](#sound) below), and `mlp_parity_test mirror_app/tests/fixtures`
 (MLP vs Python reference).
 Regenerate the pond weights with `assets/gen_pond_weights.py` (needs neuromirror's venv).
 
+### Dialling the growth in
+
+`root_sweep [field=value ...]` grows the mask relay with no window and no
+renderer — it links `mirror_sim` and CPlantBox only — and prints, per hop,
+whether the root *arrived* at its mask or merely ran out of days and was
+declared to have arrived. That distinction is invisible on screen (a hop out of
+budget reveals its mask and starts dwelling exactly like one that got there),
+which is why the growth is tuned through this rather than by watching the panel.
+Fields are the `SimParams` names, plus `seeds=<n>` to grow the same look under
+several seeds and `quiet=1` for one line per run:
+
+```sh
+./build/mirror_app/root_sweep species=Anagallis_femina_Leitner_2010.xml \
+    N=12 coneSurfaceTravel=1 seeds=8 quiet=1
+```
+
+**A hop's travel budget is derived, not fixed.** How long the root is given to
+cross to the next mask comes from how far it has to go — the geodesic over the
+cone when it is crawling the surface, which is much longer than the chord — and
+from how that species actually elongates: CPlantBox roots grow on a negative
+exponential toward `lmax`, and past `lmax` the front is carried on by a lateral
+at the lateral's own slower rate. So the same sixty days that are ample for
+maize (tap root 238 cm) are nowhere near enough for pimpernel (33 cm), and a
+flat budget is why late masks used to be revealed with the root still halfway
+there. `hop days` is now only the ceiling; `travel slack` says how much longer
+the real wandering path is than the straight line.
+
+The other lever late masks need is **`shell`**: a thin cone shell plus the
+cavities of the masks already revealed leaves a corridor narrow enough for the
+random walk to get stuck in. 8–12 cm reaches every mask for every species; 6 cm
+does not.
+
+`mirror_app --rootpreset <name> [field=value ...]` writes the result out as a
+roots-bank preset through the real registry — the same save the panel's button
+calls — so a look dialled in with `root_sweep` becomes `presets/roots/<name>.roots`
+without anybody hand-writing parameter names.
+
+### The root presets
+
+One per species, each dialled in so that **twelve masks on one cone are all
+genuinely reached** (verified over twelve seeds each) while the system stays
+legible. What varies between them is the dwell: how long the root is left
+wrapping each face before it moves on, which is what sets how dense the whole
+thing gets. The species differ by more than an order of magnitude in how fast
+they thicken, so a dwell that gives maize a full nest buries wheat.
+
+| preset | species | shell | dwell days | ≈ nodes at 12 masks |
+|---|---|---|---|---|
+| `maize` | Zea mays | 8 | 18 | 8.7k |
+| `soybean` | Glycine max | 8 | 4 | 17.8k |
+| `pea` | Pisum sativum | 9 | 14 | 13.5k |
+| `sunflower` | Heliantus | 8 | 6 | 13.2k |
+| `kale` | Brassica oleracea | 8 | 6 | 16.2k |
+| `wheat` | Triticum aestivum | 8 | 2 | 36k |
+| `lupin` | Lupinus albus | 10 | 18 | 14.2k |
+| `pimpernel` | Anagallis femina | 12 | 6 | 15.7k |
+
+All eight crawl the cone surface, and all hold up at fewer masks than twelve
+(the hops get *longer*, not shorter, when masks are spread thinner). Wheat is
+the outlier at four orders of lateral: two days of dwell is already its densest
+legible setting.
+
 ## Sound
 
 The piece's audio is the Wwise project at `../WwiseProject`, and **its engine

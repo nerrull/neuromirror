@@ -257,8 +257,20 @@ target_include_directories(mirror_sim PRIVATE
 target_link_libraries(mirror_sim PUBLIC CPlantBox)
 
 target_link_libraries(mirror_app PRIVATE mirror_sim)
+set(ROOTSIM_PARAM_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../CPlantBox/modelparameter/structural/rootsystem/")
 target_compile_definitions(mirror_app PRIVATE
-    ROOTSIM_PARAM_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../CPlantBox/modelparameter/structural/rootsystem/")
+    ROOTSIM_PARAM_DIR="${ROOTSIM_PARAM_DIR}")
+
+# The growth, headless: grow the relay and print what each hop did. No Metal and
+# no window, so dialling a species in is a shell loop over this rather than an
+# afternoon of watching the panel — and it can see the one thing the panel
+# cannot, a hop that ran out of days and revealed its mask anyway.
+add_executable(root_sweep tools/root_sweep.cpp)
+target_link_libraries(root_sweep PRIVATE mirror_sim)
+target_include_directories(root_sweep PRIVATE src)
+target_compile_definitions(root_sweep PRIVATE
+    ROOTSIM_PARAM_DIR="${ROOTSIM_PARAM_DIR}")
 
 # --- tests -------------------------------------------------------------------
 add_executable(mlp_parity_test tests/mlp_parity_test.cpp)
