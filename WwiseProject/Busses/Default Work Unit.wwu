@@ -47,6 +47,18 @@
 						<Bus Name="Transition" ID="{B39C741D-0E18-4EC3-A893-06EAABCF5C6E}"/>
 					</ChildrenList>
 					<ObjectLists>
+						<ObjectList Name="Effects">
+							<EffectSlot Name="" ID="{0D43FA9B-ABDC-4E71-9571-BA70604EBB79}" ShortID="890582008">
+								<ReferenceList/>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{37CB7765-2D13-45A7-86AE-9501E1E71618}" ShortID="1029425536">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
+										<ObjectRef Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+						</ObjectList>
 						<ObjectList Name="RTPC">
 							<RTPC Name="" ID="{1ECBD8DF-A992-4B2B-8206-2320408271ED}" ShortID="546302114">
 								<PropertyList>
@@ -83,7 +95,14 @@
 						</ObjectList>
 					</ObjectLists>
 				</Bus>
-				<Bus Name="RainBus" ID="{A1927C6D-1F0F-44F6-929D-95D8FBB31E65}">
+				<Bus Name="PluckBus" ID="{A1927C6D-1F0F-44F6-929D-95D8FBB31E65}">
+					<PropertyList>
+						<Property Name="Pitch" Type="int32">
+							<ValueList>
+								<Value>30</Value>
+							</ValueList>
+						</Property>
+					</PropertyList>
 					<ReferenceList>
 						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
 							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
@@ -102,6 +121,16 @@
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Convolution Reverb" CompanyID="0" PluginID="127" PluginType="3">
 										<ObjectRef Name="Colossal_Cathedral_Stereo" ID="{512A7648-07B6-486E-9D3E-8B7323C79E8C}" WorkUnitID="{9D68BE5F-8CA6-43E0-BCE2-C7D59F63E582}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{01BB8E03-49C6-4A91-A0B0-A032813F7E81}" ShortID="947526762">
+								<ReferenceList/>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{27843C48-7463-4BE6-9ED0-380BA84B6CEB}" ShortID="346178048">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
+										<ObjectRef Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
 									</Reference>
 								</ReferenceList>
 							</EffectSlot>

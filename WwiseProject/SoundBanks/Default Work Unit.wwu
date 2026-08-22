@@ -5,7 +5,11 @@
 			<ChildrenList>
 				<SoundBank Name="Racine" ID="{0A3EA723-1A27-45EE-B7C4-5A951E3507BA}">
 					<ObjectInclusionList>
+						<ObjectRef Name="Stop_FirePlucker" ID="{E4C818BC-5BBC-4257-B78A-14EE955420F1}" WorkUnitID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" Origin="Manual" Filter="7"/>
 						<ObjectRef Name="Racine" ID="{A33B9E6A-0CC5-4A51-809F-609023F79B46}" WorkUnitID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" Origin="Manual" Filter="7"/>
+						<ObjectRef Name="Play_Pad" ID="{2A6418A0-7228-4B93-9179-700C35ED56C0}" WorkUnitID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" Origin="Manual" Filter="7"/>
+						<ObjectRef Name="Play_FirePlucker" ID="{7ED156C5-7674-4CD9-9EFD-5EAFF48F48ED}" WorkUnitID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" Origin="Manual" Filter="7"/>
+						<ObjectRef Name="Stop_Pad" ID="{B632ABDB-34D4-4F5E-A947-6ED8E1EBC86D}" WorkUnitID="{6A2DB620-FB94-4B81-A8FF-A9A6E03AB27D}" Origin="Manual" Filter="7"/>
 					</ObjectInclusionList>
 					<ObjectExclusionList/>
 					<GameSyncExclusionList/>

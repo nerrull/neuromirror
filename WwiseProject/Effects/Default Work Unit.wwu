@@ -27,8 +27,63 @@
 								<Property Name="StereoWidth" Type="Real32" Value="120"/>
 							</PropertyList>
 						</Effect>
+						<Effect Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
+							<PropertyList>
+								<Property Name="ReleaseTime" Type="Real32" Value="0.15"/>
+								<Property Name="Threshold" Type="Real32" Value="-6"/>
+							</PropertyList>
+						</Effect>
 					</ChildrenList>
 				</Folder>
+				<Effect Name="Fire_Time_Stretch" ID="{90BA790E-52EC-49FF-85C6-AB50BF25FE83}" PluginName="Wwise Time Stretch" CompanyID="0" PluginID="130" PluginType="3">
+					<PropertyList>
+						<Property Name="PitchShift" Type="Real32" Value="1800"/>
+						<Property Name="QualityEnable" Type="int16" Value="1"/>
+						<Property Name="WindowSize" Type="int32" Value="8192"/>
+					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{0962720F-89D9-4B50-B6EA-8A391D0EDCEF}" ShortID="619411239">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="PitchShift"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="FitLevel" ID="{2CE266D5-AC89-4C0C-AFCB-661984A2C3AC}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{20D0083F-F9C1-43E4-9898-47B7B13C4204}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>1200</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>1</XPos>
+														<YPos>-1800</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
+				</Effect>
+				<Effect Name="Fire_Pluck_Pitch_Shift" ID="{32F5938D-8778-42C3-B268-8E4797DA6B5A}" PluginName="Wwise Pitch Shifter" CompanyID="0" PluginID="136" PluginType="3">
+					<PropertyList>
+						<Property Name="DelayTime" Type="Real32" Value="10"/>
+						<Property Name="FilterType" Type="int32" Value="4"/>
+						<Property Name="Pitch" Type="Real32" Value="-1300"/>
+					</PropertyList>
+				</Effect>
 			</ChildrenList>
 		</WorkUnit>
 	</Effects>

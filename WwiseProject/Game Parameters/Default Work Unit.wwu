@@ -61,6 +61,41 @@
 						<Property Name="Max" Type="Real64" Value="1"/>
 					</PropertyList>
 				</GameParameter>
+				<GameParameter Name="Comb_Tuning" ID="{49CCED76-920F-4273-A76A-A89EFE75966D}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="220"/>
+						<Property Name="Max" Type="Real64" Value="2000"/>
+						<Property Name="Min" Type="Real64" Value="20"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Pad_Note1" ID="{1BE0A14E-84DB-4397-B701-50E7918F984E}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="36"/>
+						<Property Name="Max" Type="Real64" Value="96"/>
+						<Property Name="Min" Type="Real64" Value="12"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Pad_Note2" ID="{CF4398C5-0924-4635-9277-6B1F1E6DED40}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="46"/>
+						<Property Name="Max" Type="Real64" Value="96"/>
+						<Property Name="Min" Type="Real64" Value="12"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Pad_Note3" ID="{DD9EAEAA-AA22-405E-8ADA-D08DEC284DC6}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="51"/>
+						<Property Name="Max" Type="Real64" Value="96"/>
+						<Property Name="Min" Type="Real64" Value="12"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Pad_Note4" ID="{8616C173-0151-4612-9110-079EDE7B6110}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="58"/>
+						<Property Name="Max" Type="Real64" Value="96"/>
+						<Property Name="Min" Type="Real64" Value="12"/>
+					</PropertyList>
+				</GameParameter>
 			</ChildrenList>
 		</WorkUnit>
 	</GameParameters>

@@ -5,11 +5,47 @@
 			<ChildrenList>
 				<Effect Name="Metallic_Ring" ID="{6A754BE9-E8CA-422D-B62B-5774BFA150ED}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
 					<PropertyList>
-						<Property Name="Damping" Type="Real32" Value="15.5"/>
+						<Property Name="Damping" Type="Real32" Value="10.5"/>
 						<Property Name="Feedback" Type="Real32" Value="98"/>
-						<Property Name="Frequency" Type="Real32" Value="186"/>
+						<Property Name="Frequency" Type="Real32" Value="62"/>
 						<Property Name="Glide" Type="Real32" Value="265"/>
+						<Property Name="OutputLevel" Type="Real32" Value="6.1"/>
 					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{0815D18E-C2B5-4453-A7A6-35837C6C8F1A}" ShortID="862365101">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Frequency"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Comb_Tuning" ID="{49CCED76-920F-4273-A76A-A89EFE75966D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{92CD3A6C-B3FA-4E5D-99DA-02CA804B95C6}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="5"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>20</XPos>
+														<YPos>20</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>2000</XPos>
+														<YPos>2000</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
 				</Effect>
 				<Effect Name="Slow_Flange_Sweep" ID="{69D524B2-4366-4730-AF78-99D9080FE06C}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
 					<PropertyList>
