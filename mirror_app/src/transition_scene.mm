@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -74,7 +76,7 @@ struct TransitionScene::Impl {
 
     id<MTLRenderPipelineState> psoMain = nil, psoFace = nil;
     id<MTLDepthStencilState> dss = nil;
-    id<MTLTexture> colorTex = nil, depthTex = nil, pondTex = nil;
+    id<MTLTexture> colorTex = nil, depthTex = nil, pondTex = nil, savedPondTex = nil;
     id<MTLBuffer> clothVB = nil, clothIB = nil, faceVB = nil, faceIB = nil;
     size_t clothIdx = 0, faceIdx = 0;
 
@@ -86,6 +88,7 @@ struct TransitionScene::Impl {
     // lands on screen, plus the world-space placement derived from the two.
     std::vector<float> modelVerts;
     std::vector<float> modelUV;        // 2/vertex, normalised frame, y-down
+    std::vector<float> initialUV;      // 2/vertex, UV locked when mesh is first set
     std::vector<int>   faceTris;
     std::vector<Vertex> faceVerts;     // placed, with normals
     bool haveFace = false;
@@ -108,6 +111,8 @@ struct TransitionScene::Impl {
     float builtAspect = 0.f, builtOver = 0.f;
     float halfY = CAM_D * std::tan(CAM_FOV * 0.5f);
     float halfX = CAM_D * std::tan(CAM_FOV * 0.5f);
+    bool textureCaptured = false;
+    bool useSavedTexture = false;
 
     explicit Impl(const MetalContext& c) : ctx(c) {}
 
@@ -260,9 +265,13 @@ void TransitionScene::Impl::placeFace(float depthScale, const float regScale[2],
         const float z = (modelVerts[i * 3 + 2] - zref) * zScale + zOffset;
         const float k = (CAM_D - z) / CAM_D;
         faceVerts[i].pos = simd_make_float3(ndcx * halfX * k, ndcy * halfY * k, z);
-        // The texture coordinate is the projection itself: the mask samples the
-        // film exactly where the film was covering it.
-        faceVerts[i].uv = simd_make_float2(u, v);
+        // Geometry is positioned at corrected screen coords, but texture samples
+        // from the initial UV so it stays locked to the frozen capture.
+        if (useSavedTexture && i * 2 + 1 < initialUV.size()) {
+            faceVerts[i].uv = simd_make_float2(initialUV[i * 2], initialUV[i * 2 + 1]);
+        } else {
+            faceVerts[i].uv = simd_make_float2(u, v);
+        }
         faceVerts[i].nrm = simd_make_float3(0, 0, 1);
     }
 
@@ -434,6 +443,89 @@ bool TransitionScene::hasFace() const { return impl_->haveFace; }
 double TransitionScene::clock() const { return impl_->t; }
 void TransitionScene::setPondTexture(id<MTLTexture> pond) { impl_->pondTex = pond; }
 
+bool TransitionScene::savePondTexture(const std::string& path) {
+    if (!impl_->pondTex) return false;
+    id<MTLTexture> tex = impl_->pondTex;
+    const int W = tex.width, H = tex.height;
+    std::vector<uint16_t> px((size_t)W * H * 4);
+    [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
+       fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    FILE* fp = fopen(path.c_str(), "wb");
+    if (!fp) return false;
+    fprintf(fp, "P6\n%d %d\n255\n", W, H);
+    auto h2f = [](uint16_t h) {
+        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, bits;
+        if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
+        float f; __builtin_memcpy(&f, &bits, 4); return f;
+    };
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const uint16_t* p = &px[((size_t)y * W + x) * 4];
+            for (int c = 0; c < 3; ++c) {
+                float v = h2f(p[c]);
+                v = v <= 0.f ? 0.f : (v >= 1.f ? 1.f : v);
+                v = powf(v, 1.0f / 2.2f);
+                fputc((unsigned char)(v * 255.0f + 0.5f), fp);
+            }
+        }
+    }
+    fclose(fp);
+    printf("transition: saved pond texture to %s (%dx%d)\n", path.c_str(), W, H);
+    return true;
+}
+
+bool TransitionScene::loadPondTexture(const std::string& path) {
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) { fprintf(stderr, "transition: cannot open %s\n", path.c_str()); return false; }
+    char magic[3] = {0, 0, 0};
+    if (fscanf(fp, "%2s\n", magic) != 1 || magic[0] != 'P' || magic[1] != '6') {
+        fprintf(stderr, "transition: %s is not a PPM P6 file\n", path.c_str());
+        fclose(fp);
+        return false;
+    }
+    int W, H, maxval;
+    if (fscanf(fp, "%d %d\n%d\n", &W, &H, &maxval) != 3) {
+        fprintf(stderr, "transition: %s header parse failed\n", path.c_str());
+        fclose(fp);
+        return false;
+    }
+    std::vector<unsigned char> rgb8((size_t)W * H * 3);
+    if (fread(rgb8.data(), 1, rgb8.size(), fp) != rgb8.size()) {
+        fprintf(stderr, "transition: %s read failed\n", path.c_str());
+        fclose(fp);
+        return false;
+    }
+    fclose(fp);
+    std::vector<uint16_t> px16((size_t)W * H * 4);
+    auto f2h = [](float f) -> uint16_t {
+        f = std::pow(f, 2.2f);
+        if (f <= 0.f) return 0;
+        if (f >= 1.f) return 0x3c00;
+        uint32_t bits; __builtin_memcpy(&bits, &f, 4);
+        uint16_t s = (bits >> 31) & 1, e = ((bits >> 23) & 0xff) - 112, m = (bits >> 13) & 0x3ff;
+        return (s << 15) | (e << 10) | m;
+    };
+    for (size_t i = 0; i < rgb8.size(); i += 3) {
+        const size_t j = (i / 3) * 4;
+        px16[j + 0] = f2h(rgb8[i + 0] / 255.f);
+        px16[j + 1] = f2h(rgb8[i + 1] / 255.f);
+        px16[j + 2] = f2h(rgb8[i + 2] / 255.f);
+        px16[j + 3] = f2h(1.f);
+    }
+    MTLTextureDescriptor* td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                          width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    impl_->savedPondTex = [impl_->ctx.device() newTextureWithDescriptor:td];
+    [impl_->savedPondTex replaceRegion:MTLRegionMake2D(0, 0, W, H)
+                           mipmapLevel:0 withBytes:px16.data() bytesPerRow:W * 4 * sizeof(uint16_t)];
+    printf("transition: loaded pond texture from %s (%dx%d)\n", path.c_str(), W, H);
+    return true;
+}
+
+bool TransitionScene::hasSavedPondTexture() const { return impl_->savedPondTex != nil; }
+
 void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::vector<int>& tris,
                                   const std::vector<float>& uv) {
     if (verts.size() < 9) return;
@@ -445,6 +537,7 @@ void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::ve
 
     if (uv.size() >= n * 2) {
         impl_->modelUV.assign(uv.begin(), uv.begin() + n * 2);
+        impl_->initialUV.assign(uv.begin(), uv.begin() + n * 2);
         impl_->haveUV = true;
     } else {
         // No projection supplied: centre the mesh and normalise it by its own
@@ -473,6 +566,7 @@ void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::ve
             impl_->modelUV[i * 2]     = 0.5f + x * 0.5f;
             impl_->modelUV[i * 2 + 1] = 0.5f - y * 0.5f;
         }
+        impl_->initialUV.assign(impl_->modelUV.begin(), impl_->modelUV.end());
         impl_->haveUV = false;
     }
     impl_->haveFace = true;
@@ -482,6 +576,7 @@ void TransitionScene::restart() {
     impl_->t = 0.0;
     impl_->zOffset = 0.f;
     impl_->builtRes = 0;             // force a fresh sheet: flat, fully held
+    impl_->textureCaptured = false;  // allow texture capture on the next advance
     impl_->ensureSheet(sheetRes, float(impl_->w) / float(std::max(1, impl_->h)), oversize);
 }
 
@@ -512,6 +607,19 @@ void TransitionScene::advance(double dt) {
     Impl& I = *impl_;
     I.t += dt;
     I.ensureSheet(sheetRes, float(I.w) / float(std::max(1, I.h)), oversize);
+
+    // Capture and freeze the pond texture on the first frame
+    if (!I.textureCaptured && I.pondTex) {
+        const char* home = getenv("HOME");
+        std::string texPath = home ? std::string(home) + "/.mirror/transition_mask.ppm" : "/tmp/transition_mask.ppm";
+        fprintf(stderr, "transition: capturing texture to %s\n", texPath.c_str());
+        if (savePondTexture(texPath) && loadPondTexture(texPath)) {
+            useSavedPondTexture = true;
+            I.useSavedTexture = true;
+            fprintf(stderr, "transition: texture frozen and ready\n");
+        }
+        I.textureCaptured = true;
+    }
 
     // The alignment hold: the mask fully through, the film flat behind it, the
     // timeline going nowhere. Both are on screen at once, which is the only
@@ -609,7 +717,8 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
     [enc setDepthStencilState:I.dss];
     [enc setCullMode:MTLCullModeNone];
     [enc setTriangleFillMode:wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-    [enc setFragmentTexture:I.pondTex atIndex:0];
+    id<MTLTexture> filmTex = (useSavedPondTexture && I.savedPondTex) ? I.savedPondTex : I.pondTex;
+    [enc setFragmentTexture:filmTex atIndex:0];
 
     Uniforms u;
     u.mvp = vp;
@@ -642,7 +751,7 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
         fu.lightFalloff   = faceMat.lightFalloff;
         fu.specStrength   = faceMat.specStrength;
         fu.veinScale      = faceMat.veinScale;
-        fu.veinStrength   = faceMat.veinStrength;
+        fu.veinStrength   = 0.0f;
         fu.roughness      = faceMat.roughness;
         fu.metallic       = faceMat.metallic;
         fu.reliefStrength = faceMat.reliefStrength;

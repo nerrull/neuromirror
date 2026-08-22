@@ -105,7 +105,7 @@ public:
     float refract      = 0.05f;
     // How far proud of the sheet plane the mask ends up at full press, in world
     // units. Larger tents the fabric harder before it lets go.
-    float pressProud   = 0.16f;
+    float pressProud   = 0.35f;
     // Depth exaggeration of the mask. 1 is the fit's own proportions; the fit
     // is solved from a single view, so a little more relief often reads better
     // on screen than the metrically correct amount.
@@ -262,6 +262,15 @@ public:
     // The film. This is MirrorScene's own output texture -- the sheet is
     // skinned with whatever the network is currently rendering.
     void setPondTexture(id<MTLTexture> pond);
+
+    // Capture the current pond texture to disk so it can be reused as a static
+    // texture throughout the transition, independent of live fit updates.
+    bool savePondTexture(const std::string& path);
+    bool loadPondTexture(const std::string& path);
+    bool hasSavedPondTexture() const;
+
+    // Use the saved pond texture instead of the live one (if one has been loaded).
+    bool useSavedPondTexture = false;
 
     // Timeline control.
     void restart();
