@@ -1,23 +1,16 @@
 // The pond -> face hydro-dip transition.
 //
-// Ported from neuromirror/cloth_cpp/src/shaders.metal, with one structural
-// change: the face relief is **rendered from the real fitted mesh every frame**
-// rather than sampled from a baked heightmap texture.
+// One pass, one pipeline. The scene is 3D from its first frame: a flat sheet
+// sized to fill the frustum cross-section, and behind it the fitted mask. There
+// is no screen-space half and therefore no swap between the two -- see
+// transition_scene.h for why that was the whole difficulty in the previous
+// version and why removing it removes the difficulty rather than hiding it.
 //
-// cloth_cpp baked the neutral ICT mask into face.bin (height + coverage on a
-// grid) and displaced a grid by it. That shell is what produced its two open
-// artifacts -- a seam line around the silhouette and a boxy neck edge -- and it
-// also locked the effect to one neutral face, front-on. The combined app has the
-// actual fitted mesh (Maxine/NVF topology, this person's identity, this frame's
-// expression and head pose), so `f_relief` rasterises that geometry into the
-// same (normal.xy, height, coverage) G-buffer the emerge pass already wanted.
-// Same consumer, live and watertight producer.
-//
-// Four phases on one timeline, one locked front-on camera:
-//   1 hold     flat pond fills the frame
-//   2 emerge   the face rises, refracting and embossing the pond
-//   3 swap     the flat pond becomes a 3D cloth over the same pixels
-//   4 fall     the cloth falls away behind the face
+// What used to be four shader entry points is one. `f_emerge` (a fullscreen
+// pass that refracted and embossed the film by a face relief) and `f_relief`
+// (which rasterised that relief) are both gone: the tenting is real geometry
+// now, and the mask's depth is needed on the CPU for cloth contact rather than
+// on the GPU for a fake.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -30,8 +23,9 @@ struct Vertex {                 // matches the C++ Vertex (simd_float3 x2 + floa
 struct Uniforms {
     float4x4 mvp;
     float4x4 model;
-    float4 lightDir;            // xyz = light dir, w = mode (0/1 textured, 2 solid)
+    float4 lightDir;            // xyz = light dir, w = mode (0 textured, 2 solid)
     float4 baseColor;
+    float4 params;              // x = refraction of the film by the surface normal
 };
 
 struct VOut {
@@ -39,92 +33,6 @@ struct VOut {
     float3 wnrm;
     float2 uv;
 };
-
-// ---- the face relief G-buffer ----------------------------------------------
-// Rasterise the fitted mesh to (normal.xy encoded, height, coverage) -- the
-// exact layout cloth_cpp's baked face.bin had, so the emerge pass is unchanged.
-
-struct ReliefU {
-    float4x4 mvp;
-    float4 p;      // x = 1/depthRange for height normalisation, y = zMin
-};
-
-struct ROut {
-    float4 clip [[position]];
-    float3 nrm;
-    float  height;
-};
-
-vertex ROut v_relief(uint vid [[vertex_id]],
-                     device const Vertex* verts [[buffer(0)]],
-                     constant ReliefU& u [[buffer(1)]]) {
-    ROut o;
-    float3 p = verts[vid].pos;
-    o.clip = u.mvp * float4(p, 1.0);
-    o.nrm = verts[vid].nrm;
-    o.height = saturate((p.z - u.p.y) * u.p.x);
-    return o;
-}
-
-fragment float4 f_relief(ROut in [[stage_in]]) {
-    float3 N = normalize(in.nrm);
-    if (N.z < 0.0) N = -N;                    // front-on view: face the camera
-    // RG = encoded normal.xy, B = height, A = coverage. Coverage is 1 wherever
-    // the mesh actually drew, which is what makes this watertight: there is no
-    // interpolated alpha ramp at the silhouette to produce a seam.
-    return float4(N.xy * 0.5 + 0.5, in.height, 1.0);
-}
-
-// ---- phases 1-2: fullscreen pond, embossed/refracted by the emerging face ---
-
-struct EmergeU {
-    // x = emergence 0..1, y = refract scale, z = swap crossfade 0..1, w = unused
-    float4 p;
-    float4 light;    // xyz = light dir
-};
-
-struct FSOut { float4 clip [[position]]; float2 uv; };
-
-vertex FSOut v_fs(uint vid [[vertex_id]]) {
-    float2 p = float2((vid << 1) & 2, vid & 2);      // fullscreen triangle
-    FSOut o; o.clip = float4(p * 2.0 - 1.0, 0.0, 1.0);
-    o.uv = float2(p.x, 1.0 - p.y);
-    return o;
-}
-
-fragment float4 f_emerge(FSOut in [[stage_in]],
-                         constant EmergeU& u [[buffer(0)]],
-                         texture2d<float> pond [[texture(0)]],
-                         texture2d<float> relief [[texture(1)]]) {
-    constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
-    float e = u.p.x;
-
-    // The relief is rendered by the same camera as everything else, so it is
-    // already in screen space -- no face-region remap, which is what cloth_cpp
-    // needed (u.p.zw) because its relief was an unprojected baked square.
-    float4 fs = relief.sample(smp, in.uv);
-    float2 nxy = fs.rg * 2.0 - 1.0;
-    float nz = sqrt(max(0.0, 1.0 - dot(nxy, nxy)));
-    float3 N = float3(nxy, nz);
-    float a = fs.a * e;
-
-    // Refract the pond while emerging, settling to 0 at full emergence so the
-    // final face is undistorted -- identical to the 3D face at the swap.
-    float refr = u.p.y * fs.a * (e * (1.0 - e) * 4.0);
-    float2 ruv = in.uv + nxy * refr;
-    float3 base = pond.sample(smp, ruv).rgb;
-
-    // Shade EXACTLY like f_main (0.30 ambient + 0.85 diffuse, no spec) blended
-    // from the flat pond, so film brightness and the emerged face both match the
-    // 3D cloth and face after the swap.
-    float3 L = normalize(u.light.xyz);
-    float ndl = max(0.0, dot(N, L));
-    float flatShade = 0.30 + 0.85 * max(0.0, L.z);
-    float shade = mix(flatShade, 0.30 + 0.85 * ndl, a);
-    return float4(base * shade, u.p.z);
-}
-
-// ---- phases 3-4: 3D cloth + face --------------------------------------------
 
 vertex VOut v_main(uint vid [[vertex_id]],
                    device const Vertex* verts [[buffer(0)]],
@@ -140,23 +48,114 @@ vertex VOut v_main(uint vid [[vertex_id]],
 fragment float4 f_main(VOut in [[stage_in]],
                        constant Uniforms& u [[buffer(1)]],
                        texture2d<float> tex [[texture(0)]]) {
-    // Two-sided, viewer-facing normal (camera is fixed front-on). A flat sheet
-    // then reads N=(0,0,1) and shades like the emerge pass's flat pond, so the
-    // swap has no brightness jump. Winding otherwise leaves the flat cloth
-    // normal at -z (ndl=0), which crushes it to ambient -- a ~3x drop.
+    // Two-sided, viewer-facing normal (the camera is fixed front-on). A flat
+    // sheet then reads N=(0,0,1) and shades at full diffuse, which is what
+    // makes the opening frame the pond and not a dim copy of it. Winding
+    // otherwise leaves the flat cloth normal at -z (ndl=0), crushing it to
+    // ambient -- a ~3x drop.
     float3 N = normalize(in.wnrm);
     if (N.z < 0.0) N = -N;
     float3 L = normalize(u.lightDir.xyz);
     float ndl = max(0.0, dot(N, L));
-    float shade = 0.30 + 0.85 * ndl;
+    // Shading as a *deviation* from the flat sheet, not an absolute.
+    //
+    // A flat surface reads exactly 1 whatever the light is doing, which is what
+    // lets the opening frame be the pond rather than a dimmed copy of it, and
+    // what frees the light to be as raking as the relief needs -- an absolute
+    // formula would darken the whole film the moment the light came off-axis,
+    // and the cut into this scene would flash. `params.y` then scales how far
+    // the folds are allowed to swing either side of it: dividing through by the
+    // flat response alone puts a lit fold at 1.7x and blows the film out.
+    float flat = 0.30 + 0.85 * max(1e-3, L.z);
+    float shade = 1.0 + u.params.y * ((0.30 + 0.85 * ndl) - flat) / flat;
 
     float mode = u.lightDir.w;
     float3 base;
     if (mode < 1.5) {
         constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
-        base = tex.sample(smp, in.uv).rgb;           // the neural pond film / skin
+        // Refract the film where the fabric bends. Driven by the surface's own
+        // normal, so it is identically zero on the flat sheet -- the rest state
+        // has to *be* the pond, not a slightly displaced version of it -- and
+        // it rises exactly where the sheet is stretched over the brow and the
+        // nose, which is where a wet film would actually bend the image.
+        float2 uv = in.uv + N.xy * u.params.x;
+        base = tex.sample(smp, uv).rgb;
     } else {
         base = u.baseColor.rgb;
     }
     return float4(base * shade, 1.0);
+}
+
+// ---- the mask ---------------------------------------------------------------
+//
+// Shaded by `shadeFace` (face_shade.metal) -- the *same* material the root scene
+// puts on it a moment later, driven by the same FaceParams/EnvParams values.
+// That is the point: the transition ends with the mask alone on screen and the
+// root scene begins with the mask in a tangle, and if the two shaded it
+// separately the cut would land on a face that changed finish.
+//
+// The film keeps its own flat treatment (f_main above). The two halves of this
+// scene are deliberately in different colour worlds: the film is the mirror's
+// output, display-referred, and has to stay pixel-identical to the scene the
+// piece cuts *from*; the mask is lit scene-referred radiance and goes through
+// the same exposure + ACES + sRGB the root scene will apply, so it matches the
+// scene the piece cuts *to*. The transition is where those two meet, and the
+// mask being uncovered is exactly the moment the handover happens.
+
+struct TransFaceX {
+    float4 centre;      // mask centroid, transition world
+    float4 lightPos;    // the mask's own light, already in shading space
+    float  scale;       // transition world -> shading space
+    float  exposure;
+    int    tonemap;
+    float  _pad;
+};
+
+struct MOut {
+    float4 clip [[position]];
+    float3 wpos;
+    float3 nrm;
+    float2 uv;
+};
+
+vertex MOut v_face(uint vid [[vertex_id]],
+                   device const Vertex* verts [[buffer(0)]],
+                   constant Uniforms& u [[buffer(1)]]) {
+    MOut o;
+    const float3 p = verts[vid].pos;
+    o.clip = u.mvp * float4(p, 1.0);
+    o.wpos = p;
+    o.nrm  = verts[vid].nrm;
+    o.uv   = verts[vid].uv;
+    return o;
+}
+
+fragment float4 f_face(MOut in [[stage_in]],
+                       constant RootFaceU& U [[buffer(1)]],
+                       constant TransFaceX& X [[buffer(2)]],
+                       texture2d<float> film [[texture(0)]]) {
+    constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
+    // The albedo is the film the mask is wearing, sampled at the projection that
+    // placed the vertex -- so the mask carries away exactly the pixels that were
+    // covering it. Taken as-is rather than linearised, because the root scene's
+    // mask albedo (FaceFitter::sampleTexture, off the same mirror output) is
+    // taken as-is too, and agreeing with the scene we hand over to matters more
+    // here than the missing decode does.
+    const float3 albedo = film.sample(smp, in.uv).rgb;
+
+    // Into the shading space: the mask is about four world units across in the
+    // root scene and about a third of that here, and the marble, the light
+    // falloff and the spot cone are all world-space quantities tuned at that
+    // size. One uniform scale about the mask's own centre puts every one of them
+    // back where it was tuned, rather than re-tuning each against the other.
+    const float3 P = (in.wpos - X.centre.xyz) * X.scale;
+
+    float3 N = normalize(in.nrm);
+    if (N.z < 0.0) N = -N;      // fixed front-on camera; the mask is an open shell
+
+    const float4 lit = shadeFace(P, N, albedo, X.lightPos.xyz, U);
+
+    float3 col = lit.rgb * X.exposure;
+    col = (X.tonemap == 1) ? acesFitted(col) : saturate(col);
+    return float4(srgbEncode(col), 1.0);
 }

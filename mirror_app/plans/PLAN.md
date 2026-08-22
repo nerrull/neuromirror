@@ -2,9 +2,9 @@
 
 > Working plan, versioned with the code. **Status as of 2026-07-25:** the
 > scaffold, the C++ neural mirror, the full GLSL→Metal root/face port, live
-> CPlantBox growth, MediaPipe face tracking and the morphable face fit are all
-> done and validated; a cached-system LOD/culling path is in. Remaining: the
-> (still undefined) **transition** between the two scenes. Wwise stays deferred.
+> CPlantBox growth, MediaPipe face tracking, the morphable face fit and the
+> **press/release/wrap transition** between the two scenes are all done and
+> validated; a cached-system LOD/culling path is in.
 
 ## Status snapshot
 
@@ -522,71 +522,267 @@ coefficient vectors explain the same 68 points. Landmark residual is 0.27 px.
 
 ## The pond → face transition
 
-A port of `neuromirror/cloth_cpp`, which prototyped the whole effect against two
-baked assets. Four phases on one timeline, one locked front-on camera:
+A film of neural pond is stretched across the frame like a canvas. The mask
+presses into it from behind until the fabric is tented over the real face; the
+canvas then lets go, corners first, and slides off over the brow and the nose,
+leaving the face wearing the film. One locked front-on camera, one continuous 3D
+pass, five phases on one timeline:
 
-1. **hold** — the flat neural pond fills the frame
-2. **emerge** — the face rises, its normals refracting and embossing the pond
-3. **swap** — the flat pond becomes a 3D cloth over the *same screen pixels*
-4. **fall** — the cloth falls away behind the face
+1. **hold** — the flat sheet fills the frame, and *is* the pond
+2. **press** — the mask advances through the sheet plane, tenting the fabric
+3. **settle** — fully through, the film taut over it
+4. **release** — the pins let go from the corners inward
+5. **fall** — gravity plus contact: the sheet drapes off the face and away
 
-The art is that phases 1–2 (screen-space) and 3–4 (real 3D) meet at the swap with
-no visible discontinuity. `src/transition_scene.{h,mm}`, `shaders/transition.metal`,
-`src/cloth.h` (the PBD solver, ported essentially unchanged — it was already
-GPU-free, which is why it moved without a rewrite).
+`src/transition_scene.{h,mm}`, `shaders/transition.metal`, `src/cloth.h` (the PBD
+solver).
 
-### What the combined app improves
+### There is no swap
 
-cloth_cpp ran on `pond.ppm` (one saved PondState frame) and `face.bin` (the
-neutral ICT mask flattened to height+coverage). Both static — and its own TODO
-list led with the consequences. This app has the live versions of both:
+The previous version — and `cloth_cpp` before it — played the first half in
+screen space (a fullscreen pass that refracted and embossed the pond by a face
+relief) and then *swapped* to 3D at full emergence, hiding the seam under a
+crossfade. Everything delicate about it came from that swap: three separate
+quantities (brightness, face shading, texture content) had to be matched by hand
+across one frame, the sheet had to be held artificially flat for the length of
+the crossfade, and the moment the hold ended every pin released at once.
 
-| cloth_cpp TODO | how it is fixed here |
-| --- | --- |
-| "live pond and face" | the film is `MirrorScene`'s actual output texture, and the face is the live `FaceFitter` mesh |
-| "seam line", "boxy neck edge" | both were artifacts of the heightmap *shell*. The real fitted mesh is watertight, so they cannot occur |
-| "real ICT mesh would allow head pose" | the fitted mesh already carries identity, expression and head pose |
-| "refraction strength is a single constant" | scaled by d(emergence)/dt, so distortion tracks the actual motion rather than the timeline midpoint |
-| "swap softening — a 2–3 frame crossfade" | implemented, with the sheet held flat for its duration (see below) |
-| "timing is hard-coded" | `TransitionScene::Timing` — fields, not constants |
+The sheet is 3D from the first frame now, and at rest it is a flat quad sized to
+exactly fill the frustum cross-section — so it *is* the fullscreen pond. Nothing
+to match, because nothing changes hands. `f_emerge` and `f_relief` are gone with
+it; what is left is one vertex and one fragment function.
 
-The structural change: **the relief G-buffer is rendered, not baked.**
-`f_relief` rasterises the fitted mesh into the same (normal.xy, height,
-coverage) layout `face.bin` had, every frame. Same consumer, live producer.
+The one thing that still has to hold is that a flat surface shades to exactly the
+film's own brightness. `f_main` gets that by construction rather than by tuning:
+shading is expressed as a *deviation* from the flat response
+(`1 + relief·(lambert − flat)/flat`), so a flat sheet reads 1 whatever the light
+is doing. That is also what frees the light to be raking — and it has to be,
+because a light down the view axis puts almost no gradient on a bulge facing the
+camera and the whole press reads as nothing happening.
 
-Also new: **the pin ring follows the face.** cloth_cpp pinned the cloth to a
-fixed ellipse because its face never moved; a fitted face is a different shape
-per person, so the ring is derived from the mesh silhouette (`Cloth::pinTo`).
+### The mask is the real mask
 
-Deliberately not ported: cloth self-collision and sheet↔face collision, both
-listed as expensive and unnecessary while the sheet is pinned behind the face.
-Both still are.
+Not an oval. The sheet is held at its **border**, not around an elliptical ring
+cut near the face, so nothing in the setup imposes a shape: what is uncovered is
+the fitted mesh's own silhouette. Without a tracked face it is the basis's
+neutral mesh, which is a real mask too — there is no faceless mode, because the
+gesture is a film coming off a mask.
 
-### The swap, measured
+It also turns with the head. The mesh is re-sent every frame rather than latched
+when the phase opens, so it carries this frame's expression and head rotation —
+and a turned head is what makes the drape interesting, because the fabric has an
+asymmetric solid to come off.
 
-cloth_cpp validated the swap by mean luminance being flat straight through it.
-Same check here, on `--transhot` output, over the last emerge frames plus the
-crossfade:
+### The texture is exact, by construction
 
-| | max frame-to-frame step |
-| --- | --- |
-| first working version | **43.95** |
-| after the two fixes below | **0.89** (spread 1.44 over 9 frames) |
+`setFaceMesh` takes, per vertex, the normalised frame position the *fit* projects
+that vertex to (`FaceFitter::projectNormalised`, at the same pinned position the
+root scene's texture uses). Each vertex is then placed in world space so that
+this camera projects it back to precisely that point:
 
-Two distinct bugs, both instances of the brightness-match trap the shader notes
-describe, entered from directions the prototype could not hit:
+```
+x = ndc.x · halfX · (CAM_D − z)/CAM_D        (and the same for y)
+```
 
-- **`Cloth::build` leaves normals zeroed**, and normals were only computed inside
-  the sim step. The flat sheet therefore shaded from a zero normal for the whole
-  crossfade — garbage after `normalize` — and only snapped to correct once
-  gravity started. Fixed by computing normals at build.
-- **Gravity started on the swap frame**, so the crossfade was blending two
-  *different* images and could not hide anything. The sheet is now held flat for
-  the fade's duration, which is what makes the blend pixel-identical.
+which cancels the perspective divide exactly, whatever depth the press has moved
+the mask to. The mesh therefore lands on the pond's own face pixel for pixel, and
+its texture coordinate is that same projection — so the film the mask carries
+away is the film that was covering it. There is no centring or scale guess left
+to drift, and no second fit.
 
-The second is arguably a latent flaw in the original design rather than in the
-port: a crossfade over a moving sheet was never going to do the job the TODO
-wanted from it.
+### Registration, and the limit of the fit
+
+The placement above is exact — the mesh lands wherever the fit projects it, to
+the pixel. What it cannot do is be *more right than the fit*, and the fit's
+projection is a 2D similarity (`FacePose`: rotation, uniform scale,
+translation). It has no perspective and no out-of-plane foreshortening.
+
+On a face looking at the camera that is fine: checked against `--maskshot` on
+several subjects, the mesh sits on the eyes, nose and mouth. On a head with real
+pitch it is not — the mask comes out too tall, with its eyes high and its mouth
+low, because a similarity has no way to express a foreshortened forehead. The
+information was never in the pose, so nothing downstream can recover it, and it
+is not specific to this scene: the root scene textures its mask through the same
+projection.
+
+So the mask carries a hand registration — `maskScale` and `maskOffset`, applied
+about the fit's own projected centre. Scale is per-axis because the error is:
+pitch stretches one of them. The correction moves the texture with the geometry,
+since they are the same coordinate — correcting where the mask sits keeps it
+wearing the pixels it covers, which is the property the whole hydro-dip rests
+on.
+
+`alignMask` is what makes it settable. It holds the mask fully in front of a
+flat film with the timeline stopped and draws it as a **wireframe**, so the face
+underneath stays readable. Both of those are load-bearing: pressed through, the
+film occludes everything not proud of it and what is left is a slice — brow,
+nose, chin — that is not a shape anyone can align to a face; drawn solid, the
+mask hides the very thing it is being aligned to. `--transalign <photo> <out.ppm>
+[sx sy ox oy]` is the same view headless, for choosing the numbers against a
+still.
+
+### Collision, and why it is affordable
+
+cloth_cpp listed sheet↔face collision as expensive and skipped it, which is why
+its sheet could only fall away *behind* a face it never touched. The camera here
+is fixed front-on and never moves, so the mask is fully described for contact
+purposes by the z of its front surface at each (x, y) — there is no view from
+which the sheet could reach its back. That makes the collider a depth map
+(`MaskField`, rasterised on the CPU each frame from the placed mesh) and the
+query one bilinear fetch per vertex.
+
+Three things about it are worth keeping written down, because each was a visible
+failure before it was a line of code:
+
+- **Contact is inelastic.** Moving a position out of the mask and leaving `prev`
+  behind turns the push into velocity, and the projection runs once per solver
+  iteration — two dozen times a step. That velocity compounds until the sheet
+  launches itself at the camera (measured: z reaching +3.5 on a sheet whose
+  half-height is 1.24). `prev.z` is carried along with the push.
+- **Friction is per step, not per iteration.** Bleeding the same fraction of
+  tangential velocity inside the iteration loop compounds it the same way —
+  0.35 becomes 1 − 0.65²⁴, which is total. The sheet welded itself to the mask
+  on contact and gathered on the brow permanently. One friction pass per step.
+- **Extension is compliant, compression is not.** A sheet that resists both
+  equally cannot lie on anything: pressed onto a solid it bridges the high
+  points, because reaching into a hollow costs it length it does not have.
+  Letting it lengthen cheaply (`stretchGive`, with a hard `stretchMax` ceiling)
+  is what turns bridging into wrapping — and a film being stretched over a face
+  is what the gesture depicts, so the compliance *is* the effect. Compression
+  stays stiff, which keeps the canvas taut and costs no folds: cloth folds by
+  buckling out of plane, not by shortening along an edge.
+
+- **The collider is conservative over a cloth cell.** Contact is resolved at
+  vertices, but what is on screen is the flat triangles between them. Over a
+  convex feature — a nose, a chin, both made sharper by the depth exaggeration —
+  every vertex can sit exactly on the surface while the chord joining them still
+  cuts through it, and the mask pokes out of the film in blobs a cell wide.
+  Measured on the real mask mid-press: vertex penetration **0.0000**, chord
+  penetration **0.0266**, against a skin of 0.012 — which is why looking at
+  vertices alone reports this bug as no bug at all. `MaskField::dilate` runs a
+  separable max-filter at the cell's radius, so a vertex is pushed clear of the
+  highest point its own cell can span; coverage spreads with it, or the rim gets
+  the same problem from the other side. Chord penetration after: **0.0000**. The
+  sheet stands off by about a cell, which is what a cloth with thickness does.
+  `cloth_test` runs the press twice, undilated and dilated, and checks the
+  chords — it also fails if the test collider is ever smoothed to the point
+  where the undilated sheet stops cutting it, since the check would then be
+  passing on nothing.
+
+And one that is about the release rather than the contact: a held stretch **takes
+a set** (`plastic`). A film pulled over a form and held there does not spring
+back when let go, and without it the release returns every bit of tension stored
+during the press in a single frame — the sheet snaps off the face and the whole
+picture jumps.
+
+### The mask is on the roots' material
+
+The mask is the one object the piece hands from scene to scene: this scene
+uncovers it, and the root scene then grows around it. So it is shaded by the
+root renderer's own face material — literally the same code and the same values.
+`face_shade.metal` holds `shadeFace` (Cook-Torrance, hemisphere ambient,
+environment specular, rim, wrapped subsurface, the marble vein field and its
+relief) plus the display transform (ACES + sRGB), and it is prepended to the
+face, post **and** transition libraries. `root_face.metal` is now just the pass
+that feeds it; `root_post.metal` no longer carries its own copy of the curve.
+Verified by rendering `--rootshot` either side of the extraction: byte-identical.
+
+The parameters are not duplicated either. `TransitionScene` holds a
+`MetalRootRenderer::FaceParams` and `EnvParams`, and `main.mm` copies the root
+scene's own into it every frame, along with the exposure, the tonemap flag and
+the key direction. Tuning the roots' mask tunes this one; there is no second set
+of knobs that could drift, which is the same reason the show has one notion of
+"which phase is up".
+
+**The film is deliberately not on that material.** The two halves of this scene
+sit in different colour worlds on purpose:
+
+| | the film | the mask |
+| --- | --- | --- |
+| what it is | the mirror's output | lit radiance |
+| referred to | display | scene |
+| shading | deviation from flat (§ above) | `shadeFace` |
+| display transform | none | exposure → ACES → sRGB |
+| has to match | the scene the piece cuts **from** | the scene it cuts **to** |
+
+The transition is where those two meet, and the mask being uncovered *is* the
+handover. Putting the film through a tonemap would break the one invariant the
+opening rests on — that a flat sheet is the pond, exactly.
+
+One quantity does not come from the root scene, because it cannot: the mask's
+marble, light falloff and spot cone are world-space, tuned against a mask about
+four world units across, and this scene places the mask by projection at
+whatever size the fit gives it. `shadeSpan` scales the shading space about the
+mask's own centre back to that reference, so all three land where they were
+tuned instead of each being re-tuned against the others.
+
+### What actually takes the film off
+
+Gravity is straight back, away from the camera, and nothing else. A -y component
+is the obvious way to get the sheet clear and the wrong one: it drags the whole
+film downward, so the mask ends up uncovered by the film *falling out of frame*,
+which has nothing to do with the mask.
+
+That leaves the mask's own asymmetry to do it, and the first attempt at it
+failed outright — with gravity along the view axis the film simply sat on the
+mask as a shroud for the whole clip. Two reasons, one real and one a mistake:
+
+- **A sheet draped on a symmetric form and pulled straight back is a
+  shrink-wrap.** The tension presses it *on*, not off. Turn the mask and the
+  surface normals stop cancelling: the tangential components no longer balance,
+  the fabric drifts toward the shallower side, and once any of it passes the
+  silhouette the weight hanging behind peels the rest.
+
+- **Contact was resolving along +z**, which made that impossible in principle.
+  Pushing out along the view axis makes contact a constraint on z alone, so a
+  backward pull is cancelled outright and the fabric is pinned wherever it
+  landed — there is no tangential component for an asymmetry to be unequal *in*.
+  It now resolves along the surface normal, taken from the height field's own
+  gradient (flat at the silhouette, so a rim vertex is not flicked off the edge).
+  The earlier comment claiming the normal would let vertices squirt out of
+  creases was rationalising the bug.
+
+Measured at the shipped settings, with the mask held out of the film once the
+press is done: a head turning through ±20° clears by about 4.5s; a mask held at a
+*static* 20° peels the same way but is only half off by then. Motion does most of
+the work, asymmetry sets the direction, and a live head supplies both.
+
+An intermediate version drove the mask further forward through the release to
+push the film off. It is gone: it worked, but it moves the mask after the press
+has landed, and the press landing is the moment the whole effect is built around.
+It was also strictly worse — the film cleared *later* with the drive than
+without it, because fabric cannot follow a mask that is moving while the border
+pins still hold, so it ballooned instead of sliding.
+
+The material changes across the release for the same reason. Under the press it
+has to be compliant and take a set, or it bridges the face instead of wrapping it
+and then snaps when the pins go; after the release that same material is what
+keeps it stuck on, since a compliant sheet stretches instead of pulling and a
+plastic one has already given up the length. `stretchGive`, `plastic` and
+`friction` are all scaled down across the release front.
+
+### Release order
+
+`buildSheet` assigns each pin a `releaseAt` by elliptical radius, so it is 0 at
+the corners and 1 at the middle of each edge; `setRelease(r)` runs a feathered
+front across that. Corners are where a stretched canvas carries the most tension,
+so they go first — which is both what the gesture wants and what the sheet would
+actually do. The front is feathered rather than a threshold because an instant
+unpin dumps a vertex's stored tension into one step and the sheet cracks like a
+whip.
+
+The sheet is also built a little larger than the frustum cross-section
+(`oversize`): the moment the corners let go the canvas retracts, and a sheet cut
+exactly to the frame shows black in the corners the instant it does.
+
+### Headless
+
+`--transhot <prefix> <frames> <photo> <fps>` renders the whole thing offscreen
+against a real fit — the mirror is fitted to the photo and the mask to the same
+face, so both assets are live. Without a face in the photo (or without a photo)
+it falls back to the neutral mask and still plays. `cloth_test` covers the solver
+on its own: that the press tents the sheet *forward*, that the release runs
+corners first, and that after the fall nothing has passed through the collider.
 
 ## The show
 

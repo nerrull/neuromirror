@@ -4,20 +4,49 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
-// Front-on camera. The sheet is sized so a *flat* sheet at z=0 exactly fills the
-// frustum cross-section, which is the precondition for the swap: the flat cloth
-// and the fullscreen pond quad then cover identical pixels.
+// Front-on camera. The sheet is sized so a *flat* sheet at z=0 exactly fills
+// the frustum cross-section, which is what lets the first frame of the effect
+// be the pond itself rather than a picture of it.
 constexpr float CAM_D = 3.0f;
 constexpr float CAM_FOV = 45.0f * float(M_PI) / 180.0f;
-constexpr simd_float4 LIGHT = {0.35f, 0.55f, 0.75f, 0.5f};
+// Raking rather than frontal. A light down the view axis puts almost no shading
+// gradient on a bulge facing the camera, so the whole press reads as nothing
+// happening; from the side the tenting has somewhere to cast. Costs no
+// brightness, because f_main normalises the flat-sheet response to 1.
+constexpr simd_float4 LIGHT = {0.42f, 0.62f, 0.36f, 0.5f};
+
+// The collider's resolution. The sheet is 72x72 and the mask covers maybe a
+// third of the frame, so 160 gives the contact a couple of texels per cloth
+// cell across the face -- enough for the nose and the brow to be separate
+// features and not enough to be worth optimising.
+constexpr int FIELD_RES = 160;
 
 struct Vertex { simd_float3 pos; simd_float3 nrm; simd_float2 uv; };
-struct Uniforms { simd_float4x4 mvp; simd_float4x4 model; simd_float4 lightDir; simd_float4 baseColor; };
-struct EmergeU { simd_float4 p; simd_float4 light; };
-struct ReliefU { simd_float4x4 mvp; simd_float4 p; };
+// Mirrors TransFaceX in transition.metal.
+struct TransFaceX {
+    simd_float4 centre;
+    simd_float4 lightPos;
+    float scale;
+    float exposure;
+    int32_t tonemap;
+    float _pad;
+};
+struct Uniforms {
+    simd_float4x4 mvp;
+    simd_float4x4 model;
+    simd_float4 lightDir;    // xyz dir, w = mode (0 textured, 2 flat colour)
+    simd_float4 baseColor;
+    simd_float4 params;      // x = refraction of the film by the surface normal
+};
+
+float smoothstep01(float x) {
+    x = std::clamp(x, 0.f, 1.f);
+    return x * x * (3.f - 2.f * x);
+}
 
 simd_float4x4 perspective(float fovy, float aspect, float zn, float zf) {
     float f = 1.0f / std::tan(fovy * 0.5f);
@@ -43,43 +72,70 @@ struct TransitionScene::Impl {
     const MetalContext& ctx;
     int w = 0, h = 0;
 
-    id<MTLRenderPipelineState> psoMain = nil, psoFS = nil, psoRelief = nil;
-    id<MTLDepthStencilState> dss = nil, dssFS = nil;
-    id<MTLTexture> colorTex = nil, depthTex = nil, reliefTex = nil, reliefDepth = nil;
-    id<MTLTexture> pondTex = nil;
+    id<MTLRenderPipelineState> psoMain = nil, psoFace = nil;
+    id<MTLDepthStencilState> dss = nil;
+    id<MTLTexture> colorTex = nil, depthTex = nil, pondTex = nil;
     id<MTLBuffer> clothVB = nil, clothIB = nil, faceVB = nil, faceIB = nil;
     size_t clothIdx = 0, faceIdx = 0;
 
     Cloth cloth;
+    MaskField field;
     std::vector<Vertex> clothVerts;
-    std::vector<float> faceModelVerts;     // normalised, placed
+
+    // The mesh as it arrives (model units) and where the fit says each vertex
+    // lands on screen, plus the world-space placement derived from the two.
+    std::vector<float> modelVerts;
+    std::vector<float> modelUV;        // 2/vertex, normalised frame, y-down
     std::vector<int>   faceTris;
+    std::vector<Vertex> faceVerts;     // placed, with normals
     bool haveFace = false;
-    // Fixed normalisation captured from the first mesh: an expression changes
-    // the mesh extent, and re-deriving it per frame would pump the face's size.
+    bool haveUV = false;
+    // Fallback normalisation, captured from the first mesh, for the no-uv path.
+    // An expression changes the mesh extent, and re-deriving it per frame would
+    // pump the face's size.
     bool normSet = false;
-    float centre[3] = {0, 0, 0}, scale = 1.0f;
-    float faceZMin = 0.f, faceZRange = 1.f;
+    float centre[3] = {0, 0, 0}, fallbackScale = 1.0f;
+
+    float zFront = 0.f;                // world z of the mask's frontmost point
+    float zBack  = 0.f;                // and its backmost, for the alignment hold
+    float zOffset = 0.f;               // the press: how far the mask has advanced
+    simd_float3 faceCentre = {0, 0, 0};   // placed centroid, for the shading space
+    simd_float3 faceFacing = {0, 0, 1};   // mean normal: where its own light hangs
+    float faceWorldW = 1.f;               // placed width, world units
 
     double t = 0.0;
-    float prevE = 0.f, dE = 0.f;
-    float sheetHalf = CAM_D * std::tan(CAM_FOV * 0.5f);
+    int builtRes = 0;
+    float builtAspect = 0.f, builtOver = 0.f;
+    float halfY = CAM_D * std::tan(CAM_FOV * 0.5f);
+    float halfX = CAM_D * std::tan(CAM_FOV * 0.5f);
 
     explicit Impl(const MetalContext& c) : ctx(c) {}
 
     bool buildPipelines(const std::string& shaderDir);
     void makeTargets(int W, int H);
-    void rebuildCloth();
+    void ensureSheet(int res, float aspect, float over);
+    void placeFace(float depthScale, const float regScale[2], const float regOff[2],
+                   float yaw);
     void uploadFace();
+    void rasteriseField();
     void packCloth();
 };
 
 bool TransitionScene::Impl::buildPipelines(const std::string& shaderDir) {
-    id<MTLLibrary> lib = ctx.newLibraryFromFile(shaderDir + "/transition.metal");
+    // root_shared.h for RootFaceU, then the mask's material, then this scene's
+    // own passes -- the same assembly the root renderer uses, because the mask
+    // pass here is the root renderer's mask pass. The runtime compiler has no
+    // include path, so shared code is prepended as text; see MetalContext.
+    id<MTLLibrary> lib = ctx.newLibraryFromFiles(
+        {std::string(MIRROR_APP_SRC_DIR) + "/root_shared.h",
+         shaderDir + "/face_shade.metal",
+         shaderDir + "/transition.metal"});
     if (!lib) return false;
 
-    auto make = [&](const char* vs, const char* fs, MTLPixelFormat fmt,
-                    bool depth, bool blend) -> id<MTLRenderPipelineState> {
+    // RGBA16Float + Shared matches the rest of the app: the compositor samples
+    // it and the headless shot path reads it back with getBytes, which a
+    // Private texture cannot serve.
+    auto make = [&](const char* vs, const char* fs) -> id<MTLRenderPipelineState> {
         MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
         d.vertexFunction = [lib newFunctionWithName:[NSString stringWithUTF8String:vs]];
         d.fragmentFunction = [lib newFunctionWithName:[NSString stringWithUTF8String:fs]];
@@ -87,47 +143,30 @@ bool TransitionScene::Impl::buildPipelines(const std::string& shaderDir) {
             std::fprintf(stderr, "transition: missing %s/%s\n", vs, fs);
             return nil;
         }
-        d.colorAttachments[0].pixelFormat = fmt;
-        if (blend) {
-            d.colorAttachments[0].blendingEnabled = YES;
-            d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-            d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-            d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorZero;
-        }
-        if (depth) d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+        d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
         NSError* err = nil;
-        id<MTLRenderPipelineState> p = [ctx.device() newRenderPipelineStateWithDescriptor:d
-                                                                                    error:&err];
+        id<MTLRenderPipelineState> p =
+            [ctx.device() newRenderPipelineStateWithDescriptor:d error:&err];
         if (!p) std::fprintf(stderr, "transition: pipeline %s/%s: %s\n", vs, fs,
                              err.localizedDescription.UTF8String);
         return p;
     };
-
-    // RGBA16Float + Shared matches the rest of the app: the compositor samples
-    // it and the headless shot path reads it back with getBytes, which a Private
-    // texture cannot serve.
-    psoMain   = make("v_main",   "f_main",   MTLPixelFormatRGBA16Float, true,  false);
-    psoFS     = make("v_fs",     "f_emerge", MTLPixelFormatRGBA16Float, false, true);
-    psoRelief = make("v_relief", "f_relief", MTLPixelFormatRGBA8Unorm, true,  false);
+    psoMain = make("v_main", "f_main");
+    psoFace = make("v_face", "f_face");
+    if (!psoMain || !psoFace) return false;
 
     MTLDepthStencilDescriptor* dd = [MTLDepthStencilDescriptor new];
     dd.depthCompareFunction = MTLCompareFunctionLess;
     dd.depthWriteEnabled = YES;
     dss = [ctx.device() newDepthStencilStateWithDescriptor:dd];
-
-    MTLDepthStencilDescriptor* df = [MTLDepthStencilDescriptor new];
-    df.depthCompareFunction = MTLCompareFunctionAlways;
-    df.depthWriteEnabled = NO;
-    dssFS = [ctx.device() newDepthStencilStateWithDescriptor:df];
-
-    return psoMain && psoFS && psoRelief;
+    return true;
 }
 
 void TransitionScene::Impl::makeTargets(int W, int H) {
     if (W == w && H == h && colorTex) return;
     w = W; h = H;
-    auto tex = [&](MTLPixelFormat fmt, MTLTextureUsage usage, bool shared = false) {
+    auto tex = [&](MTLPixelFormat fmt, MTLTextureUsage usage, bool shared) {
         MTLTextureDescriptor* td =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
                                                                width:W height:H mipmapped:NO];
@@ -136,71 +175,230 @@ void TransitionScene::Impl::makeTargets(int W, int H) {
         return [ctx.device() newTextureWithDescriptor:td];
     };
     const MTLTextureUsage rt = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    colorTex    = tex(MTLPixelFormatRGBA16Float, rt, /*shared=*/true);
-    depthTex    = tex(MTLPixelFormatDepth32Float, MTLTextureUsageRenderTarget);
-    reliefTex   = tex(MTLPixelFormatRGBA8Unorm,  rt);
-    reliefDepth = tex(MTLPixelFormatDepth32Float, MTLTextureUsageRenderTarget);
+    colorTex = tex(MTLPixelFormatRGBA16Float, rt, /*shared=*/true);
+    depthTex = tex(MTLPixelFormatDepth32Float, MTLTextureUsageRenderTarget, false);
 }
 
-void TransitionScene::Impl::rebuildCloth() {
-    // Solid sheet, no hole: the opaque face occludes the centre, so carving one
-    // only creates a rim to misalign. The interior ring is pinned to the mask's
-    // back rim.
-    const float hrx = 0.42f, hry = 0.55f;
-    cloth.build(64, 64, 2 * sheetHalf, 2 * sheetHalf, hrx, hry, /*carve=*/false);
+// The sheet has to fill the frustum cross-section *at the current aspect*, or
+// the "flat sheet is the pond" identity that the whole opening rests on does
+// not hold -- a square sheet on a portrait composition leaves the film short of
+// the top and bottom edges.
+void TransitionScene::Impl::ensureSheet(int res, float aspect, float over) {
+    res = std::clamp(res, 16, 192);
+    over = std::clamp(over, 1.f, 1.5f);
+    if (res == builtRes && std::fabs(aspect - builtAspect) < 1e-4f &&
+        std::fabs(over - builtOver) < 1e-4f) return;
+    builtRes = res;
+    builtAspect = aspect;
+    builtOver = over;
+    halfY = CAM_D * std::tan(CAM_FOV * 0.5f);
+    halfX = halfY * aspect;
+    cloth.buildSheet(res, res, 2.f * halfX * over, 2.f * halfY * over, /*borderCells=*/1);
     clothVerts.assign(cloth.pos.size(), Vertex{});
-
-    // Re-pin onto the fitted face's own silhouette. cloth_cpp could use a fixed
-    // ellipse because its face was a baked asset; a fitted face is a different
-    // shape per person, so the ring is projected onto the actual mesh extent.
-    if (haveFace && !faceModelVerts.empty()) {
-        std::vector<int> pins = cloth.pinIndices();
-        std::vector<simd_float3> targets;
-        targets.reserve(pins.size());
-        // Mesh silhouette radius per angle, from the placed vertices.
-        const int NB = 64;
-        std::vector<float> rad(NB, 0.f);
-        for (size_t i = 0; i + 2 < faceModelVerts.size(); i += 3) {
-            const float x = faceModelVerts[i], y = faceModelVerts[i + 1];
-            float a = std::atan2(y, x);
-            if (a < 0) a += 2.f * float(M_PI);
-            const int b = std::min(NB - 1, int(a / (2.f * float(M_PI)) * NB));
-            rad[b] = std::max(rad[b], std::sqrt(x * x + y * y));
-        }
-        for (int b = 0; b < NB; ++b)      // fill any empty angular bin
-            if (rad[b] <= 0.f) rad[b] = (rad[(b + NB - 1) % NB] + rad[(b + 1) % NB]) * 0.5f;
-
-        for (int k : pins) {
-            const simd_float3 p = cloth.pin[size_t(k)];
-            float a = std::atan2(p.y, p.x);
-            if (a < 0) a += 2.f * float(M_PI);
-            const int b = std::min(NB - 1, int(a / (2.f * float(M_PI)) * NB));
-            const float r = rad[b] > 0.f ? rad[b] : 0.45f;
-            targets.push_back(simd_make_float3(std::cos(a) * r, std::sin(a) * r, -0.02f));
-        }
-        cloth.pinTo(targets);
-    }
-    // Normals before the first render, not just inside the sim step. build()
-    // leaves them zeroed, and a zero normal normalises to garbage -- the flat
-    // sheet then shades nothing like the pond it is supposed to be
-    // indistinguishable from, and the crossfade blends two different images.
-    // This is the same brightness-match trap the shader notes describe, entered
-    // from the other side.
+    // Normals before the first render, not just inside the sim step.
+    // buildSheet leaves them zeroed, and a zero normal normalises to garbage --
+    // the flat sheet then shades nothing like the pond it is supposed to be
+    // indistinguishable from.
     cloth.computeNormals();
     packCloth();
+    field.resize(FIELD_RES, FIELD_RES, halfX, halfY);
+}
+
+// Place every vertex so that *this* camera projects it back to the normalised
+// frame position the fit put it at. Solving the projection rather than guessing
+// a centre and a scale is what makes the film line up to the pixel: the mask
+// lands on the pond's own face because it was placed by the same projection the
+// pond was drawn with.
+//
+// clip.x = (f/aspect)*x, clip.w = CAM_D - z  =>  x = ndc.x * halfX * (CAM_D - z)/CAM_D
+void TransitionScene::Impl::placeFace(float depthScale, const float regScale[2],
+                                      const float regOff[2], float yaw) {
+    const size_t n = modelVerts.size() / 3;
+    if (!n) return;
+    faceVerts.resize(n);
+
+    // Model-space depth reference and the model->world scale. The scale is the
+    // ratio of the projected extent to the model extent, so it tracks how big
+    // the subject currently is on screen -- a face that walks closer to the
+    // camera gets deeper as well as wider, which is the only self-consistent
+    // answer.
+    float xmin = 1e30f, xmax = -1e30f, zmin = 1e30f, zmax = -1e30f;
+    double zsum = 0;
+    for (size_t i = 0; i < n; ++i) {
+        xmin = std::min(xmin, modelVerts[i * 3]);
+        xmax = std::max(xmax, modelVerts[i * 3]);
+        zmin = std::min(zmin, modelVerts[i * 3 + 2]);
+        zmax = std::max(zmax, modelVerts[i * 3 + 2]);
+        zsum += modelVerts[i * 3 + 2];
+    }
+    const float zref = float(zsum / double(n));
+
+    // The registration correction, about the fit's own projected centre, so
+    // scaling does not also walk the mask across the frame.
+    double ucs = 0, vcs = 0;
+    for (size_t i = 0; i < n; ++i) { ucs += modelUV[i * 2]; vcs += modelUV[i * 2 + 1]; }
+    const float uc = float(ucs / double(n)), vc = float(vcs / double(n));
+    auto fixU = [&](float u) { return uc + (u - uc) * regScale[0] + regOff[0]; };
+    auto fixV = [&](float v) { return vc + (v - vc) * regScale[1] + regOff[1]; };
+
+    float umin = 1e30f, umax = -1e30f;
+    for (size_t i = 0; i < n; ++i) {
+        const float u = fixU(modelUV[i * 2]);
+        umin = std::min(umin, u);
+        umax = std::max(umax, u);
+    }
+    const float modelW = std::max(1e-6f, xmax - xmin);
+    const float worldW = std::max(1e-6f, (umax - umin) * 2.f * halfX);
+    const float zScale = (worldW / modelW) * std::max(0.05f, depthScale);
+
+    zFront = (zmax - zref) * zScale;
+    zBack  = (zmin - zref) * zScale;
+
+    for (size_t i = 0; i < n; ++i) {
+        const float u = fixU(modelUV[i * 2]), v = fixV(modelUV[i * 2 + 1]);
+        const float ndcx = u * 2.f - 1.f, ndcy = 1.f - v * 2.f;
+        const float z = (modelVerts[i * 3 + 2] - zref) * zScale + zOffset;
+        const float k = (CAM_D - z) / CAM_D;
+        faceVerts[i].pos = simd_make_float3(ndcx * halfX * k, ndcy * halfY * k, z);
+        // The texture coordinate is the projection itself: the mask samples the
+        // film exactly where the film was covering it.
+        faceVerts[i].uv = simd_make_float2(u, v);
+        faceVerts[i].nrm = simd_make_float3(0, 0, 1);
+    }
+
+    std::vector<simd_float3> nn(n, simd_make_float3(0, 0, 0));
+    for (size_t t = 0; t + 2 < faceTris.size(); t += 3) {
+        const int a = faceTris[t], b = faceTris[t + 1], c = faceTris[t + 2];
+        if (a < 0 || b < 0 || c < 0 || size_t(a) >= n || size_t(b) >= n || size_t(c) >= n) continue;
+        const simd_float3 fn = simd_cross(faceVerts[b].pos - faceVerts[a].pos,
+                                          faceVerts[c].pos - faceVerts[a].pos);
+        nn[a] += fn; nn[b] += fn; nn[c] += fn;
+    }
+    // The test yaw, about the mask's own vertical axis through its centre, so
+    // turning it does not also walk it across the frame.
+    if (yaw != 0.f) {
+        simd_float3 c = simd_make_float3(0, 0, 0);
+        for (size_t i = 0; i < n; ++i) c += faceVerts[i].pos;
+        c /= float(n);
+        const float cs = std::cos(yaw), sn = std::sin(yaw);
+        for (size_t i = 0; i < n; ++i) {
+            const simd_float3 d = faceVerts[i].pos - c;
+            faceVerts[i].pos = c + simd_make_float3(cs * d.x + sn * d.z, d.y,
+                                                    -sn * d.x + cs * d.z);
+        }
+    }
+
+    simd_float3 nsum = simd_make_float3(0, 0, 0), psum = simd_make_float3(0, 0, 0);
+    for (size_t i = 0; i < n; ++i) {
+        const float l = simd_length(nn[i]);
+        faceVerts[i].nrm = l > 1e-8f ? nn[i] / l : simd_make_float3(0, 0, 1);
+        // Area-weighted, by using the un-normalised accumulation: the mask is an
+        // open shell whose rim triangles face every which way, and a mean of the
+        // unit normals is dragged around by however finely the rim happens to be
+        // tessellated. What the light wants is the direction the *face* points.
+        nsum += nn[i];
+        psum += faceVerts[i].pos;
+    }
+    faceCentre = psum / float(n);
+    const float nl = simd_length(nsum);
+    faceFacing = nl > 1e-8f ? nsum / nl : simd_make_float3(0, 0, 1);
+    if (faceFacing.z < 0.f) faceFacing = -faceFacing;   // toward the camera
+    faceWorldW = worldW;
+}
+
+void TransitionScene::Impl::uploadFace() {
+    if (faceVerts.empty() || faceTris.empty()) { faceIdx = 0; return; }
+    const size_t bytes = faceVerts.size() * sizeof(Vertex);
+    if (!faceVB || faceVB.length < bytes)
+        faceVB = [ctx.device() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    std::memcpy(faceVB.contents, faceVerts.data(), bytes);
+
+    if (!faceIB || faceIdx != faceTris.size()) {
+        std::vector<uint32_t> idx(faceTris.begin(), faceTris.end());
+        faceIdx = idx.size();
+        faceIB = [ctx.device() newBufferWithBytes:idx.data() length:faceIdx * sizeof(uint32_t)
+                                          options:MTLResourceStorageModeShared];
+    }
+}
+
+// The collider: the mask's front surface, as a depth map over the sheet's own
+// (x, y). Kept in world x/y rather than in screen space, so contact is resolved
+// where the cloth lives; the sheet sits within about a tenth of a unit of the
+// mask against a camera distance of 3, so the parallax that ignores is under a
+// twentieth of a texel and nothing in the drape can see it.
+void TransitionScene::Impl::rasteriseField() {
+    if (!field.valid()) return;
+    field.clear();
+    if (faceVerts.empty() || faceTris.size() < 3) return;
+
+    const int fw = field.w, fh = field.h;
+    auto toField = [&](simd_float3 p, float& fx, float& fy) {
+        fx = (p.x + halfX) / (2.f * halfX) * float(fw - 1);
+        fy = (halfY - p.y) / (2.f * halfY) * float(fh - 1);
+    };
+
+    for (size_t t = 0; t + 2 < faceTris.size(); t += 3) {
+        const int ia = faceTris[t], ib = faceTris[t + 1], ic = faceTris[t + 2];
+        if (ia < 0 || ib < 0 || ic < 0) continue;
+        if (size_t(ia) >= faceVerts.size() || size_t(ib) >= faceVerts.size() ||
+            size_t(ic) >= faceVerts.size()) continue;
+        const simd_float3 A = faceVerts[ia].pos, B = faceVerts[ib].pos, C = faceVerts[ic].pos;
+        float ax, ay, bx, by, cx, cy;
+        toField(A, ax, ay); toField(B, bx, by); toField(C, cx, cy);
+
+        const float area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        if (std::fabs(area) < 1e-9f) continue;
+        const float inv = 1.f / area;
+
+        int x0 = std::max(0, int(std::floor(std::min({ax, bx, cx}))));
+        int x1 = std::min(fw - 1, int(std::ceil(std::max({ax, bx, cx}))));
+        int y0 = std::max(0, int(std::floor(std::min({ay, by, cy}))));
+        int y1 = std::min(fh - 1, int(std::ceil(std::max({ay, by, cy}))));
+
+        for (int y = y0; y <= y1; ++y) {
+            const float py = float(y) + 0.5f;
+            for (int x = x0; x <= x1; ++x) {
+                const float px = float(x) + 0.5f;
+                float w0 = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * inv;   // toward C
+                float w1 = ((px - ax) * (cy - ay) - (py - ay) * (cx - ax)) * inv;   // toward B
+                const float w2 = 1.f - w0 - w1;
+                if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+                const float z = w2 * A.z + w1 * B.z + w0 * C.z;
+                const size_t k = size_t(y) * size_t(fw) + size_t(x);
+                // Front surface only: the sheet can never reach the back of the
+                // mask from a camera that does not move.
+                if (!field.cover[k] || z > field.z[k]) { field.z[k] = z; field.cover[k] = 1; }
+            }
+        }
+    }
+
+    // Conservative over one cloth cell. Contact is resolved at vertices and the
+    // sheet is drawn as the flat triangles between them, so a vertex has to
+    // clear the highest point of the mask that its own cell can span -- see
+    // MaskField::dilate.
+    const float texel = 2.f * halfX / float(std::max(1, field.w - 1));
+    const float cell  = 2.f * halfX * (builtOver > 0.f ? builtOver : 1.f)
+                      / float(std::max(1, cloth.nx - 1));
+    field.dilate(int(std::ceil(cell / std::max(texel, 1e-6f))));
+    // After the dilation, so contact reads the normal of the surface it is
+    // actually resolved against rather than of the one underneath it.
+    field.buildNormals();
 }
 
 void TransitionScene::Impl::packCloth() {
-    // uv = screen-planar of the REST (flat) grid, y-flipped to the pond's screen
-    // orientation: at the flat swap frame this equals the fullscreen pond, and it
-    // stays locked to the surface as the sheet falls.
+    // uv = the rest (flat) grid mapped to the *frame*, y-flipped to the film's
+    // screen orientation. Over the frame's own extent this is exactly the
+    // fullscreen pond, and it stays locked to the surface as the sheet
+    // stretches and falls; the overhang runs past 0..1 and clamps.
+    const float o = builtOver > 0.f ? builtOver : 1.f;
     for (int j = 0; j < cloth.ny; ++j)
         for (int i = 0; i < cloth.nx; ++i) {
             const int k = cloth.idx(i, j);
             clothVerts[size_t(k)].pos = cloth.pos[size_t(k)];
             clothVerts[size_t(k)].nrm = cloth.nrm[size_t(k)];
-            clothVerts[size_t(k)].uv =
-                simd_make_float2(i / float(cloth.nx - 1), 1.0f - j / float(cloth.ny - 1));
+            clothVerts[size_t(k)].uv = simd_make_float2(
+                0.5f + (i / float(cloth.nx - 1) - 0.5f) * o,
+                0.5f - (j / float(cloth.ny - 1) - 0.5f) * o);
         }
     const size_t bytes = clothVerts.size() * sizeof(Vertex);
     if (!clothVB || clothVB.length < bytes)
@@ -216,58 +414,18 @@ void TransitionScene::Impl::packCloth() {
     }
 }
 
-void TransitionScene::Impl::uploadFace() {
-    if (faceModelVerts.empty() || faceTris.empty()) { faceIdx = 0; return; }
-    const size_t n = faceModelVerts.size() / 3;
-    std::vector<Vertex> v(n);
-    for (size_t i = 0; i < n; ++i) {
-        const float x = faceModelVerts[i * 3], y = faceModelVerts[i * 3 + 1],
-                    z = faceModelVerts[i * 3 + 2];
-        v[i].pos = simd_make_float3(x, y, z);
-        // Screen-planar uv, matching the emerge pass and the cloth, so the pond
-        // pattern is continuous across the swap.
-        v[i].uv = simd_make_float2(0.5f + x / (2 * sheetHalf), 0.5f - y / (2 * sheetHalf));
-        v[i].nrm = simd_make_float3(0, 0, 1);
-    }
-    std::vector<simd_float3> nn(n, simd_make_float3(0, 0, 0));
-    for (size_t t = 0; t + 2 < faceTris.size(); t += 3) {
-        const int a = faceTris[t], b = faceTris[t + 1], c = faceTris[t + 2];
-        const simd_float3 fn = simd_cross(v[b].pos - v[a].pos, v[c].pos - v[a].pos);
-        nn[a] += fn; nn[b] += fn; nn[c] += fn;
-    }
-    for (size_t i = 0; i < n; ++i) {
-        const float l = simd_length(nn[i]);
-        v[i].nrm = l > 1e-8f ? nn[i] / l : simd_make_float3(0, 0, 1);
-    }
-
-    faceVB = [ctx.device() newBufferWithBytes:v.data() length:n * sizeof(Vertex)
-                                      options:MTLResourceStorageModeShared];
-    std::vector<uint32_t> idx(faceTris.begin(), faceTris.end());
-    faceIdx = idx.size();
-    faceIB = [ctx.device() newBufferWithBytes:idx.data() length:faceIdx * sizeof(uint32_t)
-                                      options:MTLResourceStorageModeShared];
-
-    faceZMin = v[0].pos.z;
-    float zmax = v[0].pos.z;
-    for (size_t i = 0; i < n; ++i) {
-        faceZMin = std::min(faceZMin, v[i].pos.z);
-        zmax = std::max(zmax, v[i].pos.z);
-    }
-    faceZRange = std::max(1e-4f, zmax - faceZMin);
-}
-
 // ---------------------------------------------------------------------------
 
 TransitionScene::TransitionScene(const MetalContext& ctx, int w, int h)
     : impl_(new Impl(ctx)) {
     if (!impl_->buildPipelines(std::string(MIRROR_APP_SHADER_DIR))) return;
     impl_->makeTargets(std::max(2, w), std::max(2, h));
-    impl_->rebuildCloth();
+    impl_->ensureSheet(sheetRes, float(impl_->w) / float(std::max(1, impl_->h)), oversize);
 }
 
 TransitionScene::~TransitionScene() = default;
 
-bool TransitionScene::valid() const { return impl_ && impl_->psoMain && impl_->psoFS; }
+bool TransitionScene::valid() const { return impl_ && impl_->psoMain; }
 int  TransitionScene::width() const { return impl_->w; }
 int  TransitionScene::height() const { return impl_->h; }
 void TransitionScene::ensureSize(int w, int h) { impl_->makeTargets(std::max(2, w), std::max(2, h)); }
@@ -276,136 +434,166 @@ bool TransitionScene::hasFace() const { return impl_->haveFace; }
 double TransitionScene::clock() const { return impl_->t; }
 void TransitionScene::setPondTexture(id<MTLTexture> pond) { impl_->pondTex = pond; }
 
-void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::vector<int>& tris) {
+void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::vector<int>& tris,
+                                  const std::vector<float>& uv) {
     if (verts.size() < 9) return;
     if (!tris.empty()) impl_->faceTris = tris;
     if (impl_->faceTris.empty()) return;
 
-    if (!impl_->normSet) {
-        const size_t n = verts.size() / 3;
-        double cx = 0, cy = 0, cz = 0;
-        for (size_t i = 0; i < n; ++i) {
-            cx += verts[i * 3]; cy += verts[i * 3 + 1]; cz += verts[i * 3 + 2];
-        }
-        impl_->centre[0] = float(cx / n);
-        impl_->centre[1] = float(cy / n);
-        impl_->centre[2] = float(cz / n);
-        float m = 1e-9f;
-        for (size_t i = 0; i < n; ++i)
-            m = std::max({m, std::fabs(verts[i * 3] - impl_->centre[0]),
-                             std::fabs(verts[i * 3 + 1] - impl_->centre[1])});
-        // 0.55 puts the fitted face at roughly the extent cloth_cpp's baked one
-        // occupied (FACE_HY = 0.55), so the tuned look carries over.
-        impl_->scale = 0.55f / m;
-        impl_->normSet = true;
-    }
-
     const size_t n = verts.size() / 3;
-    impl_->faceModelVerts.resize(n * 3);
-    const float s = impl_->scale * faceScale;
-    for (size_t i = 0; i < n; ++i) {
-        impl_->faceModelVerts[i * 3]     = (verts[i * 3]     - impl_->centre[0]) * s;
-        impl_->faceModelVerts[i * 3 + 1] = (verts[i * 3 + 1] - impl_->centre[1]) * s;
-        impl_->faceModelVerts[i * 3 + 2] = (verts[i * 3 + 2] - impl_->centre[2]) * s;
+    impl_->modelVerts.assign(verts.begin(), verts.begin() + n * 3);
+
+    if (uv.size() >= n * 2) {
+        impl_->modelUV.assign(uv.begin(), uv.begin() + n * 2);
+        impl_->haveUV = true;
+    } else {
+        // No projection supplied: centre the mesh and normalise it by its own
+        // extent, the way this scene used to place a mesh. Good enough to see
+        // the gesture headless; it cannot make the film line up, because
+        // nothing here knows where the pond drew the face.
+        if (!impl_->normSet) {
+            double cx = 0, cy = 0, cz = 0;
+            for (size_t i = 0; i < n; ++i) {
+                cx += verts[i * 3]; cy += verts[i * 3 + 1]; cz += verts[i * 3 + 2];
+            }
+            impl_->centre[0] = float(cx / n);
+            impl_->centre[1] = float(cy / n);
+            impl_->centre[2] = float(cz / n);
+            float m = 1e-9f;
+            for (size_t i = 0; i < n; ++i)
+                m = std::max({m, std::fabs(verts[i * 3] - impl_->centre[0]),
+                                 std::fabs(verts[i * 3 + 1] - impl_->centre[1])});
+            impl_->fallbackScale = 0.55f / m;
+            impl_->normSet = true;
+        }
+        impl_->modelUV.resize(n * 2);
+        for (size_t i = 0; i < n; ++i) {
+            const float x = (verts[i * 3]     - impl_->centre[0]) * impl_->fallbackScale;
+            const float y = (verts[i * 3 + 1] - impl_->centre[1]) * impl_->fallbackScale;
+            impl_->modelUV[i * 2]     = 0.5f + x * 0.5f;
+            impl_->modelUV[i * 2 + 1] = 0.5f - y * 0.5f;
+        }
+        impl_->haveUV = false;
     }
-    const bool first = !impl_->haveFace;
     impl_->haveFace = true;
-    impl_->uploadFace();
-    if (first) impl_->rebuildCloth();   // re-pin onto the real silhouette
 }
 
 void TransitionScene::restart() {
     impl_->t = 0.0;
-    impl_->prevE = 0.f;
-    impl_->dE = 0.f;
-    impl_->rebuildCloth();
+    impl_->zOffset = 0.f;
+    impl_->builtRes = 0;             // force a fresh sheet: flat, fully held
+    impl_->ensureSheet(sheetRes, float(impl_->w) / float(std::max(1, impl_->h)), oversize);
 }
 
-float TransitionScene::emergence() const {
-    const float t = float(impl_->t);
-    if (t < timing.hold) return 0.f;
-    return std::min(1.0f, (t - timing.hold) / std::max(1e-3f, timing.emerge));
+float TransitionScene::press() const {
+    return std::clamp((float(impl_->t) - timing.hold) / std::max(1e-3f, timing.press), 0.f, 1.f);
+}
+
+float TransitionScene::release() const {
+    const float t0 = timing.hold + timing.press + timing.settle;
+    return std::clamp((float(impl_->t) - t0) / std::max(1e-3f, timing.release), 0.f, 1.f);
 }
 
 bool TransitionScene::done() const {
-    return float(impl_->t) > timing.hold + timing.emerge + timing.settle + 4.0f;
+    return float(impl_->t) > timing.hold + timing.press + timing.settle +
+                             timing.release + timing.fall;
 }
 
 const char* TransitionScene::phaseName() const {
     const float t = float(impl_->t);
     if (t < timing.hold) return "hold";
-    if (t < timing.hold + timing.emerge) return "emerge";
-    if (t < timing.hold + timing.emerge + timing.settle) return "settle";
+    if (t < timing.hold + timing.press) return "press";
+    if (t < timing.hold + timing.press + timing.settle) return "settle";
+    if (t < timing.hold + timing.press + timing.settle + timing.release) return "release";
     return "fall";
 }
 
 void TransitionScene::advance(double dt) {
-    const float e0 = emergence();
-    impl_->t += dt;
-    const float e1 = emergence();
-    // Emergence velocity, for the velocity-driven refraction. Normalised by dt
-    // so the look does not change with framerate.
-    impl_->dE = dt > 1e-6 ? float((e1 - e0) / dt) : 0.f;
-    impl_->prevE = e1;
+    Impl& I = *impl_;
+    I.t += dt;
+    I.ensureSheet(sheetRes, float(I.w) / float(std::max(1, I.h)), oversize);
 
-    // Gravity starts only once the crossfade has finished. While it runs, the
-    // 3D cloth is flat and static and therefore pixel-identical to the pond it
-    // is fading in over -- which is the whole point of crossfading. Letting the
-    // sheet start falling on the swap frame (as the prototype did, with a hard
-    // cut) means the blend is between two *different* images and the seam is
-    // exactly as visible as it was before.
-    const float swapT = timing.hold + timing.emerge + timing.settle;
-    if (float(impl_->t) >= swapT + timing.fade && showCloth) {
-        impl_->cloth.gravity = simd_make_float3(0.f, -gravityDown, -gravityBack);
-        impl_->cloth.iterations = iterations;
-        const int ss = std::max(1, substeps);
-        for (int i = 0; i < ss; ++i) impl_->cloth.step(float(dt) / float(ss));
-        impl_->cloth.computeNormals();
-        impl_->packCloth();
+    // The alignment hold: the mask fully through, the film flat behind it, the
+    // timeline going nowhere. Both are on screen at once, which is the only
+    // state in which the registration is judgeable.
+    const float p = alignMask ? 1.f : smoothstep01(press());
+    const float r = alignMask ? 0.f : release();
+
+    if (I.haveFace) {
+        // Place once with the press at zero to learn how deep the mask is, then
+        // again at the offset that depth implies. Two passes because the travel
+        // is expressed in the mask's own terms -- "starts entirely behind the
+        // film, ends this far proud of it" -- and a face that turns or walks
+        // closer changes what that means every frame.
+        I.zOffset = 0.f;
+        I.placeFace(depthScale, maskScale, maskOffset, maskYaw);
+        const float startZ = -I.zFront - 0.05f;
+        const float endZ   = pressProud;
+        I.zOffset = startZ + (endZ - startZ) * p;
+        // The alignment hold puts the *whole* mask in front of the film rather
+        // than pressed through it. Pressed through, the film occludes
+        // everything that is not proud of it and what is left on screen is a
+        // slice -- the brow, the nose, the chin -- which is not a shape anyone
+        // can align to a face.
+        if (alignMask) I.zOffset = -I.zBack + 0.02f;
+        I.placeFace(depthScale, maskScale, maskOffset, maskYaw);
+        I.uploadFace();
+        I.rasteriseField();
+        I.cloth.collider = &I.field;
+    } else {
+        I.cloth.collider = nullptr;
     }
+
+    // Nothing to solve while the film is flat and untouched, and solving it
+    // anyway is how a sheet that should be perfectly still acquires a shimmer.
+    // The alignment hold wants the sheet left flat for the same reason.
+    if (alignMask || float(I.t) <= timing.hold) return;
+
+    I.cloth.skin = skin;
+    I.cloth.iterations = iterations;
+    I.cloth.stretchMax = stretchMax;
+    I.cloth.damping = damping;
+    // The film sets while it is held, and behaves like a taut sheet once it is
+    // let go. Both halves are needed and they want opposite materials.
+    //
+    // Under the press it has to be compliant and take a set, or it bridges the
+    // face instead of wrapping it and then snaps off when the pins release.
+    // After the release, that same material is what keeps it on: with gravity
+    // straight back, nothing pushes the fabric sideways, so the only thing that
+    // can carry it off the brow and the nose is the weight of the free sheet
+    // pulling through the part still in contact. A compliant sheet stretches
+    // instead of pulling, a plastic one has already given up the length, and
+    // friction holds what is left -- so the film sits on the mask as a shroud
+    // and stays there, which is exactly what it did before this.
+    //
+    // Note that the mask advancing cannot do this on its own: the placement
+    // compensates perspective, so its silhouette does not change as it comes
+    // through, and fabric draped on it is simply carried along. It sets the
+    // shape; the tension takes it off.
+    const float gr = smoothstep01(release());
+    I.cloth.plastic     = plastic  * (1.f - gr);
+    I.cloth.stretchGive = stretch  * (1.f - 0.85f * gr);
+    I.cloth.friction    = friction * (1.f - 0.75f * gr);
+    // The release front runs a little past 1 so the last pins -- the middles of
+    // the edges -- actually reach zero rather than stopping at the feather.
+    I.cloth.setRelease(r * 1.25f);
+    // Gravity arrives with the release, not before it: a sheet pulled down
+    // while every pin still holds only sags, and the press is supposed to read
+    // as the mask doing the work.
+    const float g = smoothstep01(r);
+    I.cloth.gravity = simd_make_float3(0.f, -gravityDown * g, -gravityBack * g);
+
+    const int ss = std::max(1, substeps);
+    for (int i = 0; i < ss; ++i) I.cloth.step(float(dt) / float(ss));
+    I.cloth.computeNormals();
+    I.packCloth();
 }
 
 id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
     if (!valid()) return nil;
     Impl& I = *impl_;
-    const float aspect = float(I.w) / float(std::max(1, I.h));
-    const simd_float4x4 vp = frontVP(aspect);
-    const float e = emergence();
-    const float swapT = timing.hold + timing.emerge + timing.settle;
+    const simd_float4x4 vp = frontVP(float(I.w) / float(std::max(1, I.h)));
 
-    // --- the face relief G-buffer, rendered from the real mesh -------------
-    // This is the replacement for cloth_cpp's baked face.bin: same
-    // (normal.xy, height, coverage) layout, produced live from the fitted
-    // geometry, so it carries expression and head pose and has no shell seam.
-    if (I.haveFace && I.faceIdx) {
-        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
-        rp.colorAttachments[0].texture = I.reliefTex;
-        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-        rp.colorAttachments[0].clearColor = MTLClearColorMake(0.5, 0.5, 0.0, 0.0);
-        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-        rp.depthAttachment.texture = I.reliefDepth;
-        rp.depthAttachment.loadAction = MTLLoadActionClear;
-        rp.depthAttachment.clearDepth = 1.0;
-        rp.depthAttachment.storeAction = MTLStoreActionDontCare;
-
-        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
-        [enc setRenderPipelineState:I.psoRelief];
-        [enc setDepthStencilState:I.dss];
-        [enc setCullMode:MTLCullModeNone];
-        ReliefU ru;
-        ru.mvp = vp;
-        ru.p = simd_make_float4(1.0f / I.faceZRange, I.faceZMin, 0, 0);
-        [enc setVertexBuffer:I.faceVB offset:0 atIndex:0];
-        [enc setVertexBytes:&ru length:sizeof(ru) atIndex:1];
-        [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                        indexCount:I.faceIdx
-                         indexType:MTLIndexTypeUInt32
-                       indexBuffer:I.faceIB
-                 indexBufferOffset:0];
-        [enc endEncoding];
-    }
-
-    // --- the main pass ------------------------------------------------------
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = I.colorTex;
     rp.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -417,70 +605,108 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
     rp.depthAttachment.storeAction = MTLStoreActionDontCare;
 
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+    [enc setRenderPipelineState:I.psoMain];
+    [enc setDepthStencilState:I.dss];
+    [enc setCullMode:MTLCullModeNone];
+    [enc setTriangleFillMode:wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
+    [enc setFragmentTexture:I.pondTex atIndex:0];
 
-    // Crossfade across the swap rather than cutting. cloth_cpp left this as a
-    // TODO ("a 2-3 frame crossfade would hide any residual mismatch"); with a
-    // live pond and a live face the assets change constantly, so it matters more
-    // here than it did there.
-    float emergeAlpha = 1.f;
-    if (float(I.t) > swapT) {
-        const float k = (float(I.t) - swapT) / std::max(1e-3f, timing.fade);
-        emergeAlpha = std::max(0.f, 1.f - k);
-    }
+    Uniforms u;
+    u.mvp = vp;
+    u.model = matrix_identity_float4x4;
+    u.lightDir = simd_make_float4(LIGHT.x, LIGHT.y, LIGHT.z, 0.0f);
+    u.baseColor = simd_make_float4(1, 1, 1, 1);
 
-    // 3D pass first when the cloth is live, so the crossfading flat pass lands
-    // on top of it.
-    const bool cloth3D = float(I.t) >= swapT && showCloth;
-    if (cloth3D) {
+    // The mask first: it is opaque and mostly behind the film, so drawing it
+    // ahead of the sheet lets the depth test reject the covered fragments
+    // instead of shading them.
+    if (showFace && I.haveFace && I.faceIdx && I.faceVB) {
+        // One uniform scale about the mask's own centre puts the marble, the
+        // light falloff and the spot cone back at the size they were tuned at in
+        // the root scene, whatever size the fit put the mask on screen.
+        const float k = shadeSpan / std::max(1e-4f, I.faceWorldW);
+
+        RootFaceU fu = {};
+        fu.viewProj = vp;
+        fu.eye = simd_make_float4((simd_make_float3(0, 0, CAM_D) - I.faceCentre) * k, 0);
+        float ld[3] = {keyDir[0], keyDir[1], keyDir[2]};
+        const float ldn = std::sqrt(ld[0]*ld[0] + ld[1]*ld[1] + ld[2]*ld[2]);
+        const float inv = ldn > 1e-6f ? 1.f / ldn : 1.f;
+        fu.lightDir = simd_make_float4(ld[0]*inv, ld[1]*inv, ld[2]*inv, 0);
+        fu.keyColor = simd_make_float4(env.keyColor[0] * env.keyIntensity,
+                                       env.keyColor[1] * env.keyIntensity,
+                                       env.keyColor[2] * env.keyIntensity, 0);
+        fu.veinColor = simd_make_float4(faceMat.veinColor[0], faceMat.veinColor[1],
+                                        faceMat.veinColor[2], 0);
+        fu.lightIntensity = faceMat.lightIntensity;
+        fu.lightFalloff   = faceMat.lightFalloff;
+        fu.specStrength   = faceMat.specStrength;
+        fu.veinScale      = faceMat.veinScale;
+        fu.veinStrength   = faceMat.veinStrength;
+        fu.roughness      = faceMat.roughness;
+        fu.metallic       = faceMat.metallic;
+        fu.reliefStrength = faceMat.reliefStrength;
+        fu.reliefScale    = faceMat.reliefScale;
+        fu.spotLightDist  = faceMat.spotLightDist;
+        // Same convention as the root renderer: 90 degrees outer means no cone.
+        if (faceMat.spotOuterDeg >= 89.9f) {
+            fu.spotCosOuter = -2.0f; fu.spotCosInner = -2.0f;
+        } else {
+            fu.spotCosOuter = std::cos(faceMat.spotOuterDeg * float(M_PI) / 180.f);
+            fu.spotCosInner = std::cos(std::min(faceMat.spotInnerDeg, faceMat.spotOuterDeg)
+                                       * float(M_PI) / 180.f);
+        }
+        fu.skyColor    = simd_make_float4(env.skyColor[0], env.skyColor[1], env.skyColor[2], 0);
+        fu.groundColor = simd_make_float4(env.groundColor[0], env.groundColor[1],
+                                          env.groundColor[2], 0);
+        fu.sssTint     = simd_make_float4(env.sssTint[0], env.sssTint[1], env.sssTint[2], 0);
+        fu.hemiStrength = env.hemiStrength;
+        fu.envSpec      = env.envSpec;
+        fu.rimStrength  = env.rimStrength;
+        fu.sssWrap      = env.sssWrap;
+        fu.sssTrans     = env.sssTrans;
+        fu.sssPower     = env.sssPower;
+
+        TransFaceX x = {};
+        x.centre = simd_make_float4(I.faceCentre, 0);
+        // The mask's own light, placed the way the root scene's mesh builder
+        // places it: spotLightDist along the mask's facing from its centre. The
+        // shader recovers the cone's axis from that distance, so this has to be
+        // the same offset it is told about.
+        x.lightPos = simd_make_float4(I.faceFacing * faceMat.spotLightDist, 0);
+        x.scale = k;
+        x.exposure = exposure;
+        x.tonemap = tonemap ? 1 : 0;
+
+        [enc setRenderPipelineState:I.psoFace];
+        // Wireframe over the film, so the face underneath stays readable. A
+        // solid mask in front of the film hides the very thing it is being
+        // aligned to.
+        if (alignMask) [enc setTriangleFillMode:MTLTriangleFillModeLines];
+        [enc setVertexBuffer:I.faceVB offset:0 atIndex:0];
+        [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+        [enc setFragmentBytes:&fu length:sizeof(fu) atIndex:1];
+        [enc setFragmentBytes:&x length:sizeof(x) atIndex:2];
+        [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                        indexCount:I.faceIdx
+                         indexType:MTLIndexTypeUInt32
+                       indexBuffer:I.faceIB
+                 indexBufferOffset:0];
         [enc setRenderPipelineState:I.psoMain];
-        [enc setDepthStencilState:I.dss];
-        [enc setCullMode:MTLCullModeNone];
-        [enc setTriangleFillMode:wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-        [enc setFragmentTexture:I.pondTex atIndex:0];
-
-        Uniforms u;
-        u.mvp = vp;
-        u.model = matrix_identity_float4x4;
-        u.lightDir = simd_make_float4(LIGHT.x, LIGHT.y, LIGHT.z, 0.0f);
-        u.baseColor = simd_make_float4(1, 1, 1, 1);
-
-        if (I.clothIdx) {
-            [enc setVertexBuffer:I.clothVB offset:0 atIndex:0];
-            [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
-            [enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
-            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                            indexCount:I.clothIdx
-                             indexType:MTLIndexTypeUInt32
-                           indexBuffer:I.clothIB
-                     indexBufferOffset:0];
-        }
-        if (I.haveFace && I.faceIdx) {
-            [enc setVertexBuffer:I.faceVB offset:0 atIndex:0];
-            [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
-            [enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
-            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                            indexCount:I.faceIdx
-                             indexType:MTLIndexTypeUInt32
-                           indexBuffer:I.faceIB
-                     indexBufferOffset:0];
-        }
+        if (alignMask)
+            [enc setTriangleFillMode:wireframe ? MTLTriangleFillModeLines
+                                               : MTLTriangleFillModeFill];
     }
-
-    if (emergeAlpha > 0.001f && I.pondTex) {
-        [enc setRenderPipelineState:I.psoFS];
-        [enc setDepthStencilState:I.dssFS];
-        EmergeU u;
-        // Velocity-driven refraction: cloth_cpp's was a single constant, so the
-        // distortion peaked at the timeline midpoint regardless of how fast the
-        // face was actually moving through the film. Scaling by d(emergence)/dt
-        // ties it to the motion, which is what the effect is depicting.
-        const float refr = refract * (1.0f + refractVel * std::fabs(I.dE));
-        u.p = simd_make_float4(e, refr, emergeAlpha, 0.f);
-        u.light = LIGHT;
-        [enc setFragmentBytes:&u length:sizeof(u) atIndex:0];
-        [enc setFragmentTexture:I.pondTex atIndex:0];
-        [enc setFragmentTexture:I.reliefTex atIndex:1];
-        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    if (showCloth && I.clothIdx && I.clothVB) {
+        u.params = simd_make_float4(refract, reliefShade, 0, 0);
+        [enc setVertexBuffer:I.clothVB offset:0 atIndex:0];
+        [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+        [enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
+        [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                        indexCount:I.clothIdx
+                         indexType:MTLIndexTypeUInt32
+                       indexBuffer:I.clothIB
+                 indexBufferOffset:0];
     }
 
     [enc endEncoding];
