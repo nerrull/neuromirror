@@ -36,32 +36,10 @@ static float ign(float2 p) {
     return fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715))));
 }
 
-// ACES filmic, Stephen Hill's RRT+ODT fit. Chosen over a Reinhard curve because
-// the shoulder desaturates towards white the way film does; Reinhard holds
-// saturation into the clip and the bright wisps come out as flat colour blobs.
-static constant float3x3 kACESIn = float3x3(
-    float3(0.59719, 0.07600, 0.02840),
-    float3(0.35458, 0.90834, 0.13383),
-    float3(0.04823, 0.01566, 0.83777));
-static constant float3x3 kACESOut = float3x3(
-    float3( 1.60475, -0.10208, -0.00327),
-    float3(-0.53108,  1.10813, -0.07276),
-    float3(-0.07367, -0.00605,  1.07602));
-
-static float3 acesFitted(float3 c) {
-    c = kACESIn * c;
-    float3 a = c * (c + 0.0245786) - 0.000090537;
-    float3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
-    c = kACESOut * (a / b);
-    return clamp(c, 0.0, 1.0);
-}
-
-// Piecewise sRGB, not pow(1/2.2). The two diverge most in the darkest stop, and
-// the fog floor of this scene lives exactly there.
-static float3 srgbEncode(float3 c) {
-    c = clamp(c, 0.0, 1.0);
-    return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);
-}
+// ACES and the sRGB encode live in face_shade.metal, which is prepended to
+// this library: the mask needs the same display transform outside this chain
+// (the transition tonemaps it on its own), and two copies of a curve is two
+// curves waiting to disagree.
 
 // Depth-of-field gather kernel: a centre tap and two full rings of nine, spun
 // per pixel. The tap count is not arbitrary. This scene's defocused content is
