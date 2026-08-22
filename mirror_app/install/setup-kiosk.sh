@@ -17,7 +17,7 @@ set -euo pipefail
 APPLY=0
 KIOSK_USER=expo
 FROM=09:30
-TO=18:30
+TO=22:00
 while [ $# -gt 0 ]; do
     case "$1" in
         --apply) APPLY=1; shift;;
@@ -93,10 +93,42 @@ fi
 rm -f "$tmp"
 
 echo
+echo "== show-day gate"
+# The pmset schedule below wakes the machine every morning; this daemon is
+# what makes most of those mornings end immediately. Which days are which
+# lives in show-days.txt, so changing the calendar never touches pmset.
+GATE_H="${FROM%%:*}"
+GATE_M="$(( 10#${FROM##*:} + 1 ))"
+if [ "$GATE_M" -ge 60 ]; then GATE_M=$(( GATE_M - 60 )); GATE_H=$(( 10#$GATE_H + 1 )); fi
+[ -r "$HERE/show-days.txt" ] || echo "  WARNING: no show-days.txt -- the gate will fail awake, every day"
+tmp2="$(mktemp)"
+sed -e "s|@GATE_SH@|$HERE/show-gate.sh|g" \
+    -e "s|@GATE_HOUR@|$(( 10#$GATE_H ))|g" \
+    -e "s|@GATE_MINUTE@|$GATE_M|g" \
+    -e "s|@LOG_DIR@|$LOG_DIR|g" \
+    "$HERE/net.jardinsracine.gate.plist.in" > "$tmp2"
+if [ "$APPLY" = 1 ]; then
+    install -m 644 -o root -g wheel "$tmp2" "/Library/LaunchDaemons/net.jardinsracine.gate.plist"
+    launchctl bootout system/net.jardinsracine.gate 2>/dev/null || true
+    launchctl bootstrap system "/Library/LaunchDaemons/net.jardinsracine.gate.plist"
+    echo "+ installed the gate daemon (checks at boot and $GATE_H:$(printf %02d "$GATE_M"))"
+else
+    echo "  would install /Library/LaunchDaemons/net.jardinsracine.gate.plist,"
+    echo "  checking at boot and at $GATE_H:$(printf %02d "$GATE_M") daily"
+fi
+rm -f "$tmp2"
+
+echo
 echo "== power behaviour"
-# Never sleep, never blank, come back from a power cut on its own.
-run pmset -a displaysleep 0 sleep 0 disablesleep 1
+# Never sleep or blank on idle -- but NOT `disablesleep 1`, which is the
+# bigger hammer: it would also block the scheduled nightly sleep that ends
+# each show day. See README.md, "Ending the day".
+run pmset -a displaysleep 0 sleep 0
+run pmset -a disablesleep 0
+# Come back on after a power cut, and after power is reconnected -- the
+# second is what makes a wall timer on the socket a working day scheduler.
 run pmset -a autorestart 1
+run pmset -a autorestartatconnect 1
 run pmset -a womp 1                 # wake for network, so Jump Desktop can reach it
 run systemsetup -setrestartfreeze on 2>/dev/null || true
 
@@ -109,9 +141,13 @@ cat <<NOTE
      $BIN once from Terminal, click Allow.
   3. Jump Desktop Connect, installed for all users, with Screen Recording
      and Accessibility granted in the $KIOSK_USER session.
-  4. The expo days' schedule, when you know the dates:
-       sudo pmset repeat wakeorpoweron MTWRFSU $FROM:00 shutdown MTWRFSU $TO:00
+  4. The daily schedule. Every day, deliberately -- the gate decides which
+     mornings survive. On Apple silicon use sleep, not shutdown: scheduled
+     power-on from a full shutdown is not supported there, so a shutdown is a
+     day that never starts again.
+       sudo pmset repeat wakeorpoweron MTWRFSU $FROM:00 sleep MTWRFSU $TO:00
      and afterwards:  sudo pmset repeat cancel
+  5. The dates themselves, in install/show-days.txt.
 NOTE
 [ "$APPLY" = 1 ] || echo "
 (dry run -- nothing changed. Re-run with --apply, as root, to do it.)"

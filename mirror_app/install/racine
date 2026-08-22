@@ -6,6 +6,8 @@
 # (root included) it targets the kiosk user's domain by uid.
 #
 #   racine start | stop | restart | status | log | build
+#   racine days                 -- is today a show day, and what is scheduled
+#   racine keep-awake on | off  -- override the show-day gate while working
 #
 set -euo pipefail
 
@@ -13,19 +15,25 @@ LABEL=net.jardinsracine.mirror
 KIOSK_USER="${RACINE_KIOSK_USER:-expo}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"          # the jardins_racine checkout
-PLIST_DIR="$(dscl . -read "/Users/$KIOSK_USER" NFSHomeDirectory 2>/dev/null \
-             | awk '{print $2}')/Library/LaunchAgents"
-PLIST="$PLIST_DIR/$LABEL.plist"
 LOG="/Users/Shared/racine/logs/mirror.log"
 
+# Before anything that looks the account up: without this the dscl below dies
+# under `set -e` with a bare exit 56 and no word about why.
 kiosk_uid="$(id -u "$KIOSK_USER" 2>/dev/null || true)"
-[ -n "$kiosk_uid" ] || { echo "no such user: $KIOSK_USER" >&2; exit 1; }
+[ -n "$kiosk_uid" ] || {
+    echo "no such user: $KIOSK_USER (set RACINE_KIOSK_USER, or create it)" >&2
+    exit 1
+}
 DOMAIN="gui/$kiosk_uid"
+
+kiosk_home="$(dscl . -read "/Users/$KIOSK_USER" NFSHomeDirectory 2>/dev/null \
+              | awk '{print $2}')" || kiosk_home=""
+PLIST="${kiosk_home:-/Users/$KIOSK_USER}/Library/LaunchAgents/$LABEL.plist"
 
 # Reaching into another user's GUI domain needs root; our own does not.
 if [ "$(id -u)" = "$kiosk_uid" ]; then AS=(); else AS=(sudo); fi
 
-usage() { sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
 
 case "${1:-}" in
 start)
@@ -48,6 +56,28 @@ status)
     ;;
 log)
     tail -f "$LOG"
+    ;;
+days)
+    # --check reports without ever sleeping, so this is safe to run mid-show.
+    "$HERE/show-gate.sh" --check
+    echo
+    echo "listed days ($HERE/show-days.txt):"
+    grep -v '^\s*\(#\|$\)' "$HERE/show-days.txt" 2>/dev/null | sed 's/^/  /' \
+        || echo "  (none -- the gate will fail awake)"
+    echo
+    pmset -g sched
+    ;;
+keep-awake)
+    # The gate sleeps the machine on any morning that is not a show day,
+    # which includes the morning you are stood in front of it working. This
+    # marker turns it off without editing the calendar -- and is deliberately
+    # a file you can see, so it is hard to leave set by accident.
+    MARKER=/Users/Shared/racine/keep-awake
+    case "${2:-}" in
+        on)  "${AS[@]}" touch "$MARKER"; echo "gate overridden -- remember to turn it off";;
+        off) "${AS[@]}" rm -f "$MARKER"; echo "gate back in charge";;
+        *)   [ -e "$MARKER" ] && echo "on (gate overridden)" || echo "off (gate in charge)";;
+    esac
     ;;
 build)
     # Rebuild and re-sign in one step. The signature is what TCC keys the

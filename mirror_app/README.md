@@ -31,6 +31,11 @@ composition:
   way; `--panel-window` and `--reset-panel` set it from the command line, and
   `--reset-panel` also puts the panel back at a known position and size — the
   way out of a panel parked on a monitor that is not plugged in any more.
+- **`--fullscreen`** opens the piece on the primary monitor at its size, with
+  no title bar, instead of the default 1280x720 window. It is a borderless
+  window rather than a video-mode switch, which is what keeps it from
+  minimising when something steals focus — see
+  [`install/README.md`](install/README.md) for the installation that wants it.
 - **F1** or **`** hides and reveals the whole UI — panel, cam-mask handles and
   source PiP — and there is a **hide** button next to the checkbox. Two keys
   because macOS eats F1 for screen brightness unless F-keys are set to behave as
@@ -53,6 +58,13 @@ panel is taller than a 720p window). While detached, neither applies.
 
 Requires the imgui submodule on the **`docking`** branch (`git -C imgui checkout
 docking`) — that is where viewports live.
+
+## Installing it for a show
+
+[`install/README.md`](install/README.md) is the unattended setup: a kiosk
+account that auto-logs in, a LaunchAgent that brings the piece up fullscreen and
+puts it back if it exits, a calendar of show days in `install/show-days.txt`, and
+the power schedule around them. `install/racine` is the day-to-day control.
 
 ## Status
 

@@ -1,0 +1,18 @@
+# show-days.txt -- the days the piece runs.
+#
+# One date per line as YYYY-MM-DD, or an inclusive range with `..`.
+# Blank lines and everything after a # are ignored.
+#
+# The machine wakes briefly every morning and asks this file whether today is
+# one of its days. If it is not, it goes straight back to sleep. So a day that
+# is not listed here costs about ninety seconds of wake and nothing else --
+# and adding a day is editing this file, with no pmset to re-run.
+#
+# Edit for the real dates before the run. If this file is missing or empty the
+# gate fails *awake*: the piece runs, on the principle that a show that runs on
+# a dark day is a smaller failure than a dark show on an open one.
+
+2026-09-12..2026-09-13      # opening weekend
+2026-09-19..2026-09-20
+2026-09-26..2026-09-27
+2026-10-03                  # closing

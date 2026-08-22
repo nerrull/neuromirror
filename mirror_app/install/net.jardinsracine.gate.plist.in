@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>net.jardinsracine.gate</string>
+
+    <!-- A daemon, not an agent: it runs as root (pmset sleepnow), and it has
+         to be able to act at boot, before anyone logs in. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>@GATE_SH@</string>
+    </array>
+
+    <!-- At boot. Covers the case autorestart creates: power comes back on a
+         day the piece is not showing, the machine boots itself, and without
+         this it would then run all day to an empty room. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- And a minute after the scheduled morning wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>@GATE_HOUR@</integer>
+        <key>Minute</key><integer>@GATE_MINUTE@</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/gate.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/gate.log</string>
+</dict>
+</plist>
