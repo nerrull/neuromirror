@@ -1331,6 +1331,12 @@ bool  g_pip_landmarks = true;   // draw the tracker's landmarks over it
 bool  g_ui_visible  = true;
 bool  g_ui_detached = false;
 
+// --fullscreen: open on the primary monitor at its native mode instead of a
+// 1280x720 window. The installation runs unattended on one screen, where a
+// window with a title bar is a window a visitor can move; the operator's build
+// keeps the default so the panel has somewhere to sit.
+bool  g_fullscreen  = false;
+
 // --reset-panel: put the panel back over the main window at a known size, for
 // when imgui.ini has it parked on a monitor that is not here any more.
 bool  g_panel_reset = false;
@@ -2739,6 +2745,7 @@ int main(int argc, char** argv) {
         if (a == "--reset-panel")  { g_panel_reset = true; g_panel_cli = true; continue; }
         if (a == "--panel-window") { g_ui_detached = true; g_panel_cli = true; continue; }
         if (a == "--no-panel")     { g_ui_visible = false; continue; }
+        if (a == "--fullscreen")   { g_fullscreen = true; continue; }
         // Write the settings document and quit. It has to run the real panel
         // for a frame -- the registry *is* the panel -- but only one, because
         // declaring no longer depends on what is open or which scene is up.
@@ -3275,8 +3282,25 @@ int main(int argc, char** argv) {
     if (!glfwInit()) { fprintf(stderr, "glfw init failed\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // Metal owns the surface
     int W = 1280, H = 720;
+    // Borderless-fullscreen rather than a true video mode: the mode switch is
+    // what makes a GLFW fullscreen window minimise when it loses focus, and an
+    // installation that blanks itself because something stole focus is worse
+    // than one running a window. Sizing to the monitor's work area covers the
+    // menu bar and Dock without asking macOS for a Space of its own.
+    GLFWmonitor* mon = g_fullscreen ? glfwGetPrimaryMonitor() : nullptr;
+    if (mon) {
+        const GLFWvidmode* vm = glfwGetVideoMode(mon);
+        if (vm) { W = vm->width; H = vm->height; }
+        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
+    }
     GLFWwindow* win = glfwCreateWindow(W, H, "neuromirror ⇄ roots", nullptr, nullptr);
     if (!win) { fprintf(stderr, "window failed\n"); glfwTerminate(); return 1; }
+    if (mon) {
+        int mx = 0, my = 0;
+        glfwGetMonitorPos(mon, &mx, &my);
+        glfwSetWindowPos(win, mx, my);
+    }
 
     MetalContext ctx;
     if (!ctx.device()) { fprintf(stderr, "no Metal device\n"); return 1; }

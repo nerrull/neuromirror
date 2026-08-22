@@ -1,0 +1,65 @@
+#!/bin/bash
+# racine -- start, stop and watch the installation.
+#
+# Runs either from the kiosk account itself or over SSH from the admin
+# account: as the kiosk user it talks to its own GUI domain, as anyone else
+# (root included) it targets the kiosk user's domain by uid.
+#
+#   racine start | stop | restart | status | log | build
+#
+set -euo pipefail
+
+LABEL=net.jardinsracine.mirror
+KIOSK_USER="${RACINE_KIOSK_USER:-expo}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"          # the jardins_racine checkout
+PLIST_DIR="$(dscl . -read "/Users/$KIOSK_USER" NFSHomeDirectory 2>/dev/null \
+             | awk '{print $2}')/Library/LaunchAgents"
+PLIST="$PLIST_DIR/$LABEL.plist"
+LOG="/Users/Shared/racine/logs/mirror.log"
+
+kiosk_uid="$(id -u "$KIOSK_USER" 2>/dev/null || true)"
+[ -n "$kiosk_uid" ] || { echo "no such user: $KIOSK_USER" >&2; exit 1; }
+DOMAIN="gui/$kiosk_uid"
+
+# Reaching into another user's GUI domain needs root; our own does not.
+if [ "$(id -u)" = "$kiosk_uid" ]; then AS=(); else AS=(sudo); fi
+
+usage() { sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
+
+case "${1:-}" in
+start)
+    "${AS[@]}" launchctl bootstrap "$DOMAIN" "$PLIST"
+    echo "started"
+    ;;
+stop)
+    # bootout unloads the agent, so KeepAlive does not fight the stop.
+    "${AS[@]}" launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    echo "stopped"
+    ;;
+restart)
+    "${AS[@]}" launchctl kickstart -k "$DOMAIN/$LABEL"
+    echo "restarted"
+    ;;
+status)
+    "${AS[@]}" launchctl print "$DOMAIN/$LABEL" 2>/dev/null \
+        | grep -E '^\s+(state|pid|last exit code|runs) ' \
+        || echo "not loaded"
+    ;;
+log)
+    tail -f "$LOG"
+    ;;
+build)
+    # Rebuild and re-sign in one step. The signature is what TCC keys the
+    # camera and microphone grants to: an unsigned or re-ad-hoc-signed binary
+    # asks again on next launch, behind a fullscreen window, with nobody
+    # there to click Allow. See install/README.md.
+    cmake --build "$ROOT/build" --target mirror_app -j"$(sysctl -n hw.logicalcpu)"
+    codesign -s "${RACINE_SIGNING_ID:-Racine Kiosk}" --force \
+        "$ROOT/build/mirror_app/mirror_app"
+    echo "built and signed"
+    ;;
+*)
+    usage
+    ;;
+esac

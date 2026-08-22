@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>net.jardinsracine.mirror</string>
+
+    <!-- The show. --no-panel hides the ImGui UI from the first frame;
+         F1 or ` brings it back for the operator. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>@MIRROR_BIN@</string>
+        <string>--fullscreen</string>
+        <string>--no-panel</string>
+    </array>
+
+    <!-- imgui.ini, mirror_panel.ini and the machine bank are resolved
+         relative to the repo root. -->
+    <key>WorkingDirectory</key>
+    <string>@RACINE_ROOT@</string>
+
+    <!-- Start with the login session (auto-login puts that at power-on). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Unconditional: bring it back whether it crashed or a visitor found
+         Cmd-Q. ThrottleInterval keeps a crash loop from spinning the GPU. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/mirror.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/mirror.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,117 @@
+#!/bin/bash
+# setup-kiosk.sh -- the scriptable half of the installation setup.
+#
+# Dry-run by default: it prints what it would do and changes nothing. Pass
+# --apply to actually do it. Everything here is idempotent.
+#
+#   ./setup-kiosk.sh [--apply] [--user expo] [--from 09:30] [--to 18:30]
+#
+# What it does NOT do, because it cannot or should not be scripted:
+#   * create the kiosk account, or set automatic login
+#   * grant camera / microphone permission (a human clicks Allow, once)
+#   * install Jump Desktop Connect
+#   * schedule the expo days' power-on (--from/--to only print the pmset line)
+# README.md walks those through in order.
+set -euo pipefail
+
+APPLY=0
+KIOSK_USER=expo
+FROM=09:30
+TO=18:30
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --apply) APPLY=1; shift;;
+        --user)  KIOSK_USER="$2"; shift 2;;
+        --from)  FROM="$2"; shift 2;;
+        --to)    TO="$2"; shift 2;;
+        *) echo "unknown argument: $1" >&2; exit 1;;
+    esac
+done
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+BIN="$ROOT/build/mirror_app/mirror_app"
+LOG_DIR=/Users/Shared/racine/logs
+LABEL=net.jardinsracine.mirror
+
+run() {
+    if [ "$APPLY" = 1 ]; then echo "+ $*"; "$@"
+    else echo "  would: $*"; fi
+}
+
+fail() { echo "error: $*" >&2; exit 1; }
+
+echo "== checks"
+# The binary bakes its asset, shader, show and sound-bank paths in at compile
+# time, and links MLX, MediaPipe and libfreenect2 by absolute rpath. If the
+# tree still sits under a home directory, the kiosk user cannot read any of
+# it -- home directories are 0700 -- and no amount of launchd fixes that.
+case "$ROOT" in
+    /Users/Shared/*) ;;
+    *) fail "the checkout is at $ROOT; move it under /Users/Shared and rebuild
+       there, or the kiosk account cannot read its assets (see README.md)";;
+esac
+[ -x "$BIN" ] || fail "$BIN is not built yet -- cmake --build build --target mirror_app"
+id -u "$KIOSK_USER" >/dev/null 2>&1 || fail "no such user: $KIOSK_USER (create it first)"
+dsmemberutil checkmembership -U "$KIOSK_USER" -G admin 2>/dev/null | grep -q "is not a member" \
+    || echo "  WARNING: $KIOSK_USER is an admin account -- it should be Standard"
+codesign -dv "$BIN" 2>&1 | grep -q "Signature=adhoc" \
+    && echo "  WARNING: $BIN is ad-hoc signed; its camera grant will not survive a rebuild"
+echo "  ok: $ROOT"
+
+HOME_DIR="$(dscl . -read "/Users/$KIOSK_USER" NFSHomeDirectory | awk '{print $2}')"
+AGENT_DIR="$HOME_DIR/Library/LaunchAgents"
+
+echo
+echo "== readable tree, writable state"
+run chmod -R a+rX "$ROOT"
+# The app writes these three back: panel layout, panel placement, and any
+# preset saved from the panel during the run.
+for f in "$ROOT/imgui.ini" "$ROOT/mirror_panel.ini"; do
+    [ -e "$f" ] && run chmod a+w "$f"
+done
+run chmod -R a+w "$ROOT/mirror_app/presets"
+run mkdir -p "$LOG_DIR"
+run chmod 1777 "$LOG_DIR"
+
+echo
+echo "== launch agent"
+run mkdir -p "$AGENT_DIR"
+tmp="$(mktemp)"
+sed -e "s|@MIRROR_BIN@|$BIN|g" \
+    -e "s|@RACINE_ROOT@|$ROOT|g" \
+    -e "s|@LOG_DIR@|$LOG_DIR|g" \
+    "$HERE/$LABEL.plist.in" > "$tmp"
+if [ "$APPLY" = 1 ]; then
+    install -m 644 "$tmp" "$AGENT_DIR/$LABEL.plist"
+    chown "$KIOSK_USER" "$AGENT_DIR/$LABEL.plist"
+    echo "+ wrote $AGENT_DIR/$LABEL.plist"
+else
+    echo "  would write $AGENT_DIR/$LABEL.plist:"
+    sed 's/^/    | /' "$tmp"
+fi
+rm -f "$tmp"
+
+echo
+echo "== power behaviour"
+# Never sleep, never blank, come back from a power cut on its own.
+run pmset -a displaysleep 0 sleep 0 disablesleep 1
+run pmset -a autorestart 1
+run pmset -a womp 1                 # wake for network, so Jump Desktop can reach it
+run systemsetup -setrestartfreeze on 2>/dev/null || true
+
+echo
+echo "== not done here -- see README.md"
+cat <<NOTE
+  1. Automatic login for $KIOSK_USER (System Settings > Users & Groups),
+     which requires FileVault to be OFF.
+  2. Camera + microphone permission: log in as $KIOSK_USER, run
+     $BIN once from Terminal, click Allow.
+  3. Jump Desktop Connect, installed for all users, with Screen Recording
+     and Accessibility granted in the $KIOSK_USER session.
+  4. The expo days' schedule, when you know the dates:
+       sudo pmset repeat wakeorpoweron MTWRFSU $FROM:00 shutdown MTWRFSU $TO:00
+     and afterwards:  sudo pmset repeat cancel
+NOTE
+[ "$APPLY" = 1 ] || echo "
+(dry run -- nothing changed. Re-run with --apply, as root, to do it.)"
