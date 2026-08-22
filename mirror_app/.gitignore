@@ -1,1 +1,6 @@
 external/
+
+# Locked fits: the frozen film and the mesh uv of whoever sat in front of the
+# piece. Real people, taken at a performance, and re-derivable only by fitting
+# them again -- neither belongs in the repository.
+captures/

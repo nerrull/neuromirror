@@ -23,6 +23,7 @@
 #include "mirror_scene.h"
 #include "fit_target.h"
 #include "face_tracker.h"
+#include "face_capture.h"
 #include "face_fit.h"
 #if MIRROR_HAVE_KINECT
 #include "kinect_target.h"
@@ -37,6 +38,7 @@
 #include "screen_layout.h"
 #include "show_timeline.h"
 #include "presence.h"
+#include "chord.h"
 #include "wwise_audio.h"
 #include "LeafMesh.h"
 
@@ -1154,8 +1156,53 @@ struct FitTune {
 FitTune g_tune_crop{4, 2e-3f, 1};
 FitTune g_tune_full{1, 3e-3f, 3};
 bool  g_fit_live = false;       // retarget from the camera every frame
+
+// The fitting phase asked for a fit and has not got one yet.
+//
+// A phase entry cannot simply call beginFit(): it fires from inside the show
+// block, and whether there is a camera frame of the right size to fit is not a
+// question that has an answer at that moment -- the sensor may still be
+// opening, or the fit grid may have just changed shape. So the entry records
+// the *request* and the render loop honours it on the first frame that can,
+// which also means a phase entered before the sensor is up still fits as soon
+// as the sensor is up rather than silently never fitting at all.
+bool  g_fit_arm  = false;
+
+// --- the fit's frequency ramp -----------------------------------------------
+//
+// sine_w0 is how many regions the field breaks into, and a fit wants far more
+// of them than an idle mirror does: it is the frequency of the basis the
+// network has to reconstruct a face out of, and at the idle value there simply
+// are not enough of them to carry an eye.
+//
+// It cannot be turned up *during* a fit, which is the thing to know here. Once
+// the trainer is ready the render draws the learned weights, and sine_w0 only
+// ever shapes the *base* ones -- so its value matters at exactly one instant,
+// the beginFit that seeds the optimiser from them. Hence a ramp that runs
+// before the fit starts rather than alongside it: the arm waits for it.
+//
+// The ramp is also the visible part. Through it the idle field gains detail as
+// the person is captured, which is the transition the piece wants anyway.
+bool  g_w0_ramp_on   = true;
+float g_w0_fit       = 60.f;    // where the fitting phase takes it
+float g_w0_ramp_secs = 1.5f;
+// Ramp state: where it started, when, and what to put back on the way out.
+float g_w0_from      = 0.f;
+float g_w0_idle      = -1.f;    // < 0 = nothing saved
+double g_w0_t0       = -1.0;    // < 0 = not ramping
+
+// 0..1 through the ramp; 1 when it is done or not running.
+static float W0RampT(double now) {
+    if (g_w0_t0 < 0.0) return 1.f;
+    if (g_w0_ramp_secs <= 0.f) return 1.f;
+    return std::min(1.f, (float)((now - g_w0_t0) / g_w0_ramp_secs));
+}
 #if MIRROR_HAVE_KINECT
 mirror::KinectFitTarget g_kinect;
+// The sensor is opened at startup (see main). --no-sensor leaves it closed,
+// which is what you want when kinect_v2_demo needs the device: only one
+// process can hold it, and whoever asks second gets LIBUSB_ERROR_NO_DEVICE.
+bool g_open_sensor = true;
 #endif
 
 // --- face tracking ----------------------------------------------------------
@@ -1191,8 +1238,28 @@ mirror::FaceFitter  g_fitter;
 bool  g_track_on     = false;   // run the tracker at all
 bool  g_mask_fit     = true;    // crop the live fit to the face when there is one
 bool  g_drive_roots  = true;    // fitted mesh -> the root scene's face masks
-int   g_track_w      = 480;     // tracker input size
-int   g_track_h      = 360;
+// The tracker's input frame.
+//
+// Its *aspect must be the composition's*, and the size is derived per frame to
+// keep it that way -- these are only the last computed values, not settings.
+//
+// Everything downstream trades in landmark coordinates normalised to whatever
+// image the tracker was handed, and those coordinates are then applied straight
+// to the fit grid, to the region and to the preview. That is only meaningful if
+// all four are looking at the same rectangle of the sensor -- and
+// ComputeFeedRect picks its rect from the *destination's aspect*. Fixed at
+// 480x360 these were 4:3, while the fit grid and the preview follow the
+// composition, which on the installation's portrait panel is 9:16. Out of a
+// 1920x1080 sensor that is a 1440x1080 crop against a 608x1080 one: the tracker
+// was looking at more than twice the width the fit was, so a landmark at 0.6
+// across the tracker's frame landed at 0.74 across the fit's. Hence a mask
+// visibly offset from the face in the overlay -- and, since the same numbers
+// build the training mask, a fit supervised on the wrong pixels.
+int   g_track_w      = 480;
+int   g_track_h      = 270;
+// Long edge of that frame. MediaPipe wants more resolution than the fit grid --
+// a face a couple of hundred pixels wide is too few landmarks' worth of detail.
+int   g_track_px     = 480;
 int   g_mask_dilate  = 6;       // px, at fit-grid scale
 // What the crop is: the landmarks' bounding box, or the silhouette they trace.
 // The box is the default because it is what "fit the face" usually means in
@@ -1202,6 +1269,21 @@ enum class MaskShape { Box = 0, Hull = 1 };
 int   g_mask_shape   = (int)MaskShape::Box;
 float g_crop_pad     = 0.30f;   // box padding, as a fraction of the box's size
 bool  g_collect_id   = false;   // gathering identity samples
+// Start collecting on the frame a face is acquired with no identity fitted.
+//
+// The identity solve is what turns the mean face into *this* person's mask, and
+// nothing was ever starting it outside a running show: the operator pressed
+// "fit identity" or the mask stayed the basis's average, which is a real face
+// and the wrong one. An installation has nobody to press it. So the arrival of
+// a face with no identity behind it is the trigger, which also makes the
+// re-arm free -- every path that forgets a sitter already calls clearIdentity(),
+// and clearing it is now the same thing as asking for the next one.
+bool  g_auto_fit_id  = true;
+// Earliest the automatic start may fire again. A solve that produces nothing --
+// no retained frames, a basis that failed to load -- leaves hasIdentity() false,
+// and without this the trigger would refire on the very next frame and the app
+// would spend its life in a collection that never completes.
+double g_auto_fit_next = 0.0;
 double g_last_id_sample = 0.0;
 double g_id_started = 0.0;
 float g_id_collect_secs = 5.0f;
@@ -1258,6 +1340,10 @@ int64_t g_track_ts = 0;         // must increase monotonically for video mode
 // spread across the render code.
 mirror::WwiseAudio g_audio;
 mirror::Presence   g_presence;    // the room, as numbers the synth can use
+// The mirror phase's harmony (see chord.h). Fed from the same block that feeds
+// the RTPCs and reset from the same phase-entry switch that posts the events,
+// so there is no second notion of "how far through the fit are we".
+mirror::Chord      g_chord;
 bool  g_audio_on   = true;        // send anything at all
 bool  g_audio_auto = true;        // the phases post their own events
 float g_audio_key  = 48.f;        // MIDI note: the piece's base pitch
@@ -1268,6 +1354,17 @@ std::string g_audio_err;
 // own output at the fitted mesh's projected positions. Lives here rather than
 // in either scene because it is produced by one and consumed by the other.
 std::vector<float> g_face_colors;
+// --- locked fits -----------------------------------------------------------
+// The transition freezes the film and nails the mask's uv to it (see
+// transition_scene.h). That pair is the sitter, and it is written out under an
+// id so the root scene can wear it again later -- next scene, or next night.
+bool  g_capture_auto = true;          // write one every time the transition locks
+std::string g_capture_last;           // id of the most recent write, for the UI
+std::string g_capture_msg;            // what happened, shown in the panel
+std::vector<std::string> g_capture_ids;
+int   g_capture_sel = -1;
+// The capture currently worn by the root scene's masks, if any.
+std::string g_capture_loaded;
 bool  g_texture_mask = true;
 bool  g_face_colors_fresh = false;
 
@@ -1314,6 +1411,71 @@ bool  g_show_source   = false;
 int   g_source_pip_w  = 320;    // overlay width in points
 int   g_source_corner = 1;      // 0 TL, 1 TR, 2 BL, 3 BR
 bool  g_pip_landmarks = true;   // draw the tracker's landmarks over it
+
+// --- what the network is actually being trained on --------------------------
+//
+// The camera overlay answers "is a frame arriving". This answers the question
+// after it, which is the one a fit that converges onto the wrong thing actually
+// poses: of that frame, *which pixels reach the optimiser, at what resolution,
+// the right way round?* Everything between the sensor and the loss -- the feed
+// crop, the mirroring, the fit grid, the head placement, the mask -- lands in
+// this one buffer, and every one of them is a way for the input to be wrong
+// while every individual stage looks fine.
+//
+// So it is drawn from `live_rgb` itself, the exact vector handed to setTarget,
+// rather than rebuilt from the parts. A preview reconstructed from the same
+// inputs would agree with a broken pipeline.
+bool  g_show_netin    = false;
+int   g_netin_pip_w   = 260;
+int   g_netin_corner  = 3;
+// Dim the pixels the mask excludes instead of hiding them, so the crop can be
+// seen against what surrounds it. At 0 the untrained surround is black, which
+// is what the optimiser effectively sees.
+float g_netin_dim     = 0.22f;
+
+// The running-order readout: phase, what it is waiting for, and how the fit is
+// doing. Deliberately independent of the panel -- it is for watching the piece
+// run with the UI hidden, which is when a phase that will not advance is both
+// most likely and least visible.
+bool  g_show_hud      = false;
+
+// --- detached-panel viewports, rendered here rather than by the backend ------
+//
+// imgui_impl_metal's own Renderer_RenderWindow installs a CAMetalLayer on the
+// viewport's content view once, at creation, and thereafter only touches its
+// drawableSize when the backing scale factor changes. That holds right up until
+// something else replaces the view's layer -- which the window server does on
+// some window moves, particularly across screens -- and from then on the
+// backend is drawing into a layer that is no longer the one being displayed.
+// The window shows the empty layer that replaced it, i.e. black, and nothing
+// ever puts it right because from the backend's point of view it is still
+// rendering happily.
+//
+// So the layer is re-owned every frame instead of once: if the view is not
+// carrying our CAMetalLayer any more, install one. The size is re-derived from
+// the content view every frame too, off `bounds` rather than the window frame,
+// which is the thing actually being drawn into.
+//
+// The occlusion guard is kept, and kept for the reason upstream states rather
+// than as caution: -[CAMetalLayer nextDrawable] blocks for about a second on a
+// fully occluded layer, and this runs on the render thread, so one occluded
+// panel would take the whole piece to 1 fps. Skips are counted so a panel that
+// has gone quiet can be told apart from one that is drawing black.
+// How often the fit's target is actually being replaced.
+//
+// "The training buffer stopped updating" has three quite different causes --
+// the sensor stopped delivering, the target stopped being swapped, or the
+// optimiser stopped stepping -- and they are indistinguishable by looking at
+// the picture. These are counters rather than flags because the interesting
+// failure is a *rate* falling to zero, not a state.
+unsigned g_target_swaps = 0;
+
+unsigned g_vp_skips = 0;       // renders skipped as occluded
+unsigned g_vp_relayers = 0;    // times the layer had to be re-installed
+// The override is installed as a plain function pointer, so what it needs is
+// here rather than captured.
+id<MTLDevice> g_vp_device = nil;
+id<MTLCommandQueue> g_vp_queue = nil;
 
 // --- the control panel's own window ------------------------------------------
 //
@@ -1429,11 +1591,21 @@ static float CamMaskAt(float u, float v) {
     return t * t * (3.f - 2.f * t);
 }
 
+static void ApplyCamMaskF(std::vector<float>& rgb, int w, int h,
+                          const mirror::DstRect& fill);
 static void ApplyCamMaskF(std::vector<float>& rgb, int w, int h) {
+    ApplyCamMaskF(rgb, w, h, mirror::DstRect{});
+}
+static void ApplyCamMaskF(std::vector<float>& rgb, int w, int h,
+                          const mirror::DstRect& fill) {
     if (!g_cam_mask_on || w <= 0 || h <= 0 || rgb.size() != size_t(w) * h * 3) return;
-    for (int y = 0; y < h; ++y) {
+    const int x0 = (fill.w > 0) ? std::max(0, fill.x) : 0;
+    const int y0 = (fill.h > 0) ? std::max(0, fill.y) : 0;
+    const int x1 = (fill.w > 0) ? std::min(w, fill.x + fill.w) : w;
+    const int y1 = (fill.h > 0) ? std::min(h, fill.y + fill.h) : h;
+    for (int y = y0; y < y1; ++y) {
         const float v = (float(y) + 0.5f) / float(h);
-        for (int x = 0; x < w; ++x) {
+        for (int x = x0; x < x1; ++x) {
             const float m = CamMaskAt((float(x) + 0.5f) / float(w), v);
             if (m >= 1.f) continue;
             float* p = &rgb[(size_t(y) * w + x) * 3];
@@ -1455,18 +1627,26 @@ static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h) {
     }
 }
 
-static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out) {
+// `filtered` false takes one source pixel per destination pixel instead of
+// averaging the footprint -- for the overlay, which only has to look right.
+static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
+                       bool filtered = true) {
     if (g_source == (int)Source::Photo) {
         if (g_photo.empty()) return false;
-        mirror::DownsampleRectToRGB8(
-            g_photo.data(), g_photo_w, g_photo_h, 3, 0, 2,
-            mirror::ComputeFeedRect(g_photo_w, g_photo_h, w, h, g_feed),
-            w, h, out);
+        const mirror::SrcRect r =
+            mirror::ComputeFeedRect(g_photo_w, g_photo_h, w, h, g_feed);
+        if (filtered) {
+            mirror::DownsampleRectToRGB8(g_photo.data(), g_photo_w, g_photo_h,
+                                         3, 0, 2, r, w, h, out);
+        } else {
+            mirror::PointSampleRectToRGB8(g_photo.data(), g_photo_w, g_photo_h,
+                                          3, 0, 2, r, w, h, out);
+        }
         ApplyCamMask8(out, w, h);
         return true;
     }
 #if MIRROR_HAVE_KINECT
-    if (!g_kinect.lastFrameRGB8(w, h, out)) return false;
+    if (!g_kinect.lastFrameRGB8(w, h, out, filtered)) return false;
     ApplyCamMask8(out, w, h);
     return true;
 #else
@@ -1474,20 +1654,35 @@ static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out) {
 #endif
 }
 
-static bool SourceRGBF(int w, int h, std::vector<float>& out) {
+// `fill` bounds the work to the part of the fit grid the training pass will
+// read -- see FitFillRects. An empty rect means the whole frame.
+static bool SourceRGBF(int w, int h, std::vector<float>& out,
+                       const mirror::DstRect& fill = {}) {
     if (g_source == (int)Source::Photo) {
         if (g_photo.empty()) return false;
         mirror::DownsampleRectRGB8(
             g_photo.data(), g_photo_w, g_photo_h, 3, 0, 2,
             mirror::ComputeFeedRect(g_photo_w, g_photo_h, w, h, g_feed),
-            w, h, out);
-        ApplyCamMaskF(out, w, h);
+            w, h, out, fill);
+        ApplyCamMaskF(out, w, h, fill);
         return true;
     }
 #if MIRROR_HAVE_KINECT
-    if (!g_kinect.poll(w, h, out)) return false;
-    ApplyCamMaskF(out, w, h);
+    if (!g_kinect.lastFrameRGBF(w, h, out, fill)) return false;
+    ApplyCamMaskF(out, w, h, fill);
     return true;
+#else
+    return false;
+#endif
+}
+
+// Move the source on by one frame without resampling it. Returns true when
+// something new arrived -- which is what decides whether the fit gets a new
+// target, and therefore whether the resample below is worth doing at all.
+static bool SourceAdvance() {
+    if (g_source == (int)Source::Photo) return !g_photo.empty();
+#if MIRROR_HAVE_KINECT
+    return g_kinect.pump();
 #else
     return false;
 #endif
@@ -1660,6 +1855,35 @@ static bool BuildFitMask(int fw, int fh, std::vector<unsigned char>& mask) {
 // function and drawn as another.
 bool g_have_mask = false;
 
+// Where the mask sits in the fit grid, as a rect: what the training pass will
+// actually read out of the target frame.
+//
+// The trainer gathers masked pixels into a compact batch, so with a face crop
+// up it reads a few percent of the frame and the other 96% is resampled for
+// nothing. Scanned off the finished mask rather than derived from the head box
+// a second time -- the bound has to be *exactly* right or the fit trains on
+// stale pixels, and re-deriving it is how the two get to disagree.
+static mirror::DstRect g_mask_bbox;
+
+static void ScanMaskBBox(const std::vector<unsigned char>& mask, int fw, int fh,
+                         mirror::DstRect& out) {
+    out = mirror::DstRect{};
+    if (fw <= 0 || fh <= 0 || mask.size() != size_t(fw) * fh) return;
+    int x0 = fw, y0 = fh, x1 = -1, y1 = -1;
+    for (int y = 0; y < fh; ++y) {
+        const unsigned char* row = &mask[size_t(y) * fw];
+        for (int x = 0; x < fw; ++x) {
+            if (!row[x]) continue;
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            y1 = y;
+        }
+    }
+    if (x1 < x0 || y1 < y0) return;
+    out = mirror::DstRect{x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+}
+
 static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh) {
     P.coord_off_x = P.coord_off_y = 0.f;
     P.region.on = false;
@@ -1667,6 +1891,7 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh) {
     P.z_free_outside = g_z_free;
     P.grey_outside = g_grey_out;
     g_have_mask = false;
+    g_mask_bbox = mirror::DstRect{};
     if (!HaveCrop() || fw <= 0 || fh <= 0) return;
 
     const float asp = float(fw) / float(fh);
@@ -1682,6 +1907,8 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh) {
     // supposed to mark where supervision stops, and deriving it separately
     // would let the two drift.
     g_have_mask = BuildFitMask(fw, fh, g_fit_mask);
+    if (g_have_mask) ScanMaskBBox(g_fit_mask, fw, fh, g_mask_bbox);
+    else             g_mask_bbox = mirror::DstRect{};
     if (!g_region_on) return;
 
     P.region.on = true;
@@ -1713,17 +1940,62 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh) {
     P.region.fade_width = std::max(0.01f, g_fade_width);
 }
 
-// How big the subject should be on screen, in the centred mode: the half-height
-// the head box is resampled to, as a fraction of the frame. Off by default,
-// where the size is simply whatever distance the person is standing at.
+// How big the subject should be on screen: the half-height the head box is
+// resampled to, as a fraction of the frame. Off by default, where the size is
+// simply whatever distance the person is standing at.
 bool  g_face_size_on = false;
 float g_face_size    = 0.25f;
 
-// The scale the centred mode is currently applying.
+// Where the subject is put, and how big.
+//
+// One function because the two are one resampling. Setting a size used to imply
+// centring, which is two wishes welded together: you could only have "make them
+// bigger" by also accepting "and move them to the middle". They are separate
+// here -- the centred mode pins the destination to the middle of the frame,
+// every other mode leaves the subject where the camera found it and only
+// changes the scale.
+//
+// Returns false when there is nothing to do, which is the common case and worth
+// distinguishing: an identity placement still costs a full bilinear resample of
+// the frame, and one that resamples the face every frame is precisely the noise
+// the whole-pixel shift exists to avoid.
+static bool HeadPlacement(float& s, float& dcx, float& dcy) {
+    s = 1.f;
+    dcx = dcy = 0.5f;
+    if (!HaveCrop()) return false;
+    const bool centred = (g_head_mode == (int)HeadMode::Centred);
+    // Not in the input-shift mode: that one moves the network's coordinates and
+    // the render undoes it again, so resampling the pixels underneath would be
+    // two placements arguing.
+    const bool resize = g_face_size_on &&
+                        g_head_mode != (int)HeadMode::Stabilised;
+    if (!centred && !resize) return false;
+
+    if (resize)
+        s = std::min(6.f, std::max(0.1f, g_face_size / std::max(g_head_hy, 1e-3f)));
+
+    if (!centred) {
+        // Stay where they are -- but a scaled crop can run off the edge, and a
+        // subject half outside the frame is half unsupervised. Clamped by the
+        // scaled half-extent, so the box slides inward only as far as it must.
+        // A subject too big to fit is centred instead, which is the only
+        // placement that keeps as much of them as possible.
+        const float hx = g_head_hx * s, hy = g_head_hy * s;
+        dcx = (hx >= 0.5f) ? 0.5f
+                           : std::min(std::max(g_head_cx, hx), 1.f - hx);
+        dcy = (hy >= 0.5f) ? 0.5f
+                           : std::min(std::max(g_head_cy, hy), 1.f - hy);
+        // No scale change and no move: nothing worth a resample.
+        if (s == 1.f) return false;
+    }
+    return true;
+}
+
+// The scale the placement is currently applying, for the panel's readout.
 static float PlaceScale() {
-    if (g_head_mode != (int)HeadMode::Centred || !HaveCrop() || !g_face_size_on)
-        return 1.f;
-    return std::min(6.f, std::max(0.1f, g_face_size / std::max(g_head_hy, 1e-3f)));
+    float s = 1.f, dcx = 0.5f, dcy = 0.5f;
+    HeadPlacement(s, dcx, dcy);
+    return s;
 }
 
 // Where the fit drew the face, relative to where the tracker saw it, in
@@ -1736,28 +2008,64 @@ static float PlaceScale() {
 static void PinTransform(float& scale, float& u, float& v) {
     scale = 1.f;
     u = v = 0.f;
-    // Only the centred mode moves the subject on screen. The input-shift mode
-    // moves the network's coordinates and the render undoes it again, so the
-    // face lands back where the camera found it.
-    if (g_head_mode != (int)HeadMode::Centred || !HaveCrop()) return;
-    scale = PlaceScale();
-    u = 0.5f - g_head_cx * scale;
-    v = 0.5f - g_head_cy * scale;
+    float s = 1.f, dcx = 0.5f, dcy = 0.5f;
+    if (!HeadPlacement(s, dcx, dcy)) return;
+    // The same map PlaceLiveFrame applies, written the other way round:
+    // dest = (src - src_c) * s + dst_c  ==  src * s + (dst_c - s * src_c).
+    scale = s;
+    u = dcx - g_head_cx * s;
+    v = dcy - g_head_cy * s;
 }
 
 // Place the subject for the centred mode. At scale 1 this is a whole-pixel
 // shift, which is what the mode wants -- resampling the face every frame is
 // precisely the noise it exists to remove. Asking for a specific size makes
 // interpolation unavoidable, so that path costs a bilinear resample and says so.
-static void PlaceLiveFrame(std::vector<float>& rgb, int fw, int fh) {
-    if (g_head_mode != (int)HeadMode::Centred || !HaveCrop()) return;
-    const float s = PlaceScale();
+static void PlaceLiveFrame(std::vector<float>& rgb, int fw, int fh,
+                           const mirror::DstRect& fill) {
+    float s = 1.f, dcx = 0.5f, dcy = 0.5f;
+    if (!HeadPlacement(s, dcx, dcy)) return;
     if (s == 1.f) {
-        mirror::ShiftRGBF(fw, fh, (int)std::lround((0.5f - g_head_cx) * fw),
-                          (int)std::lround((0.5f - g_head_cy) * fh), rgb);
+        // A pure move: whole pixels, no interpolation. Resampling the face
+        // every frame is the noise this mode exists to remove.
+        mirror::ShiftRGBF(fw, fh, (int)std::lround((dcx - g_head_cx) * fw),
+                          (int)std::lround((dcy - g_head_cy) * fh), rgb, fill);
     } else {
-        mirror::PlaceRGBF(fw, fh, g_head_cx, g_head_cy, s, rgb);
+        mirror::PlaceRGBF(fw, fh, g_head_cx, g_head_cy, s, dcx, dcy, rgb, fill);
     }
+}
+
+// The two rects the live frame needs this frame: `read` is what the training
+// pass will look at, `resample` is what has to be produced to satisfy it.
+//
+// They differ only in the head-centred mode, which moves the pixels after the
+// resample: the mask is built at the *pinned* position, so the pixels feeding
+// it come from the crop's real position -- the mask rect shifted back by the
+// displacement the placement is about to apply.
+//
+// Returns false when the whole frame is needed, which is the honest answer
+// whenever there is no crop (the fit trains on everything) and whenever the
+// placement resamples rather than shifts (bilinear scatters its reads).
+static bool FitFillRects(int fw, int fh, mirror::DstRect& resample,
+                         mirror::DstRect& read) {
+    if (!g_have_mask || g_mask_bbox.w <= 0 || g_mask_bbox.h <= 0) return false;
+
+    // A margin against the rounding in the shift below and in the rasteriser.
+    const int m = 2;
+    read = mirror::DstRect{g_mask_bbox.x - m, g_mask_bbox.y - m,
+                           g_mask_bbox.w + 2 * m, g_mask_bbox.h + 2 * m};
+
+    float s = 1.f, dcx = 0.5f, dcy = 0.5f;
+    if (!HeadPlacement(s, dcx, dcy)) {
+        resample = read;                        // nothing moves the pixels
+        return true;
+    }
+    if (s != 1.f) return false;                 // bilinear: reads everywhere
+
+    const int dx = (int)std::lround((dcx - g_head_cx) * fw);
+    const int dy = (int)std::lround((dcy - g_head_cy) * fh);
+    resample = mirror::DstRect{read.x - dx, read.y - dy, read.w, read.h};
+    return true;
 }
 
 static bool SourceReady() {
@@ -2608,17 +2916,24 @@ static int audiotest(double seconds, const char* wav_out) {
 
     struct Beat { double at; const char* phase; const char* event; };
     const Beat beats[] = {
-        {0.00, "Idle",       "Play_Amb_Mirror"},
-        {0.30, "Fitting",    nullptr},
+        {0.00, "Idle",       "Play_FirePlucker"},   // an empty room: pluck only
+        {0.30, "Fitting",    "Play_Pad"},           // the chord swells in
         {0.42, nullptr,      "Play_Drop"},
         {0.50, nullptr,      "Play_Pluck"},
         {0.58, nullptr,      "Play_Bell"},
         {0.65, "Transition", "Play_Transition"},
+        {0.67, nullptr,      "Stop_Pad"},
+        {0.70, nullptr,      "Stop_FirePlucker"},
         {0.78, "Roots",      "Play_Amb_Roots"},
-        {0.80, nullptr,      "Stop_Amb_Mirror"},
         {0.96, nullptr,      "Stop_Amb_Roots"},
     };
+    // The harmony, driven from the same module the show drives it from, so this
+    // exercises the real chord rather than a second copy of the table. The fit
+    // sweep below crosses every checkpoint, so a run is audibly the whole arc:
+    // dark minor at the top, resolved major by the handoff.
+    mirror::Chord chord;
     size_t next = 0;
+    int last_stage = -1;
 
     const double t0 = clock_now();
     double t = 0.0;
@@ -2650,6 +2965,19 @@ static int audiotest(double seconds, const char* wav_out) {
         p.scene_progress = (float)u;
         p.key            = 48.f;
         p.intensity      = 1.f;
+
+        chord.config().root = p.key;
+        chord.update(p.fit_level, p.movement, 0.016f);
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            p.pad_note[i] = chord.voicing().note[i];
+        p.comb_hz = chord.voicing().comb_hz;
+        if (chord.voicing().stage != last_stage) {
+            last_stage = chord.voicing().stage;
+            printf("  %5.1fs  chord stage %d  (%.1f %.1f %.1f %.1f)\n", t,
+                   last_stage + 1, chord.voicing().target[0], chord.voicing().target[1],
+                   chord.voicing().target[2], chord.voicing().target[3]);
+        }
+
         audio.update(p);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
@@ -2746,6 +3074,9 @@ int main(int argc, char** argv) {
         if (a == "--panel-window") { g_ui_detached = true; g_panel_cli = true; continue; }
         if (a == "--no-panel")     { g_ui_visible = false; continue; }
         if (a == "--fullscreen")   { g_fullscreen = true; continue; }
+#if MIRROR_HAVE_KINECT
+        if (a == "--no-sensor")    { g_open_sensor = false; continue; }
+#endif
         // Write the settings document and quit. It has to run the real panel
         // for a frame -- the registry *is* the panel -- but only one, because
         // declaring no longer depends on what is open or which scene is up.
@@ -3276,6 +3607,31 @@ int main(int argc, char** argv) {
             printf("machine settings: loaded %s\n", ui::MachinePath().c_str());
         else
             printf("machine settings: none yet (%s)\n", e.c_str());
+
+        // ...and then whatever each of the other banks was told to come up in.
+        // Machine alone was never enough: the installation boots with nobody in
+        // front of it, so without this the mirror, the look and the roots came
+        // up on the defaults compiled into their structs however carefully they
+        // had been dialled in the night before, and the only way to get last
+        // night's state back was to open the panel and load four presets by
+        // hand. Staged like every other load; they land on the first frame.
+        std::string derr;
+        if (ui::LoadDefaults(derr)) {
+            std::string berr;
+            const int n = ui::LoadBankDefaults(berr);
+            printf("defaults: %d bank(s) loaded", n);
+            for (int b = (int)ui::Bank::Fit; b < (int)ui::Bank::Count; ++b) {
+                const std::string nm = ui::DefaultName((ui::Bank)b);
+                if (!nm.empty())
+                    printf("  %s=%s", ui::BankName((ui::Bank)b), nm.c_str());
+            }
+            printf("\n");
+            // A default naming a preset that has since been deleted is worth
+            // saying out loud and not worth refusing to start over.
+            if (!berr.empty()) printf("defaults: %s\n", berr.c_str());
+        } else {
+            printf("defaults: none set (%s)\n", derr.c_str());
+        }
         fflush(stdout);
     }
 
@@ -3336,6 +3692,8 @@ int main(int argc, char** argv) {
     }
     ImGui_ImplGlfw_InitForOther(win, true);
     ImGui_ImplMetal_Init(device);
+    g_vp_device = device;
+    g_vp_queue = [device newCommandQueue];
 
     // Retina fix for detached panels, over imgui_impl_metal.
     //
@@ -3364,6 +3722,74 @@ int main(int argc, char** argv) {
                                         std::max(CGFloat(1), size.y * s));
         };
 
+    // ...and the render path over it, for the black panel.
+    //
+    // See g_vp_skips: the backend installs the viewport's CAMetalLayer once and
+    // then assumes it is still the layer being displayed. When something
+    // replaces the content view's layer -- which happens on some window moves --
+    // it goes on rendering into the orphan, and the window shows the empty one
+    // that took its place. Black, permanently, with nothing reporting a fault.
+    //
+    // Re-owning the layer every frame is the fix; re-deriving the size from the
+    // content view's bounds each frame is the other half, since a stale
+    // drawableSize is the same symptom by a different route.
+    if (getenv("MIRROR_NO_VIEWPORT_FIX") == nullptr)
+        ImGui::GetPlatformIO().Renderer_RenderWindow =
+            [](ImGuiViewport* vp, void*) {
+        void* handle = vp->PlatformHandleRaw ? vp->PlatformHandleRaw
+                                             : vp->PlatformHandle;
+        if (!handle) return;
+        NSWindow* w = (__bridge NSWindow*)handle;
+        NSView* view = w.contentView;
+        if (!view) return;
+
+        // Not on screen at all: nothing to draw into, and asking would block.
+        if (!w.isVisible || w.isMiniaturized) return;
+        // Fully occluded: -[CAMetalLayer nextDrawable] blocks about a second on
+        // one of these, and this is the render thread. Counted rather than
+        // silent -- a panel that has stopped being drawn and a panel that is
+        // drawing black look identical from the outside and want opposite
+        // fixes.
+        if ((w.occlusionState & NSWindowOcclusionStateVisible) == 0) {
+            ++g_vp_skips;
+            return;
+        }
+
+        CAMetalLayer* l = nil;
+        if ([view.layer isKindOfClass:[CAMetalLayer class]])
+            l = (CAMetalLayer*)view.layer;
+        if (!l) {
+            l = [CAMetalLayer layer];
+            l.device = g_vp_device;
+            l.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            l.framebufferOnly = YES;
+            view.layer = l;
+            view.wantsLayer = YES;
+            ++g_vp_relayers;
+        }
+
+        const CGFloat sc = w.backingScaleFactor;
+        const CGSize want = CGSizeMake(
+            std::max(CGFloat(1), view.bounds.size.width * sc),
+            std::max(CGFloat(1), view.bounds.size.height * sc));
+        if (l.contentsScale != sc) l.contentsScale = sc;
+        if (!CGSizeEqualToSize(l.drawableSize, want)) l.drawableSize = want;
+
+        id<CAMetalDrawable> d = [l nextDrawable];
+        if (!d) return;
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = d.texture;
+        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        id<MTLCommandBuffer> cb = [g_vp_queue commandBuffer];
+        id<MTLRenderCommandEncoder> re =
+            [cb renderCommandEncoderWithDescriptor:rp];
+        ImGui_ImplMetal_RenderDrawData(vp->DrawData, cb, re);
+        [re endEncoding];
+        [cb presentDrawable:d];
+        [cb commit];
+    };
+
     // The sound engine, as early as the rest of the subsystems. A failure here
     // is reported and carried past: a missing bank should cost the show its
     // audio, not its picture.
@@ -3381,6 +3807,9 @@ int main(int argc, char** argv) {
     MirrorScene mirror(ctx);
     RootScene roots(ctx, W, H);
     TransitionScene trans(ctx, W, H);
+    // What is already on disk, so the picker is populated before anything
+    // has been captured this run.
+    g_capture_ids = mirror::ListCaptures();
     FitViewScene fitview(ctx, std::string(MIRROR_APP_SHADER_DIR) + "/fit_view.metal", W, H);
     FullscreenPresent present(ctx, std::string(MIRROR_APP_SHADER_DIR) + "/present.metal",
                               layer.pixelFormat);
@@ -3402,6 +3831,23 @@ int main(int argc, char** argv) {
     // take.
     if (!ShowLoad(g_show_name))
         printf("show: %s -- using the built-in running order\n", g_show_err.c_str());
+
+#if MIRROR_HAVE_KINECT
+    // The installation has nobody to press "open sensor", so the camera comes
+    // up with the app. A failure here is reported and not fatal: every scene
+    // but the live fit runs without the sensor, and the panel's "open sensor"
+    // is still there to retry once the cable or the other process is dealt
+    // with. Arming the live feed stays a deliberate act -- this opens the
+    // device, it does not start training.
+    if (g_open_sensor) {
+        std::string kerr;
+        if (g_kinect.open(kerr))
+            printf("kinect: %s\n", g_kinect.deviceInfo().c_str());
+        else
+            printf("kinect: %s -- use \"open sensor\" in the panel to retry "
+                   "(--no-sensor skips this)\n", kerr.c_str());
+    }
+#endif
 
     int downscale = 4;       // mirror render-resolution divisor (low-res + upsample)
     int rootDownscale = 1;   // roots render-resolution divisor (manual, when auto off)
@@ -3435,6 +3881,19 @@ int main(int argc, char** argv) {
 #if MIRROR_HAVE_KINECT
         g_kinect.setCrop(g_feed);
 #endif
+
+        // And so does the tracker's frame. Derived here, from the same
+        // composition every other consumer of the feed is derived from, so the
+        // rect ComputeFeedRect selects for the tracker is the rect it selects
+        // for the fit grid and for the preview -- which is the whole reason
+        // landmarks normalised against one can be applied to the others.
+        if (compW >= compH) {
+            g_track_w = g_track_px;
+            g_track_h = std::max(1, int(int64_t(g_track_px) * compH / compW));
+        } else {
+            g_track_h = g_track_px;
+            g_track_w = std::max(1, int(int64_t(g_track_px) * compW / compH));
+        }
 
         @autoreleasepool {
             id<CAMetalDrawable> drawable = [layer nextDrawable];
@@ -3479,7 +3938,13 @@ int main(int argc, char** argv) {
                 const FitTune& grid = g_have_mask ? g_tune_crop : g_tune_full;
                 fit_w = std::max(8, lw / std::max(1, grid.downscale));
                 fit_h = std::max(8, lh / std::max(1, grid.downscale));
-                live_fresh = SourceRGBF(fit_w, fit_h, live_rgb);
+                // Only *advance* the source here. The resample used to happen
+                // at this point too, which forced it to run before the tracker
+                // and therefore before anything knew where the face was -- so
+                // it had to produce the whole frame. It is deferred to just
+                // below the mask instead, where the region it actually needs
+                // is known exactly rather than guessed a frame late.
+                live_fresh = SourceAdvance();
                 source_polled = true;
             }
 
@@ -3524,6 +3989,18 @@ int main(int argc, char** argv) {
                     if (hit && g_face_streak >= std::max(1, g_face_acquire)) {
                         g_face = std::move(r);
                         if (g_fitter.valid()) {
+                            // The automatic start. Gated on the same acquire
+                            // streak everything else here is, so a single
+                            // spurious detection cannot kick off a collection
+                            // that then has to be cancelled.
+                            if (g_auto_fit_id && !g_collect_id &&
+                                !g_fitter.hasIdentity() && nowT >= g_auto_fit_next) {
+                                g_fitter.clearIdentity();
+                                g_id_residual = -1.f;
+                                g_collect_id = true;
+                                g_id_started = nowT;
+                                g_auto_fit_next = nowT + g_id_collect_secs + 2.0;
+                            }
                             // Space the identity samples out in time. Taking
                             // them on consecutive render frames would collect
                             // eight views of the same 130 ms -- the multi-frame
@@ -3560,7 +4037,88 @@ int main(int argc, char** argv) {
             // must read the same values.
             UpdateHeadBox();
             ApplyHeadMode(mirror.params(), fit_w, fit_h);
-            if (live_fresh) PlaceLiveFrame(live_rgb, fit_w, fit_h);
+
+            // --- the fit's target, over the mask only --------------------
+            //
+            // Now that the mask exists, resample just the part of the frame the
+            // training pass will read. Everything outside keeps whatever it
+            // last held: the trainer gathers masked pixels into a compact batch
+            // and never looks at the rest, which is exactly the licence to not
+            // produce it. With a face crop that is a few percent of the frame.
+            //
+            // Gated on g_fit_live because nothing else reads live_rgb -- the
+            // tracker and the overlay have their own frames off the same
+            // retained snapshot.
+            // Whether live_rgb currently holds a complete frame or only the
+            // region some earlier mask needed. It matters because the no-crop
+            // path trains on *everything*: a face lost on a frame the sensor
+            // had nothing new for would otherwise adopt the last bounded fill
+            // and train on its stale surround.
+            static bool live_rgb_whole = false;
+            if (g_fit_live && fit_w > 0) {
+                mirror::DstRect resample_rect, read_rect;
+                const bool bounded = FitFillRects(fit_w, fit_h, resample_rect,
+                                                  read_rect);
+                // A fresh frame is the usual trigger; needing the whole frame
+                // when only part of one is in hand is the other.
+                if (live_fresh || (!bounded && !live_rgb_whole)) {
+                    if (SourceRGBF(fit_w, fit_h, live_rgb,
+                                   bounded ? resample_rect : mirror::DstRect{})) {
+                        PlaceLiveFrame(live_rgb, fit_w, fit_h,
+                                       bounded ? read_rect : mirror::DstRect{});
+                        live_rgb_whole = !bounded;
+                    }
+                }
+            } else if (!g_fit_live) {
+                // Nothing is training on it; do not hold a stale frame that
+                // would be adopted the moment the feed is armed.
+                live_rgb.clear();
+                live_rgb_whole = false;
+            }
+
+            // --- the network's input, as a picture ------------------------
+            //
+            // Uploaded here, from the buffer the trainer is about to be handed,
+            // so what is on screen is this frame's target and not a
+            // reconstruction of it. Masked pixels at full brightness, the rest
+            // dimmed: the difference between them is exactly the difference
+            // between what is supervised and what the network is free to invent.
+            static id<MTLTexture> netTex = nil;
+            static int netTexW = 0, netTexH = 0;
+            static std::vector<unsigned char> netRGBA;
+            bool netFresh = false;
+            if (g_show_netin && fit_w > 0 && fit_h > 0 &&
+                live_rgb.size() == size_t(fit_w) * fit_h * 3) {
+                if (!netTex || netTexW != fit_w || netTexH != fit_h) {
+                    MTLTextureDescriptor* td = [MTLTextureDescriptor
+                        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                     width:fit_w
+                                                    height:fit_h
+                                                 mipmapped:NO];
+                    td.usage = MTLTextureUsageShaderRead;
+                    td.storageMode = MTLStorageModeManaged;
+                    netTex = [ctx.device() newTextureWithDescriptor:td];
+                    netTexW = fit_w; netTexH = fit_h;
+                }
+                netRGBA.resize(size_t(fit_w) * fit_h * 4);
+                const bool have_mask =
+                    g_have_mask && g_fit_mask.size() == size_t(fit_w) * fit_h;
+                for (size_t i = 0, n = size_t(fit_w) * fit_h; i < n; ++i) {
+                    const bool trained = !have_mask || g_fit_mask[i];
+                    const float k = trained ? 1.f : g_netin_dim;
+                    for (int c = 0; c < 3; ++c) {
+                        const float v = live_rgb[i * 3 + c] * k;
+                        netRGBA[i * 4 + c] =
+                            (unsigned char)(std::min(1.f, std::max(0.f, v)) * 255.f + 0.5f);
+                    }
+                    netRGBA[i * 4 + 3] = 255;
+                }
+                [netTex replaceRegion:MTLRegionMake2D(0, 0, fit_w, fit_h)
+                          mipmapLevel:0
+                            withBytes:netRGBA.data()
+                          bytesPerRow:size_t(fit_w) * 4];
+                netFresh = true;
+            }
 
             // --- the show -------------------------------------------------
             //
@@ -3607,6 +4165,24 @@ int main(int argc, char** argv) {
                             g_collect_id = false;
                             g_id_residual = -1.f;
                             if (g_fitter.valid()) g_fitter.clearIdentity();
+                            // The *neural* fit is the other half of the same
+                            // forgetting, and it was not being done: the weights
+                            // stayed trained on whoever was last in the room, so
+                            // the idle mirror was quietly still wearing their
+                            // face while it waited for the next person.
+                            g_fit_arm = false;
+                            mirror.pond().clearFit();
+                            // Put the idle field back the way the preset had
+                            // it, or every pass through the piece would leave
+                            // the mirror a little more textured than the last.
+                            if (g_w0_idle >= 0.f) mirror.params().sine_w0 = g_w0_idle;
+                            g_w0_t0 = -1.0;
+                            g_w0_idle = -1.f;
+                            // The harmony is the third thing that has to be
+                            // forgotten. Without this the next person walks in
+                            // on the last one's resolved major and the whole
+                            // arc has already happened.
+                            g_chord.reset();
                             break;
                         case show::Phase::Fitting:
                             // Start collecting the moment the phase opens, so
@@ -3617,6 +4193,27 @@ int main(int argc, char** argv) {
                                 g_id_residual = -1.f;
                                 g_collect_id = true;
                                 g_id_started = nowT;
+                            }
+                            // ...and start the fit itself. This phase *is* the
+                            // fit -- the identity collection above only shapes
+                            // the mesh -- but nothing here ever armed the feed
+                            // or called beginFit, so the phase ran its whole
+                            // length with the network untouched and handed the
+                            // transition whatever was on screen. The operator
+                            // pressing "fit" on the mirror page was the only
+                            // thing that ever started one, which an installation
+                            // has nobody to do.
+                            g_fit_live = true;
+                            g_fit_arm = true;
+                            // Take the basis up to fitting frequency first.
+                            // The arm below waits for it: seeding the optimiser
+                            // at the idle w0 and turning it up afterwards would
+                            // change nothing, because a fitted network no
+                            // longer derives from it.
+                            if (g_w0_ramp_on) {
+                                g_w0_idle = mirror.params().sine_w0;
+                                g_w0_from = mirror.params().sine_w0;
+                                g_w0_t0 = nowT;
                             }
                             break;
                         case show::Phase::Transition:
@@ -3643,21 +4240,33 @@ int main(int argc, char** argv) {
                         g_audio.setState("Phase", show::PhaseName(p));
                         switch (p) {
                             case show::Phase::Idle:
-                                g_audio.post("Play_Amb_Mirror");
+                                // An empty room is the pluck and nothing else.
+                                // The pad is a response to somebody being
+                                // there, so it has no business playing to an
+                                // empty room -- and its 8s stop fade means the
+                                // last person's chord is still dying away as
+                                // this posts.
+                                g_audio.post("Play_FirePlucker");
+                                g_audio.post("Stop_Pad");
                                 g_audio.post("Stop_Amb_Roots");
                                 break;
                             case show::Phase::Fitting:
-                                // Same bed as Idle, still running: the fitting
-                                // phase is a change in the room, not a change
-                                // of music, and FitLevel carries it.
-                                g_audio.post("Play_Amb_Mirror");
+                                // The pluck keeps running underneath -- this is
+                                // a layer arriving, not a change of music. The
+                                // pad's own 6s envelope attack is the fade-in;
+                                // nothing here times it.
+                                g_audio.post("Play_FirePlucker");
+                                g_audio.post("Play_Pad");
                                 break;
                             case show::Phase::Transition:
                                 g_audio.post("Play_Transition");
+                                g_audio.post("Stop_Pad");
+                                g_audio.post("Stop_FirePlucker");
                                 break;
                             case show::Phase::Roots:
                                 g_audio.post("Play_Amb_Roots");
-                                g_audio.post("Stop_Amb_Mirror");
+                                g_audio.post("Stop_Pad");
+                                g_audio.post("Stop_FirePlucker");
                                 break;
                             default:
                                 break;
@@ -3671,6 +4280,48 @@ int main(int argc, char** argv) {
                 // is still whatever it was, still showing what it should.
                 scene = (g_view_override >= 0) ? g_view_override
                                                : g_show_scene[(int)g_show.phase()];
+
+                // --- honour a requested fit ---------------------------------
+                //
+                // Here rather than at the phase entry that asked for it: this is
+                // the first point where the frame, the crop and the mask have
+                // all settled for this frame, and it is the same data the manual
+                // "fit" button on the mirror page works from -- so an automatic
+                // fit and a hand-started one are the same operation.
+                //
+                // `live_fresh` deliberately is not required. The sensor runs at
+                // 30 Hz under a faster render loop, so most frames have nothing
+                // new; live_rgb still holds the last one at the right size, and
+                // waiting for a fresh frame would stall the fit for no reason.
+                // --- the frequency ramp, advanced ---------------------
+                //
+                // Before the arm is honoured, because the value it lands on is
+                // the one beginFit seeds the optimiser from.
+                if (g_w0_t0 >= 0.0) {
+                    const float t = W0RampT(nowT);
+                    // Smoothstep rather than linear: the field gaining detail
+                    // is on screen, and a ramp that starts and stops abruptly
+                    // reads as a glitch rather than as the piece doing
+                    // something.
+                    const float e = t * t * (3.f - 2.f * t);
+                    mirror.params().sine_w0 = g_w0_from + (g_w0_fit - g_w0_from) * e;
+                    if (t >= 1.f) g_w0_t0 = -1.0;
+                }
+
+                if (g_fit_arm && g_fit_live && W0RampT(nowT) >= 1.f &&
+                    live_rgb.size() == size_t(fit_w) * fit_h * 3 && fit_w > 0) {
+                    mirror::PondParams& FP = mirror.params();
+                    if (g_have_mask) {
+                        mirror.pond().beginFit(live_rgb, fit_h, fit_w, FP, g_fit_mask);
+                    } else {
+                        mirror.pond().beginFit(live_rgb, fit_h, fit_w, FP);
+                    }
+                    g_fit_arm = false;
+                    if (g_show_log)
+                        printf("show: fit started (%dx%d, %d px%s)\n", fit_w, fit_h,
+                               mirror.pond().fitPixels(),
+                               g_have_mask ? ", cropped" : "");
+                }
             }
 
             // --- the room, to the sound engine ---------------------------
@@ -3703,6 +4354,19 @@ int main(int argc, char** argv) {
                 ap.scene_progress = g_show.phaseProgress();
                 ap.key = g_audio_key;
                 ap.intensity = g_audio_on ? g_audio_intensity : 0.f;
+
+                // The harmony, from the fit level that was just computed above
+                // and the same movement signal the room produced. Stepped at
+                // the checkpoints, glided in between, and the pluck's comb
+                // tuning comes out of the same root -- so the two elements
+                // cannot drift out of tune with each other.
+                g_chord.config().root = g_audio_key;
+                g_chord.update(ap.fit_level, ap.movement, (float)dt);
+                const mirror::ChordVoicing& cv = g_chord.voicing();
+                for (int i = 0; i < mirror::kChordVoices; ++i)
+                    ap.pad_note[i] = cv.note[i];
+                ap.comb_hz = cv.comb_hz;
+
                 g_audio.update(ap);
             }
 
@@ -3753,11 +4417,24 @@ int main(int argc, char** argv) {
                 // looks like a working camera.
                 if (!source_polled && g_source == (int)Source::Kinect &&
                     g_kinect.isOpen()) {
-                    static std::vector<float> pip_scratch;
-                    g_kinect.poll(pipW, pipH, pip_scratch);
+                    // pump(), not poll(): this only needs the snapshot moved
+                    // along. poll() here box-filtered the whole 1920x1080 frame
+                    // into a scratch buffer that nothing ever read -- the most
+                    // expensive no-op in the loop, paid on every frame the live
+                    // fit was disarmed.
+                    g_kinect.pump();
                 }
 #endif
-                if (SourceRGB8(pipW, pipH, srcRGB) &&
+                // The corner thumbnail is point-sampled: it is a few hundred
+                // pixels wide, nothing downstream measures it, and box-filtering
+                // the whole sensor frame for it was the one resample in the loop
+                // that bought nothing at all.
+                //
+                // The full-screen views keep the filter. The mask editor is a
+                // view you judge edges in -- which is what it is for -- and it
+                // only runs when it is the scene on screen, so it is not in the
+                // show's budget at all.
+                if (SourceRGB8(pipW, pipH, srcRGB, /*filtered=*/full_frame) &&
                     srcRGB.size() == size_t(pipW) * pipH * 3) {
                     if (!srcTex || srcTexW != pipW || srcTexH != pipH) {
                         MTLTextureDescriptor* td = [MTLTextureDescriptor
@@ -3826,6 +4503,7 @@ int main(int argc, char** argv) {
                         } else {
                             mirror.pond().updateFitTarget(live_rgb, fit_h, fit_w);
                         }
+                        ++g_target_swaps;
                     }
                     const FitTune& tune = g_have_mask ? g_tune_crop : g_tune_full;
                     mirror.fitSteps(tune.steps, tune.lr);
@@ -3962,6 +4640,30 @@ int main(int argc, char** argv) {
 
                 trans.ensureSize(compW, compH);
                 trans.advance(dt);
+
+                // The lock has just happened if this is set. Write the pair out
+                // here rather than inside the scene: the scene's job is to know
+                // *when* the film and the mesh agree, and this one's is to
+                // decide that a sitting is worth keeping and under what name.
+                if (trans.capturePending()) {
+                    trans.clearCapturePending();
+                    mirror::FaceCapture cap;
+                    if (g_capture_auto && trans.buildCapture(cap)) {
+                        cap.id = mirror::NewCaptureId();
+                        cap.created = cap.id;
+                        std::string cerr;
+                        if (mirror::SaveCapture(cap, cerr)) {
+                            g_capture_last = cap.id;
+                            g_capture_msg = "saved " + cap.id;
+                            g_capture_ids = mirror::ListCaptures();
+                            printf("capture: saved %s (%zu verts, film %dx%d)\n",
+                                   cap.id.c_str(), cap.vertexCount(), cap.filmW, cap.filmH);
+                        } else {
+                            g_capture_msg = "save failed: " + cerr;
+                            fprintf(stderr, "capture: %s\n", g_capture_msg.c_str());
+                        }
+                    }
+                }
                 sceneTex = trans.render(cb);
             } else if (scene == (int)Scene::Roots && roots.valid()) {
                 // The roots pass is overdraw-bound (per-fragment ray-capsule
@@ -3980,7 +4682,15 @@ int main(int argc, char** argv) {
                 // when the tracker actually produced a new detection -- the
                 // rebuild walks every placed mask, so doing it on a frame where
                 // nothing changed is pure cost.
-                if (g_drive_roots && g_track_on && g_fitter.valid() && g_face.valid) {
+                //
+                // A loaded capture outranks the live tracker. The whole point of
+                // one is that the sitter has gone: driving the masks from
+                // whoever happens to be in front of the sensor now would
+                // overwrite the face that was just carried in on the mask, one
+                // frame after the transition handed it over.
+                if (!g_capture_loaded.empty()) {
+                    // Already uploaded when it was loaded; nothing per frame.
+                } else if (g_drive_roots && g_track_on && g_fitter.valid() && g_face.valid) {
                     static bool uploaded_tris = false;
                     roots.setFittedFace(g_fitter.vertices(),
                                         uploaded_tris ? std::vector<int>()
@@ -3996,7 +4706,8 @@ int main(int argc, char** argv) {
                 // was captured while the mirror still had the person. Uploaded
                 // once, on the frame after capture, because it does not change
                 // again until the mirror runs again.
-                if (g_face_colors_fresh && !g_face_colors.empty()) {
+                if (g_capture_loaded.empty() && g_face_colors_fresh &&
+                    !g_face_colors.empty()) {
                     roots.setFaceColors(g_face_colors);
                     g_face_colors_fresh = false;
                 }
@@ -4073,6 +4784,15 @@ int main(int argc, char** argv) {
                 (ImGui::IsKeyPressed(ImGuiKey_F1, false) ||
                  ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)))
                 g_ui_visible = !g_ui_visible;
+
+            // The readout is its own key, and deliberately not tied to the
+            // panel: the case it exists for is a phase that will not advance
+            // with the UI hidden, and having to bring the whole panel up to
+            // find out why puts a wall of controls over the piece to read one
+            // line of text.
+            if (!ImGui::GetIO().WantTextInput &&
+                ImGui::IsKeyPressed(ImGuiKey_F2, false))
+                g_show_hud = !g_show_hud;
 
             // --- the panel, drawn (or not) --------------------------------
             //
@@ -4166,8 +4886,21 @@ int main(int argc, char** argv) {
                     // gets no platform window -- which the GLFW backend then
                     // dereferences as it polls focus, and the app is gone
                     // before it has drawn anything.
+                    //
+                    // TopMost as well as NoAutoMerge. The composition runs in a
+                    // borderless-fullscreen window, which is an ordinary window
+                    // as far as the window server is concerned -- so a panel at
+                    // the same level can end up *behind* it, and a panel behind
+                    // a fullscreen window is one macOS reports as occluded.
+                    // imgui_impl_metal skips rendering an occluded viewport
+                    // (nextDrawable hangs for about a second on one, so it has
+                    // to), and a panel that is never redrawn is a black
+                    // rectangle you cannot get back. Floating keeps it above
+                    // the piece, which is where an operator's panel belongs
+                    // anyway.
                     ImGuiWindowClass wc;
-                    wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+                    wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge |
+                                                  ImGuiViewportFlags_TopMost;
                     ImGui::SetNextWindowClass(&wc);
                 }
             }
@@ -4328,6 +5061,13 @@ int main(int argc, char** argv) {
                 ImGui::BeginDisabled(!g_show_on);
                 if (ImGui::Button("restart")) g_show.restart();
                 ImGui::EndDisabled();
+                ImGui::SameLine();
+                ui::Checkbox("readout (F2)", &g_show_hud);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Phase, what it is waiting for, and how the fit is\n"
+                        "doing, in a corner -- with or without this panel.");
+                }
 
                 if (g_show_on) {
                     const show::Phase p = g_show.phase();
@@ -4481,8 +5221,11 @@ int main(int argc, char** argv) {
 
                 if (ui::Visible()) {
                     ImGui::SeparatorText("post");
-                    if (ImGui::Button("mirror bed")) g_audio.post("Play_Amb_Mirror");
+                    if (ImGui::Button("pluck bed")) g_audio.post("Play_FirePlucker");
                     ImGui::SameLine();
+                    if (ImGui::Button("pad")) g_audio.post("Play_Pad");
+                    ImGui::SameLine();
+                    if (ImGui::Button("stop pad")) g_audio.post("Stop_Pad");
                     if (ImGui::Button("roots bed")) g_audio.post("Play_Amb_Roots");
                     ImGui::SameLine();
                     if (ImGui::Button("transition")) g_audio.post("Play_Transition");
@@ -4510,7 +5253,65 @@ int main(int argc, char** argv) {
                     ImGui::Text("FitLevel   %.2f", a.fit_level);
                     ImGui::SameLine();
                     ImGui::Text("SceneProgress %.2f", a.scene_progress);
+
+                    ImGui::SeparatorText("the chord");
+                    const mirror::ChordVoicing& cv = g_chord.voicing();
+                    // Note against target, per voice: a glide in flight is the
+                    // two columns disagreeing, and "did the checkpoint fire"
+                    // is the stage number. Neither is answerable by ear alone
+                    // while the fit is also moving.
+                    ImGui::Text("stage %d/%d  (next at fit %.2f)",
+                                cv.stage + 1, mirror::Chord::kStages,
+                                cv.stage + 1 < mirror::Chord::kStages
+                                    ? mirror::Chord::StageThreshold(cv.stage + 1)
+                                    : 1.f);
+                    for (int i = 0; i < mirror::kChordVoices; ++i) {
+                        ImGui::Text("  V%d  %6.2f", i + 1, cv.note[i]);
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("-> %.0f", cv.target[i]);
+                    }
+                    ImGui::Text("pluck %6.2f", cv.pluck_note);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(comb %.1f Hz)", cv.comb_hz);
                 }
+
+                mirror::Chord::Config& cc = g_chord.config();
+                ui::BeginHeader("chord tuning", /*default_open=*/false);
+                {
+                    ui::SliderFloat("pad octave (semitones)", &cc.octave, -36.f, 12.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where the pad sits relative to the key. The key is\n"
+                            "the piece's pitch, not the pad's register -- and the\n"
+                            "pluck reads the key directly, so this moves the\n"
+                            "chord without moving the pluck.");
+                    }
+                    ui::SliderFloat("glide (s)", &cc.glide_secs, 0.2f, 15.f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Time constant, not a duration: a voice covers about\n"
+                            "two thirds of the interval in this long and settles\n"
+                            "after. Short enough and the checkpoint is a jump;\n"
+                            "long enough and the chord never arrives.");
+                    }
+                    ui::SliderFloat("detune (cents)", &cc.detune_cents, 0.f, 25.f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far movement pulls the voices apart, alternating\n"
+                            "up the stack. A few cents does not sound out of tune,\n"
+                            "it makes the coinciding harmonics beat.");
+                    }
+                    ui::SliderFloat("checkpoint hysteresis", &cc.hysteresis, 0.f, 0.15f, "%.2f");
+                    ui::SliderFloat("pluck from", &cc.pluck_high, -12.f, 36.f, "%.0f");
+                    ui::SliderFloat("pluck to", &cc.pluck_low, -24.f, 24.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Semitones from the key. The pluck travels between\n"
+                            "these continuously as the fit progresses, against\n"
+                            "the chord's stepped motion.");
+                    }
+                }
+                ui::EndHeader();
 
                 mirror::Presence::Config& pc = g_presence.config();
                 ui::BeginHeader("presence tuning", /*default_open=*/false);
@@ -4690,6 +5491,18 @@ int main(int argc, char** argv) {
                             "The other half of the same idea: keeps a single\n"
                             "spurious hit from starting everything up.");
                     }
+                    ui::SliderInt("tracker px", &g_track_px, 240, 960);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Long edge of the frame handed to MediaPipe. The\n"
+                            "short edge follows the composition's aspect and is\n"
+                            "not a choice: the tracker has to be looking at the\n"
+                            "same crop of the sensor as the fit grid, or the\n"
+                            "landmarks it returns describe a different\n"
+                            "rectangle from the one they get applied to.");
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%d x %d", g_track_w, g_track_h);
                     ImGui::PopItemWidth();
 #if !MIRROR_HAVE_KINECT
                     ImGui::TextDisabled("(no camera: tracking needs the Kinect target)");
@@ -4698,6 +5511,14 @@ int main(int argc, char** argv) {
                         ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "%s",
                                            g_track_err.c_str());
 
+                    // --- how the fit is set up ------------------------------
+                    // "face tracking" is Machine because *acquiring* a face is a
+                    // property of the room. Everything from here to the end of
+                    // this block is not: it is what the fit crops to and how it
+                    // holds a moving head, which travels with the piece and is
+                    // dialled in against a person rather than against a venue.
+                    ui::BeginGate(true);
+                    ui::SetBank(ui::Bank::Fit);
                     ui::Checkbox("crop the fit to the face", &g_mask_fit);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -4729,6 +5550,11 @@ int main(int argc, char** argv) {
                             "boundary between a person and the room, so it has\n"
                             "no reason to draw one.");
                     }
+                    // A radio group draws itself, so it has to declare itself by
+                    // hand -- and this one never did. The crop shape was saved
+                    // by nothing and reset to "box" on every launch, however it
+                    // had been left.
+                    ui::DeclareInt("crop shape", &g_mask_shape, 0, 1);
                     ImGui::PushItemWidth(90);
                     ui::BeginGate(g_mask_shape == (int)MaskShape::Box);
                     {
@@ -4793,7 +5619,13 @@ int main(int argc, char** argv) {
                     // Size is only meaningful where the app owns the placement.
                     // In the other two modes the subject is where the camera
                     // found it, and rescaling would be fighting that.
-                    ImGui::BeginDisabled(g_head_mode != (int)HeadMode::Centred);
+                    ui::DeclareInt("head mode", &g_head_mode, 0, 2);
+                    // Available in every mode but the input-shift one, which
+                    // moves the network's coordinates and has the render undo
+                    // it -- a pixel placement underneath that would be two
+                    // placements arguing. Centring is no longer the price of
+                    // choosing a size.
+                    ImGui::BeginDisabled(g_head_mode == (int)HeadMode::Stabilised);
                     ui::Checkbox("set face size", &g_face_size_on);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -4818,6 +5650,10 @@ int main(int argc, char** argv) {
                     if (g_face_size_on && HaveCrop()) {
                         ImGui::SameLine();
                         ImGui::TextDisabled("x%.2f", PlaceScale());
+                        if (g_head_mode != (int)HeadMode::Centred) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("(in place)");
+                        }
                     }
                     ImGui::EndDisabled();
 
@@ -4833,6 +5669,7 @@ int main(int argc, char** argv) {
                     }
                     ImGui::Unindent();
                     ImGui::EndDisabled();
+                    ui::EndGate();                       // back to Bank::Machine
 
                     ui::Checkbox("fitted mesh drives the root masks", &g_drive_roots);
                     ui::Checkbox("texture the mask from the neural fit",
@@ -4868,6 +5705,7 @@ int main(int argc, char** argv) {
                             "without a person in front of the sensor, and runs\n"
                             "reproducibly on a known face.");
                     }
+                    ui::DeclareInt("source", &g_source, 0, 1);
                     if (g_source == (int)Source::Photo) {
                         ImGui::PushItemWidth(-70);
                         ImGui::InputText("##photo", g_photo_path, sizeof(g_photo_path));
@@ -4907,6 +5745,43 @@ int main(int argc, char** argv) {
                                                  "bottom-left", "bottom-right"};
                         ImGui::Combo("corner", &g_source_corner, corners, 4);
                         ui::DeclareInt("corner", &g_source_corner, 0, 3);
+                        ImGui::PopItemWidth();
+                    }
+                    ui::EndGate();
+
+                    // --- what the network is trained on ------------------
+                    ui::Checkbox("network input", &g_show_netin);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The exact buffer handed to the optimiser: the feed\n"
+                            "after the crop, the mirroring, the fit grid and the\n"
+                            "head placement, with the trained pixels bright and\n"
+                            "the rest dimmed.\n\n"
+                            "The camera overlay says a frame is arriving. This\n"
+                            "says what became of it -- which is the question a\n"
+                            "fit that converges onto the wrong thing is asking.");
+                    }
+                    ui::BeginGate(g_show_netin);
+                    {
+                        ImGui::PushItemWidth(110);
+                        ui::SliderInt("input size", &g_netin_pip_w, 160, 640);
+                        ImGui::SameLine();
+                        const char* ncorners[] = {"top-left", "top-right",
+                                                  "bottom-left", "bottom-right"};
+                        // Distinct *labels*, not distinct ids: "##net" is
+                        // stripped before naming, so "size##net" registers as
+                        // the camera overlay's own "size" and the two controls
+                        // become one parameter.
+                        ImGui::Combo("input corner", &g_netin_corner, ncorners, 4);
+                        ui::DeclareInt("input corner", &g_netin_corner, 0, 3);
+                        ui::SliderFloat("untrained dim", &g_netin_dim, 0.f, 1.f, "%.2f");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "How far down the pixels outside the mask are\n"
+                                "taken. 0 is what the optimiser effectively\n"
+                                "sees; turn it up to check the crop is on the\n"
+                                "person rather than beside them.");
+                        }
                         ImGui::PopItemWidth();
                     }
                     ui::EndGate();
@@ -4964,6 +5839,19 @@ int main(int argc, char** argv) {
                     ImGui::SetNextItemWidth(90);
                     ui::SliderFloat("secs", &g_id_collect_secs, 1.f, 15.f, "%.0fs");
                     ImGui::EndDisabled();
+                    ui::Checkbox("fit automatically", &g_auto_fit_id);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Start collecting the moment a face is acquired\n"
+                            "with no identity behind it.\n\n"
+                            "Nothing else starts one outside a running show:\n"
+                            "the button above was the only trigger, and an\n"
+                            "installation has nobody to press it, so the mask\n"
+                            "stayed the basis's average -- a real face, and\n"
+                            "the wrong one. Every path that forgets a sitter\n"
+                            "already clears the identity, so clearing it is\n"
+                            "the same thing as asking for the next one.");
+                    }
 
                     ui::BeginGate(g_fitter.valid());
                     {
@@ -5036,6 +5924,136 @@ int main(int argc, char** argv) {
                             trans.release() * 100.f);
                 ImGui::SameLine();
                 if (ImGui::Button("replay")) trans.restart();
+
+                // --- the locked fit ------------------------------------
+                //
+                // The one instant the effect turns on: the film stops being
+                // live and every vertex keeps the texel it was covering. Shown
+                // here because it is the thing that goes wrong invisibly --
+                // an unlocked run looks almost right until the head moves, and
+                // then the face slides across the mask like a slide projection.
+                ImGui::SameLine();
+                if (trans.fitLocked()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "locked");
+                } else {
+                    ImGui::TextDisabled("live");
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(trans.fitLocked() ? "unlock" : "lock now")) {
+                    if (trans.fitLocked()) trans.unlockFit(); else trans.lockFit();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Freeze the film and nail the mask's uv to it.\n\n"
+                        "Before the lock the mask wears this frame's\n"
+                        "projection of the live pond, which is what makes it\n"
+                        "invisible against the film it is behind. After it the\n"
+                        "film is a picture and each vertex keeps the texel it\n"
+                        "was covering, so the face travels with the mesh.\n\n"
+                        "Recomputing the uv after the freeze is the failure\n"
+                        "this prevents: geometry and texture then move in\n"
+                        "different frames and the face reads as a still\n"
+                        "projected onto a moving mask from a fixed lamp.");
+                }
+                ui::Checkbox("lock when the press starts", &trans.autoLock);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The press starting is the last frame on which the\n"
+                        "mask and the film are still in register -- after it\n"
+                        "the mask is coming through the sheet and the pond\n"
+                        "behind it is no longer a picture of the face.");
+                }
+                ImGui::SameLine();
+                ui::Checkbox("save a capture on lock", &g_capture_auto);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Write the frozen film, the mesh, the locked uv and\n"
+                        "the baked vertex colours to captures/<id>/, so this\n"
+                        "sitter can be worn again later -- next scene, or next\n"
+                        "night. The id is the local date and time.");
+                }
+                if (!g_capture_msg.empty()) ImGui::TextDisabled("%s", g_capture_msg.c_str());
+
+                if (ImGui::TreeNode("captures")) {
+                    if (ImGui::Button("refresh")) {
+                        g_capture_ids = mirror::ListCaptures();
+                        g_capture_sel = -1;
+                    }
+                    ImGui::SameLine();
+                    if (g_capture_loaded.empty()) {
+                        ImGui::TextDisabled("masks: live fit");
+                    } else {
+                        ImGui::Text("masks: %s", g_capture_loaded.c_str());
+                        ImGui::SameLine();
+                        if (ImGui::Button("release")) {
+                            g_capture_loaded.clear();
+                            roots.clearFittedFace();
+                            g_capture_msg = "masks back to the live fit";
+                        }
+                    }
+                    ImGui::BeginChild("caplist", ImVec2(0, 120), true);
+                    for (int i = 0; i < (int)g_capture_ids.size(); ++i) {
+                        if (ImGui::Selectable(g_capture_ids[i].c_str(), g_capture_sel == i))
+                            g_capture_sel = i;
+                    }
+                    ImGui::EndChild();
+                    const bool has_sel = g_capture_sel >= 0 &&
+                                         g_capture_sel < (int)g_capture_ids.size();
+                    ImGui::BeginDisabled(!has_sel);
+                    if (ImGui::Button("wear on the masks")) {
+                        mirror::FaceCapture cap;
+                        std::string cerr;
+                        if (mirror::LoadCapture(g_capture_ids[g_capture_sel], cap, cerr)) {
+                            // Mesh and colour together, in that order: the
+                            // colours are per vertex of *this* mesh, and
+                            // uploading them against the previous one paints
+                            // one person's face onto another's geometry.
+                            roots.setFittedFace(cap.verts, cap.tris);
+                            roots.setFaceColors(cap.colors);
+                            g_capture_loaded = cap.id;
+                            g_capture_msg = "masks wearing " + cap.id;
+                        } else {
+                            g_capture_msg = cerr;
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Load onto the root scene's masks. The capture\n"
+                            "then outranks the live tracker -- which is the\n"
+                            "point: by the time the roots are up, the sitter\n"
+                            "has gone, and driving the masks from whoever is\n"
+                            "in front of the sensor now would overwrite the\n"
+                            "face the transition just handed over.");
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("load into the transition")) {
+                        mirror::FaceCapture cap;
+                        std::string cerr;
+                        if (mirror::LoadCapture(g_capture_ids[g_capture_sel], cap, cerr) &&
+                            trans.applyCapture(cap)) {
+                            g_capture_msg = "transition replaying " + cap.id;
+                        } else {
+                            g_capture_msg = cerr.empty() ? std::string("capture has no film")
+                                                         : cerr;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("delete")) {
+                        std::string cerr;
+                        const std::string id = g_capture_ids[g_capture_sel];
+                        if (mirror::DeleteCapture(id, cerr)) {
+                            if (g_capture_loaded == id) g_capture_loaded.clear();
+                            g_capture_msg = "deleted " + id;
+                        } else {
+                            g_capture_msg = cerr;
+                        }
+                        g_capture_ids = mirror::ListCaptures();
+                        g_capture_sel = -1;
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::TreePop();
+                }
+
                 if (!trans.hasFace()) {
                     ImGui::TextDisabled("no mask -- load face_basis.bin");
                 } else if (!g_track_on || !g_face.valid) {
@@ -5067,6 +6085,29 @@ int main(int argc, char** argv) {
                         "bends. Driven by the cloth's own normals, so it is\n"
                         "exactly zero on the flat sheet -- the opening frame\n"
                         "has to be the pond, not a displaced copy of it.");
+                }
+                ui::SliderFloat("film relief", &trans.reliefSharp, 0.f, 3.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How hard the film's own curvature is drawn.\n\n"
+                        "Lambert over a tented sheet is a soft wash -- the\n"
+                        "normals turn slowly, so the brow and the nose shade\n"
+                        "barely differently from the cheek beside them, and\n"
+                        "the press reads as the image stretching rather than\n"
+                        "as a face coming through the fabric. What a viewer\n"
+                        "actually reads a covered face by is the sign of the\n"
+                        "surface's second derivative: convex on the brow and\n"
+                        "the nose, concave in the sockets. This is that term,\n"
+                        "and it is zero on a flat sheet.");
+                }
+                ui::SliderFloat("film sheen", &trans.sheen, 0.f, 1.5f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A raking specular on the fabric's bends. Wet film is\n"
+                        "not matte, and the streak along a fold is the other\n"
+                        "half of what says surface rather than printed image.\n"
+                        "Gated to the pressed area like the relief, so the\n"
+                        "untouched film stays exactly the pond.");
                 }
                 ui::SliderFloat("press depth", &trans.pressProud, 0.f, 0.4f);
                 if (ImGui::IsItemHovered()) {
@@ -5384,10 +6425,27 @@ int main(int argc, char** argv) {
                 ui::EndGate();
                 ImGui::Separator();
                 // --- live fitting -----------------------------------------
+                //
+                // Declared into Bank::Fit, not Mirror. These are drawn on the
+                // mirror's page because that is where you stand while dialling
+                // them in, but they are not part of the mirror's look: loading
+                // a ripple preset used to carry "track live feed", the crop
+                // tuning and the whole soft-edge block along with the colour,
+                // so changing the palette could quietly disarm the camera.
+                // BeginGate(true) is the no-op frame to hang the bank on -- it
+                // inherits the visibility above it and adds no path level, so
+                // nothing here is renamed by moving bank.
+                ui::BeginGate(true);
+                ui::SetBank(ui::Bank::Fit);
                 {
-                    static char fit_path[512] =
-                        "/Users/erichan/Documents/Development/neuromirror/"
-                        "emotion/_track_frames/f0016.png";
+                    // Empty, not a path. This used to be hard-coded to a
+                    // frame from an unrelated project on one developer's disk,
+                    // and since "fit" falls back to the still whenever the live
+                    // feed is not armed, the usual way to meet it was pressing
+                    // fit and watching the mirror converge onto a stranger's
+                    // photograph -- which reads as the camera fit being broken
+                    // rather than as a different target being used.
+                    static char fit_path[512] = "";
                     static std::string fit_err;
 
                     ImGui::Text("FIT  %s", mirror.pond().fitted()
@@ -5515,7 +6573,14 @@ int main(int argc, char** argv) {
                         ImGui::BeginDisabled(!g_z_free);
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(90);
-                        ui::SliderFloat("z rate /s", &P.z_rate, -2.f, 2.f);
+                        // Raw, not ui::. This is the *same* P.z_rate the z latent
+                        // section declares as "mirror/z/z auto-rate /s"; wrapping
+                        // it here too registered one variable under two names, in
+                        // two different banks once this block moved to Fit -- so a
+                        // load would apply both and whichever declared last won.
+                        // A second handle on a control is a convenience; a second
+                        // *name* for it is a bug.
+                        ImGui::SliderFloat("z rate /s", &P.z_rate, -2.f, 2.f);
                         ImGui::EndDisabled();
 
                         ImGui::SetNextItemWidth(110);
@@ -5538,7 +6603,8 @@ int main(int argc, char** argv) {
                         }
 
                         ui::BeginGate(open);
-                        {
+                        ui::SetBank(ui::Bank::Machine);   // which way round the
+                        {                                 // sensor is mounted
                             bool mir = g_kinect.mirrored();
                             if (ui::Checkbox("mirror image", &mir)) g_kinect.setMirrored(mir);
                             if (ImGui::IsItemHovered()) {
@@ -5642,7 +6708,10 @@ int main(int argc, char** argv) {
                             const int fh = std::max(8, mirror.lowH() / ds);
                             std::vector<float> rgb;
                             fit_err.clear();
-                            if (LoadImageRGB(fit_path, fw, fh, rgb, fit_err)) {
+                            if (fit_path[0] == '\0') {
+                                fit_err = "no image named -- tick 'track live "
+                                          "feed' to fit the camera";
+                            } else if (LoadImageRGB(fit_path, fw, fh, rgb, fit_err)) {
                                 mirror.pond().beginFit(rgb, fh, fw, P);
                             }
                         }
@@ -5673,6 +6742,7 @@ int main(int argc, char** argv) {
                             "longer apply");
                     }
                 }
+                ui::EndGate();                        // back to Bank::Mirror
 
                 ImGui::Separator();
                 // --- the network itself -----------------------------------
@@ -5702,6 +6772,48 @@ int main(int argc, char** argv) {
                         "Pairs with 'detail' below, which sets how hard those\n"
                         "boundaries are without changing the layout.");
                 }
+                // --- and where the fit takes it -----------------------
+                //
+                // Declared into Bank::Fit: this is how the fit is set up, not
+                // part of the mirror's look, even though it is the same knob
+                // one section up.
+                ui::BeginGate(true);
+                ui::SetBank(ui::Bank::Fit);
+                ui::Checkbox("ramp w0 for the fit", &g_w0_ramp_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Entering the fitting phase, take sine w0 up to the\n"
+                        "value below before starting the fit, and put it back\n"
+                        "on the way out to idle.\n\n"
+                        "It has to happen *before* beginFit. w0 shapes the base\n"
+                        "weights, and the optimiser is seeded from those once --\n"
+                        "after that the network is learned and w0 no longer\n"
+                        "reaches it, so turning it up mid-fit does nothing.");
+                }
+                ui::BeginGate(g_w0_ramp_on);
+                {
+                    ImGui::PushItemWidth(110);
+                    ui::SliderFloat("fit w0", &g_w0_fit, 1.0f, 80.0f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The frequency of the basis the face is\n"
+                            "reconstructed out of. A fit wants far more regions\n"
+                            "than an idle field does -- at the idle value there\n"
+                            "are not enough of them to carry an eye.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderFloat("ramp secs", &g_w0_ramp_secs, 0.f, 8.f, "%.1fs");
+                    ImGui::PopItemWidth();
+                    if (ui::Visible() && g_w0_t0 >= 0.0) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                           "ramping %.0f%%",
+                                           100.f * W0RampT(nowT));
+                    }
+                }
+                ui::EndGate();
+                ui::EndGate();
+
                 ImGui::EndDisabled();
                 ImGui::Separator();
                 // weight shaping
@@ -5725,6 +6837,7 @@ int main(int argc, char** argv) {
                 ImGui::SameLine(); ImGui::SetNextItemWidth(90);
                 const char* greyItems[] = {"R", "G", "B"};
                 ImGui::Combo("grey ch", &P.grey_channel, greyItems, 3);
+                ui::DeclareInt("grey ch", &P.grey_channel, 0, 2);
                 ui::Checkbox("ripple amp -> color", &P.amp_drives_color);
                 ui::BeginGate(P.amp_drives_color);
                 {
@@ -6594,6 +7707,52 @@ int main(int argc, char** argv) {
                         }
                         ImGui::SameLine();
                         if (ImGui::Button("rescan")) U.list = ui::ListBank(bank);
+
+                        // --- what this bank comes up in -------------------
+                        //
+                        // Written to presets/defaults as a name, not as a copy
+                        // of the values: "come up in mirror_bw" and "here are
+                        // some numbers that were mirror_bw last Tuesday" are
+                        // different promises, and only the first one survives
+                        // editing the preset.
+                        const std::string dflt = ui::DefaultName(bank);
+                        ImGui::SameLine();
+                        if (ImGui::Button("make default")) {
+                            std::string e;
+                            ui::SetDefaultName(bank, U.name);
+                            U.msg = ui::SaveDefaults(e)
+                                        ? (std::string(U.name) + " loads at startup")
+                                        : e;
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Come up in the preset named above, every\n"
+                                "launch. The installation starts with nobody in\n"
+                                "front of it -- without this the piece boots on\n"
+                                "the built-in defaults however it was left.");
+                        }
+                        if (!dflt.empty()) {
+                            ImGui::SameLine();
+                            const bool here = std::find(U.list.begin(), U.list.end(),
+                                                        dflt) != U.list.end();
+                            if (here) {
+                                ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                                   "startup: %s", dflt.c_str());
+                            } else {
+                                // Named but not on disk. Silent until the next
+                                // launch otherwise, which is the wrong moment
+                                // to find out.
+                                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f),
+                                                   "startup: %s (missing)",
+                                                   dflt.c_str());
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("clear##dflt")) {
+                                std::string e;
+                                ui::SetDefaultName(bank, "");
+                                U.msg = ui::SaveDefaults(e) ? "no startup preset" : e;
+                            }
+                        }
                     }
                     if (!U.msg.empty()) ImGui::TextDisabled("%s", U.msg.c_str());
                     ImGui::PopID();
@@ -7090,6 +8249,211 @@ int main(int argc, char** argv) {
                 ImGui::End();
             }
 
+            // --- the network's input, in a corner -------------------------
+            //
+            // Everything the fit is given, in one picture. What to look for
+            // when a fit will not take: the subject the right way round, the
+            // bright (trained) region actually on them, the grid fine enough
+            // that a face is more than a smudge.
+            if (g_ui_visible && g_show_netin && netTex && netTexW > 0) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                const float pad = 16.f;
+                const bool right = (g_netin_corner == 1 || g_netin_corner == 3);
+                const bool bottom = (g_netin_corner == 2 || g_netin_corner == 3);
+                ImGui::SetNextWindowPos(
+                    ImVec2(vp->WorkPos.x + (right ? vp->WorkSize.x - pad : pad),
+                           vp->WorkPos.y + (bottom ? vp->WorkSize.y - pad : pad)),
+                    ImGuiCond_Always,
+                    ImVec2(right ? 1.f : 0.f, bottom ? 1.f : 0.f));
+                ImGui::SetNextWindowBgAlpha(0.35f);
+                ImGui::Begin("##netin_pip", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav);
+                const float iw = (float)g_netin_pip_w;
+                const float ih = iw * (float)netTexH / (float)netTexW;
+                const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                ImGui::Image((ImTextureID)(intptr_t)(__bridge void*)netTex,
+                             ImVec2(iw, ih));
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                // The region the resample actually produced. With a crop up
+                // this is the whole of what exists -- outside it the buffer is
+                // last frame's, deliberately, because nothing reads it. Drawn
+                // so that emptiness reads as intended rather than as a fault.
+                if (g_have_mask && g_mask_bbox.w > 0) {
+                    const float sx = iw / (float)netTexW, sy = ih / (float)netTexH;
+                    dl->AddRect(ImVec2(p0.x + g_mask_bbox.x * sx,
+                                       p0.y + g_mask_bbox.y * sy),
+                                ImVec2(p0.x + (g_mask_bbox.x + g_mask_bbox.w) * sx,
+                                       p0.y + (g_mask_bbox.y + g_mask_bbox.h) * sy),
+                                IM_COL32(120, 200, 255, 200));
+                }
+                ImGui::TextDisabled("%dx%d", netTexW, netTexH);
+                ImGui::SameLine();
+                if (mirror.pond().fitting()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                       "| %d px | loss %.5f",
+                                       mirror.pond().fitPixels(), mirror.lastLoss());
+                } else {
+                    ImGui::TextDisabled("| not training");
+                }
+                if (!netFresh) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(held)");
+                }
+                ImGui::End();
+            }
+
+            // --- the running order, as text -------------------------------
+            //
+            // Drawn whether or not the panel is up: this is for watching the
+            // piece run, and the moment it is most needed is the one where a
+            // phase is not advancing and there is nothing on screen saying what
+            // it is waiting for.
+            if (g_show_hud) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 16.f,
+                                               vp->WorkPos.y + vp->WorkSize.y - 16.f),
+                                        ImGuiCond_Always, ImVec2(0.f, 1.f));
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##showhud", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav |
+                             ImGuiWindowFlags_NoInputs);
+
+                const show::Phase ph = g_show.phase();
+                const show::PhaseGraph& g = show::Graph(ph);
+                const show::PhaseScript& ps = g_show.script()[ph];
+
+                ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.f, 1.f), "%s",
+                                   show::PhaseName(ph));
+                ImGui::SameLine();
+                ImGui::Text("%.1fs", g_show.phaseTime());
+                if (ps.max_time > 0.f) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("/ %.0fs", ps.max_time);
+                }
+                ImGui::SameLine();
+                if (!g_show_on)          ImGui::TextDisabled("| held (show off)");
+                else if (g_show_paused)  ImGui::TextDisabled("| paused");
+                else if (g_show.phaseTime() < ps.min_time)
+                    ImGui::TextDisabled("| floor %.1fs", ps.min_time - g_show.phaseTime());
+                else ImGui::TextDisabled("| open");
+                if (g_view_override >= 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "| view override");
+                }
+                ImGui::TextDisabled("via %s", g_show.lastReason().c_str());
+
+                // What it is waiting for, in the graph's own priority order --
+                // the first of these to come true is the one that moves it.
+                ImGui::Separator();
+                for (int i = 0; i < g.edge_count; ++i) {
+                    const show::Edge& e = g.edges[i];
+                    ImGui::TextDisabled("%s -> %s", show::EventName(e.event),
+                                        show::PhaseName(e.target));
+                }
+
+                ImGui::Separator();
+                const bool face = ShowFacePresent();
+                const bool fit_conv = ShowFitConverged();
+                ImGui::Text("face"); ImGui::SameLine();
+                if (face) ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "yes");
+                else      ImGui::TextDisabled("no");
+                ImGui::SameLine(); ImGui::Text("| converged"); ImGui::SameLine();
+                if (fit_conv) ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "yes");
+                else          ImGui::TextDisabled("no");
+
+                // The identity residual is what "converged" is actually
+                // measuring, so it is shown against the threshold rather than
+                // on its own -- a number with no scale beside it is not a
+                // diagnosis.
+                if (g_id_residual >= 0.f) {
+                    ImGui::TextDisabled("identity %.2f px (needs <= %.2f)%s",
+                                        g_id_residual, g_show_fit_px,
+                                        g_collect_id ? "  collecting" : "");
+                } else if (g_collect_id) {
+                    ImGui::TextDisabled("identity collecting %.1fs",
+                                        g_id_collect_secs - (nowT - g_id_started));
+                } else {
+                    ImGui::TextDisabled("identity not fitted");
+                }
+
+                ImGui::Text("fit"); ImGui::SameLine();
+                if (mirror.pond().fitting()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "training");
+                } else if (mirror.pond().fitted()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "held");
+                } else {
+                    ImGui::TextDisabled("none");
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("| %d steps | loss %.5f | %d px",
+                                    mirror.pond().fitSteps(), mirror.lastLoss(),
+                                    mirror.pond().fitPixels());
+                {
+                    const FitTune& t = g_have_mask ? g_tune_crop : g_tune_full;
+                    ImGui::TextDisabled("grid %dx%d %s | %d step-s | lr %.4f",
+                                        fit_w, fit_h,
+                                        g_have_mask ? "cropped" : "whole feed",
+                                        t.steps, t.lr);
+                }
+                if (!g_fit_live) {
+                    ImGui::TextColored(ImVec4(1.f, 0.6f, 0.5f, 1.f),
+                                       "live feed not armed");
+                }
+                // --- rates ------------------------------------------
+                //
+                // Sampled over a second rather than shown per frame: the thing
+                // being diagnosed is a rate going to zero, and a per-frame
+                // reading of a 30 Hz source under a 60 fps loop alternates
+                // between two values and reads as broken when it is fine.
+                {
+                    static double rate_t0 = 0.0;
+                    static unsigned long long sensor_prev = 0;
+                    static unsigned swaps_prev = 0, steps_prev = 0;
+                    static float sensor_hz = 0.f, swap_hz = 0.f, step_hz = 0.f;
+                    const unsigned steps_now = (unsigned)mirror.pond().fitSteps();
+#if MIRROR_HAVE_KINECT
+                    const unsigned long long sensor_now = g_kinect.frames();
+#else
+                    const unsigned long long sensor_now = 0;
+#endif
+                    if (rate_t0 == 0.0) rate_t0 = nowT;
+                    const double dtr = nowT - rate_t0;
+                    if (dtr >= 1.0) {
+                        sensor_hz = float((sensor_now - sensor_prev) / dtr);
+                        swap_hz   = float((g_target_swaps - swaps_prev) / dtr);
+                        step_hz   = float((steps_now - steps_prev) / dtr);
+                        sensor_prev = sensor_now;
+                        swaps_prev = g_target_swaps;
+                        steps_prev = steps_now;
+                        rate_t0 = nowT;
+                    }
+                    // Each stage feeds the next, so the first zero along the
+                    // chain is the one that matters.
+                    ImGui::TextDisabled("sensor %.0f/s -> target %.0f/s -> steps %.0f/s",
+                                        sensor_hz, swap_hz, step_hz);
+                    if (mirror.pond().fitting() && sensor_hz > 0.f && swap_hz == 0.f) {
+                        ImGui::TextColored(ImVec4(1.f, 0.6f, 0.5f, 1.f),
+                                           "frames arriving, target not swapping");
+                    }
+                }
+                if (g_vp_skips || g_vp_relayers) {
+                    ImGui::TextDisabled("panel: %u occluded, %u re-layered",
+                                        g_vp_skips, g_vp_relayers);
+                }
+                ImGui::TextDisabled("%.0f fps", fpsShown);
+                ImGui::End();
+            }
+
             ImGui::Render();
 
             // The text refracts through the ripples the mirror was *just*
@@ -7157,6 +8521,19 @@ int main(int argc, char** argv) {
             // waiting on a panel.
             if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
                 ImGui::UpdatePlatformWindows();
+                // GLFW takes "floating" as a *creation hint* only, so the class
+                // flag above reaches a viewport when its window is made and
+                // never again -- and a viewport that is destroyed and remade
+                // (the panel docked and pulled back out) can come back at the
+                // ordinary level. Setting the attribute here is idempotent and
+                // does not care when the window appeared.
+                ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+                for (ImGuiViewport* vp : pio.Viewports) {
+                    if (vp == ImGui::GetMainViewport() || !vp->PlatformHandle) continue;
+                    GLFWwindow* w = (GLFWwindow*)vp->PlatformHandle;
+                    if (!glfwGetWindowAttrib(w, GLFW_FLOATING))
+                        glfwSetWindowAttrib(w, GLFW_FLOATING, GLFW_TRUE);
+                }
                 ImGui::RenderPlatformWindowsDefault();
             }
         }

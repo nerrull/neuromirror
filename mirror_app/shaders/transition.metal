@@ -14,10 +14,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct Vertex {                 // matches the C++ Vertex (simd_float3 x2 + float2)
+struct Vertex {                 // matches the C++ Vertex (simd_float3 x2 + float2 x2)
     float3 pos;
     float3 nrm;
     float2 uv;
+    float2 aux;                 // x = curvature along the normal, y = z off rest
 };
 
 struct Uniforms {
@@ -25,13 +26,14 @@ struct Uniforms {
     float4x4 model;
     float4 lightDir;            // xyz = light dir, w = mode (0 textured, 2 solid)
     float4 baseColor;
-    float4 params;              // x = refraction of the film by the surface normal
+    float4 params;              // x refraction, y relief shade, z curvature, w sheen
 };
 
 struct VOut {
     float4 clip [[position]];
     float3 wnrm;
     float2 uv;
+    float2 aux;
 };
 
 vertex VOut v_main(uint vid [[vertex_id]],
@@ -42,6 +44,7 @@ vertex VOut v_main(uint vid [[vertex_id]],
     o.clip = u.mvp * float4(p, 1.0);
     o.wnrm = (u.model * float4(verts[vid].nrm, 0.0)).xyz;
     o.uv = verts[vid].uv;
+    o.aux = verts[vid].aux;
     return o;
 }
 
@@ -69,21 +72,56 @@ fragment float4 f_main(VOut in [[stage_in]],
     float flat = 0.30 + 0.85 * max(1e-3, L.z);
     float shade = 1.0 + u.params.y * ((0.30 + 0.85 * ndl) - flat) / flat;
 
+    // The curvature term, and the reason the press is legible at all.
+    //
+    // `aux.x` is the sheet's second derivative along its own normal, so it is
+    // zero everywhere the fabric is flat *or* uniformly sloped and only speaks
+    // where the surface bends: positive over the brow and the bridge of the
+    // nose, negative in the sockets and the crease beside it. Lambert cannot
+    // see any of that -- a smooth tent turns its normals slowly and shades as a
+    // wash -- which is why the mask underneath read as texture smear.
+    //
+    // tanh rather than a clamp: the curvature spikes hard at the silhouette,
+    // where the fabric leaves the mask, and a linear response there swamps
+    // everything the face is doing with a bright outline. The soft ceiling
+    // keeps that as an edge and leaves headroom for the features inside it.
+    //
+    // `aux.y` (displacement off the rest plane) gates the whole thing, so the
+    // untouched film stays pixel-identical to the pond however this is tuned.
+    // The gain is set from what the quantity actually measures: over a 72-cell
+    // sheet the face's own features land in curv ~ [-0.1, +0.7] (the sockets
+    // are shallow, the brow and the silhouette are not), and a gain of 3 puts
+    // the brow near the top of tanh while still leaving the sockets a visible
+    // 20-30% darker rather than the few percent a unit gain gave them.
+    float bulge = clamp(abs(in.aux.y) * 6.0, 0.0, 1.0);
+    float curv  = tanh(in.aux.x * 3.0);
+    shade *= 1.0 + u.params.z * curv * bulge;
+
+    // Wet film is not matte. A raking specular off the fabric's own normal adds
+    // the streak along a fold that says "surface" rather than "picture", and it
+    // lands on the same convexities the curvature term brightens, so the two
+    // reinforce rather than fight.
+    float3 V = float3(0.0, 0.0, 1.0);
+    float3 Hv = normalize(L + V);
+    float spec = pow(max(0.0, dot(N, Hv)), 48.0);
+    shade += u.params.w * spec * bulge;
+
     float mode = u.lightDir.w;
     float3 base;
     if (mode < 1.5) {
         constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
         // Refract the film where the fabric bends. Driven by the surface's own
-        // normal, so it is identically zero on the flat sheet -- the rest state
-        // has to *be* the pond, not a slightly displaced version of it -- and
-        // it rises exactly where the sheet is stretched over the brow and the
-        // nose, which is where a wet film would actually bend the image.
-        float2 uv = in.uv + N.xy * u.params.x;
+        // normal and gated by the same bulge, so it is identically zero on the
+        // flat sheet -- the rest state has to *be* the pond, not a slightly
+        // displaced version of it -- and it rises exactly where the sheet is
+        // stretched over the brow and the nose, which is where a wet film would
+        // actually bend the image.
+        float2 uv = in.uv + N.xy * u.params.x * bulge;
         base = tex.sample(smp, uv).rgb;
     } else {
         base = u.baseColor.rgb;
     }
-    return float4(base * shade, 1.0);
+    return float4(base * max(0.0, shade), 1.0);
 }
 
 // ---- the mask ---------------------------------------------------------------

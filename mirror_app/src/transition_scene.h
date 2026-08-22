@@ -43,14 +43,22 @@
 //     makes the drape interesting -- the fabric has an asymmetric solid to come
 //     off.
 //
-//   * **The texture is exact, by construction.** `setFaceMesh` takes, per
-//     vertex, the normalised frame position the *fit* projects that vertex to
-//     (`FaceFitter::projectNormalised`) and places the vertex in world space so
-//     that this camera projects it back to precisely that point. The mesh
-//     therefore lands on the pond's own face, pixel for pixel, and its texture
-//     coordinate is that same projection -- so the film the mask carries away
-//     is the film that was covering it. Nothing is fitted twice and there is no
-//     centring or scale guess left to drift.
+//   * **The texture is exact, by construction, and then it is locked.**
+//     `setFaceMesh` takes, per vertex, the normalised frame position the *fit*
+//     projects that vertex to (`FaceFitter::projectNormalised`) and places the
+//     vertex in world space so that this camera projects it back to precisely
+//     that point. The mesh therefore lands on the pond's own face, pixel for
+//     pixel, and its texture coordinate is that same projection -- so the film
+//     the mask carries away is the film that was covering it. Nothing is fitted
+//     twice and there is no centring or scale guess left to drift.
+//
+//     That equality only holds while the film is live. At the lock (see
+//     lockFit) the film becomes a picture and the uv stops being recomputed:
+//     each vertex keeps the texel it was covering at that instant, for good.
+//     Carrying on projecting after the freeze is the failure the lock exists to
+//     stop -- geometry and texture then move in different frames, and the face
+//     reads as a still projected onto a moving mask from a lamp bolted to the
+//     camera rather than as a mask wearing a face.
 //
 // ## Collision
 //
@@ -73,6 +81,7 @@
 #include <vector>
 
 #include "cloth.h"
+#include "face_capture.h"
 #include "metal_root_renderer.h"
 
 class MetalContext;
@@ -118,6 +127,22 @@ public:
     // value. 0 is an unlit film; 1 is full Lambert, which blows the highlights
     // on a fold well past the film's own brightness.
     float reliefShade  = 0.55f;
+    // How hard the film's *curvature* is drawn, on top of the Lambert term
+    // above.
+    //
+    // Lambert over a tented sheet is a soft wash: the normals turn slowly, so
+    // the brow and the nose shade barely differently from the cheek beside
+    // them, and the press reads as the image stretching rather than as a face
+    // coming through the fabric. What a viewer actually reads a covered face
+    // by is the sign of the surface's second derivative -- convex on the brow
+    // and the nose, concave in the sockets and beside the nose -- and that is a
+    // quantity Lambert throws away. This scales it. It is identically zero on a
+    // flat sheet, so the opening frame is still the pond.
+    float reliefSharp  = 0.8f;
+    // A raking sheen on the fabric's own bends, on top of both. Wet film is not
+    // matte, and a specular streak along a fold is the other half of why a
+    // hydro dip reads as a *surface* rather than as a printed image.
+    float sheen        = 0.35f;
     // The sheet, as a multiple of the frustum cross-section. A little over 1:
     // the moment the corners let go the canvas retracts, and a sheet cut
     // exactly to the frame shows black in the corners the instant it does.
@@ -251,10 +276,13 @@ public:
     // normalised frame position (0..1, y-down) the fit projects that vertex to,
     // i.e. FaceFitter::projectNormalised with the same pin transform the mirror
     // was drawn with. The vertex is then placed so this camera projects it back
-    // there, and `uv` is also its texture coordinate into the film. Pass it
-    // empty and the mesh falls back to being centred and normalised by its own
-    // extent -- fine for a headless shot, but the film will not line up with a
-    // live pond.
+    // there. Pass it empty and the mesh falls back to being centred and
+    // normalised by its own extent -- fine for a headless shot, but the film
+    // will not line up with a live pond.
+    //
+    // Before the lock it is also the vertex's texture coordinate. After it, it
+    // only *places* the vertex: the texture coordinate is the one taken at the
+    // lock and is not touched again, however much the head moves afterwards.
     void setFaceMesh(const std::vector<float>& verts, const std::vector<int>& tris,
                      const std::vector<float>& uv = std::vector<float>());
     bool hasFace() const;
@@ -263,14 +291,45 @@ public:
     // skinned with whatever the network is currently rendering.
     void setPondTexture(id<MTLTexture> pond);
 
-    // Capture the current pond texture to disk so it can be reused as a static
-    // texture throughout the transition, independent of live fit updates.
-    bool savePondTexture(const std::string& path);
-    bool loadPondTexture(const std::string& path);
-    bool hasSavedPondTexture() const;
+    // --- the lock ------------------------------------------------------------
+    //
+    // One instant divides the effect. Before it the film is the live pond and
+    // the mask's texture coordinate is this frame's projection, which is what
+    // makes the mask invisible against the film it is behind. After it the film
+    // is a *picture* and each vertex keeps the texel it was covering at that
+    // instant, so the face travels with the mesh.
+    //
+    // Recomputing the uv from the live projection after the film has been
+    // frozen is the failure this exists to stop: geometry and texture then move
+    // in opposite frames, and the face reads as a still image projected onto a
+    // moving mask from a lamp fixed to the camera. The mask has to *wear* the
+    // face, which means the uv is a property of the vertex and is written once.
+    //
+    // Locked automatically when the press begins (`autoLock`), because that is
+    // the last frame on which the mask and the film are still in register --
+    // from there the mask is coming through the sheet and the pond behind it is
+    // no longer a picture of the face. Can also be driven by hand.
+    void lockFit();
+    void unlockFit();
+    bool fitLocked() const;
+    // Automatically lock on the frame the press starts. Off leaves the film
+    // live for the whole effect, which is only useful for looking at it.
+    bool autoLock = true;
 
-    // Use the saved pond texture instead of the live one (if one has been loaded).
-    bool useSavedPondTexture = false;
+    // Everything needed to rebuild this locked pair later: the frozen film, the
+    // mesh in fitter model units, its topology, the locked uv, and the film
+    // already sampled at that uv per vertex. Fails before the lock, because
+    // before the lock there is no pair -- only a live feed.
+    bool buildCapture(mirror::FaceCapture& out) const;
+    // True from the frame of a lock until the capture has been taken. Lets the
+    // app write the capture out without having to detect the lock itself.
+    bool capturePending() const;
+    void clearCapturePending();
+
+    // Restore a saved capture: the film becomes its picture, the mask becomes
+    // its mesh, and the uv is the one that was locked when it was taken. The
+    // scene is locked afterwards, so nothing recomputes any of it.
+    bool applyCapture(const mirror::FaceCapture& c);
 
     // Timeline control.
     void restart();

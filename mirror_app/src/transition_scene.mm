@@ -27,7 +27,12 @@ constexpr simd_float4 LIGHT = {0.42f, 0.62f, 0.36f, 0.5f};
 // features and not enough to be worth optimising.
 constexpr int FIELD_RES = 160;
 
-struct Vertex { simd_float3 pos; simd_float3 nrm; simd_float2 uv; };
+// Mirrors Vertex in transition.metal. `aux` is the film's relief cue: x is the
+// surface's local curvature (positive on a bump), y how far the sheet has been
+// pushed off its rest plane, both normalised. See packCloth and f_main -- a
+// smooth tent shades almost flat, and without these the press reads as the
+// image stretching rather than as a face coming through.
+struct Vertex { simd_float3 pos; simd_float3 nrm; simd_float2 uv; simd_float2 aux; };
 // Mirrors TransFaceX in transition.metal.
 struct TransFaceX {
     simd_float4 centre;
@@ -88,7 +93,10 @@ struct TransitionScene::Impl {
     // lands on screen, plus the world-space placement derived from the two.
     std::vector<float> modelVerts;
     std::vector<float> modelUV;        // 2/vertex, normalised frame, y-down
-    std::vector<float> initialUV;      // 2/vertex, UV locked when mesh is first set
+    // 2/vertex, the uv as it stood at the lock, registration correction already
+    // applied. Written once by placeFace when `lockWanted` is set and never
+    // again -- that is the whole point of it, see TransitionScene::lockFit.
+    std::vector<float> lockedUV;
     std::vector<int>   faceTris;
     std::vector<Vertex> faceVerts;     // placed, with normals
     bool haveFace = false;
@@ -111,8 +119,17 @@ struct TransitionScene::Impl {
     float builtAspect = 0.f, builtOver = 0.f;
     float halfY = CAM_D * std::tan(CAM_FOV * 0.5f);
     float halfX = CAM_D * std::tan(CAM_FOV * 0.5f);
-    bool textureCaptured = false;
-    bool useSavedTexture = false;
+    // The lock, in three parts: the film stops being live, the uv stops being
+    // recomputed, and the app is told there is a pair worth writing out.
+    bool locked = false;
+    bool lockWanted = false;
+    bool capturePending = false;
+    std::vector<float> modelVertsAtLock;   // the mesh the lockedUV belongs to
+    std::vector<unsigned char> filmRGB8;   // the frozen film, sRGB, for a capture
+    int filmW = 0, filmH = 0;
+
+    bool freezeFilm();                 // pondTex -> filmRGB8 + savedPondTex
+    bool adoptFilm(const std::vector<unsigned char>& rgb, int W, int H);
 
     explicit Impl(const MetalContext& c) : ctx(c) {}
 
@@ -259,20 +276,38 @@ void TransitionScene::Impl::placeFace(float depthScale, const float regScale[2],
     zFront = (zmax - zref) * zScale;
     zBack  = (zmin - zref) * zScale;
 
+    // The lock, taken here rather than in setFaceMesh, because what has to be
+    // remembered is the *corrected* uv -- the registration is part of where the
+    // mask was sitting when the film was frozen, and locking the raw projection
+    // instead would slide the face across the mesh by however much the operator
+    // had dialled in.
+    if (lockWanted) {
+        lockedUV.resize(n * 2);
+        for (size_t i = 0; i < n; ++i) {
+            lockedUV[i * 2]     = fixU(modelUV[i * 2]);
+            lockedUV[i * 2 + 1] = fixV(modelUV[i * 2 + 1]);
+        }
+        modelVertsAtLock = modelVerts;
+        lockWanted = false;
+        locked = true;
+        capturePending = true;
+    }
+    // Locked or not, the *placement* is always this frame's projection: the
+    // mask has to keep landing where the head actually is. What the lock
+    // changes is only where it reads the film from.
+    const bool useLocked = locked && lockedUV.size() == n * 2;
+
     for (size_t i = 0; i < n; ++i) {
         const float u = fixU(modelUV[i * 2]), v = fixV(modelUV[i * 2 + 1]);
         const float ndcx = u * 2.f - 1.f, ndcy = 1.f - v * 2.f;
         const float z = (modelVerts[i * 3 + 2] - zref) * zScale + zOffset;
         const float k = (CAM_D - z) / CAM_D;
         faceVerts[i].pos = simd_make_float3(ndcx * halfX * k, ndcy * halfY * k, z);
-        // Geometry is positioned at corrected screen coords, but texture samples
-        // from the initial UV so it stays locked to the frozen capture.
-        if (useSavedTexture && i * 2 + 1 < initialUV.size()) {
-            faceVerts[i].uv = simd_make_float2(initialUV[i * 2], initialUV[i * 2 + 1]);
-        } else {
-            faceVerts[i].uv = simd_make_float2(u, v);
-        }
+        faceVerts[i].uv = useLocked
+            ? simd_make_float2(lockedUV[i * 2], lockedUV[i * 2 + 1])
+            : simd_make_float2(u, v);
         faceVerts[i].nrm = simd_make_float3(0, 0, 1);
+        faceVerts[i].aux = simd_make_float2(0, 0);
     }
 
     std::vector<simd_float3> nn(n, simd_make_float3(0, 0, 0));
@@ -400,14 +435,51 @@ void TransitionScene::Impl::packCloth() {
     // fullscreen pond, and it stays locked to the surface as the sheet
     // stretches and falls; the overhang runs past 0..1 and clamps.
     const float o = builtOver > 0.f ? builtOver : 1.f;
+    // The relief cue, alongside the position.
+    //
+    // A sheet tented over a face is a smooth solid: its normals turn slowly and
+    // Lambert over them is a soft wash, which is why the press read as the
+    // image being stretched rather than as a face underneath it. What actually
+    // makes a covered face legible is the second derivative -- the brow and the
+    // nose are convex, the eye sockets and the sides of the nose are concave,
+    // and it is the sign flip between them that a viewer reads as features.
+    //
+    // aux.x is that: the discrete Laplacian of position, taken along the
+    // normal, so positive is a bump toward the camera and negative a crease.
+    // Divided by the cell size, so it is a curvature and not a resolution.
+    // aux.y is the plain displacement off the rest plane (the sheet is built at
+    // z = 0), which localises the whole effect to where the mask actually is
+    // and leaves the untouched film exactly as it was.
+    const float cellW = 2.f * halfX * o / float(std::max(1, cloth.nx - 1));
     for (int j = 0; j < cloth.ny; ++j)
         for (int i = 0; i < cloth.nx; ++i) {
             const int k = cloth.idx(i, j);
-            clothVerts[size_t(k)].pos = cloth.pos[size_t(k)];
-            clothVerts[size_t(k)].nrm = cloth.nrm[size_t(k)];
+            const simd_float3 p = cloth.pos[size_t(k)];
+            const simd_float3 nvec = cloth.nrm[size_t(k)];
+
+            simd_float3 acc = simd_make_float3(0, 0, 0);
+            int cnt = 0;
+            const int di[4] = {-1, 1, 0, 0}, dj[4] = {0, 0, -1, 1};
+            for (int d = 0; d < 4; ++d) {
+                const int ii = i + di[d], jj = j + dj[d];
+                if (ii < 0 || ii >= cloth.nx || jj < 0 || jj >= cloth.ny) continue;
+                acc += cloth.pos[size_t(cloth.idx(ii, jj))];
+                ++cnt;
+            }
+            float curv = 0.f;
+            if (cnt > 0) {
+                const simd_float3 lap = acc / float(cnt) - p;
+                // Toward the camera is the sign the shader wants a highlight
+                // for, whichever way the winding left the normal pointing.
+                const float sgn = nvec.z < 0.f ? -1.f : 1.f;
+                curv = -simd_dot(lap, nvec) * sgn / std::max(1e-5f, cellW);
+            }
+            clothVerts[size_t(k)].pos = p;
+            clothVerts[size_t(k)].nrm = nvec;
             clothVerts[size_t(k)].uv = simd_make_float2(
                 0.5f + (i / float(cloth.nx - 1) - 0.5f) * o,
                 0.5f - (j / float(cloth.ny - 1) - 0.5f) * o);
+            clothVerts[size_t(k)].aux = simd_make_float2(curv, p.z);
         }
     const size_t bytes = clothVerts.size() * sizeof(Vertex);
     if (!clothVB || clothVB.length < bytes)
@@ -443,88 +515,133 @@ bool TransitionScene::hasFace() const { return impl_->haveFace; }
 double TransitionScene::clock() const { return impl_->t; }
 void TransitionScene::setPondTexture(id<MTLTexture> pond) { impl_->pondTex = pond; }
 
-bool TransitionScene::savePondTexture(const std::string& path) {
-    if (!impl_->pondTex) return false;
-    id<MTLTexture> tex = impl_->pondTex;
-    const int W = tex.width, H = tex.height;
-    std::vector<uint16_t> px((size_t)W * H * 4);
-    [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
-       fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
-    FILE* fp = fopen(path.c_str(), "wb");
-    if (!fp) return false;
-    fprintf(fp, "P6\n%d %d\n255\n", W, H);
+// Freeze the live film: read the pond texture back, encode it to 8-bit sRGB
+// once, and build the static texture the sheet and the mask sample from here
+// on. The 8-bit copy is kept because it is exactly what a capture stores -- so
+// what is written to disk is what is on screen, not a second conversion of it.
+bool TransitionScene::Impl::freezeFilm() {
+    if (!pondTex) return false;
+    const int W = int(pondTex.width), H = int(pondTex.height);
+    if (W <= 0 || H <= 0) return false;
+    std::vector<uint16_t> px(size_t(W) * size_t(H) * 4);
+    [pondTex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
+           fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+
     auto h2f = [](uint16_t h) {
-        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, bits;
-        if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
+        const uint32_t sg = (h >> 15) & 1u, e = (h >> 10) & 0x1fu, m = h & 0x3ffu;
+        const uint32_t bits = (e == 0) ? (sg << 31) : ((sg << 31) | ((e + 112) << 23) | (m << 13));
         float f; __builtin_memcpy(&f, &bits, 4); return f;
     };
-    for (int y = 0; y < H; ++y) {
-        for (int x = 0; x < W; ++x) {
-            const uint16_t* p = &px[((size_t)y * W + x) * 4];
-            for (int c = 0; c < 3; ++c) {
-                float v = h2f(p[c]);
-                v = v <= 0.f ? 0.f : (v >= 1.f ? 1.f : v);
-                v = powf(v, 1.0f / 2.2f);
-                fputc((unsigned char)(v * 255.0f + 0.5f), fp);
-            }
+    std::vector<unsigned char> rgb(size_t(W) * size_t(H) * 3);
+    for (size_t i = 0, n = size_t(W) * size_t(H); i < n; ++i)
+        for (int c = 0; c < 3; ++c) {
+            float v = std::clamp(h2f(px[i * 4 + size_t(c)]), 0.f, 1.f);
+            rgb[i * 3 + size_t(c)] = (unsigned char)(std::pow(v, 1.f / 2.2f) * 255.f + 0.5f);
         }
-    }
-    fclose(fp);
-    printf("transition: saved pond texture to %s (%dx%d)\n", path.c_str(), W, H);
-    return true;
+    return adoptFilm(rgb, W, H);
 }
 
-bool TransitionScene::loadPondTexture(const std::string& path) {
-    FILE* fp = fopen(path.c_str(), "rb");
-    if (!fp) { fprintf(stderr, "transition: cannot open %s\n", path.c_str()); return false; }
-    char magic[3] = {0, 0, 0};
-    if (fscanf(fp, "%2s\n", magic) != 1 || magic[0] != 'P' || magic[1] != '6') {
-        fprintf(stderr, "transition: %s is not a PPM P6 file\n", path.c_str());
-        fclose(fp);
-        return false;
-    }
-    int W, H, maxval;
-    if (fscanf(fp, "%d %d\n%d\n", &W, &H, &maxval) != 3) {
-        fprintf(stderr, "transition: %s header parse failed\n", path.c_str());
-        fclose(fp);
-        return false;
-    }
-    std::vector<unsigned char> rgb8((size_t)W * H * 3);
-    if (fread(rgb8.data(), 1, rgb8.size(), fp) != rgb8.size()) {
-        fprintf(stderr, "transition: %s read failed\n", path.c_str());
-        fclose(fp);
-        return false;
-    }
-    fclose(fp);
-    std::vector<uint16_t> px16((size_t)W * H * 4);
+// The same the other way: an 8-bit sRGB image becomes the static film. Used by
+// freezeFilm and by applyCapture, so a restored capture and a fresh lock come
+// down the same path and cannot differ in their decode.
+bool TransitionScene::Impl::adoptFilm(const std::vector<unsigned char>& rgb, int W, int H) {
+    if (W <= 0 || H <= 0 || rgb.size() != size_t(W) * size_t(H) * 3) return false;
+
     auto f2h = [](float f) -> uint16_t {
-        f = std::pow(f, 2.2f);
         if (f <= 0.f) return 0;
         if (f >= 1.f) return 0x3c00;
         uint32_t bits; __builtin_memcpy(&bits, &f, 4);
-        uint16_t s = (bits >> 31) & 1, e = ((bits >> 23) & 0xff) - 112, m = (bits >> 13) & 0x3ff;
-        return (s << 15) | (e << 10) | m;
+        const uint16_t sg = (bits >> 31) & 1u;
+        const uint16_t e = uint16_t(((bits >> 23) & 0xffu) - 112u);
+        const uint16_t m = uint16_t((bits >> 13) & 0x3ffu);
+        return uint16_t((sg << 15) | (e << 10) | m);
     };
-    for (size_t i = 0; i < rgb8.size(); i += 3) {
-        const size_t j = (i / 3) * 4;
-        px16[j + 0] = f2h(rgb8[i + 0] / 255.f);
-        px16[j + 1] = f2h(rgb8[i + 1] / 255.f);
-        px16[j + 2] = f2h(rgb8[i + 2] / 255.f);
-        px16[j + 3] = f2h(1.f);
+    std::vector<uint16_t> px(size_t(W) * size_t(H) * 4);
+    for (size_t i = 0, n = size_t(W) * size_t(H); i < n; ++i) {
+        for (int c = 0; c < 3; ++c)
+            px[i * 4 + size_t(c)] = f2h(std::pow(rgb[i * 3 + size_t(c)] / 255.f, 2.2f));
+        px[i * 4 + 3] = f2h(1.f);
     }
+
     MTLTextureDescriptor* td =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
                                                           width:W height:H mipmapped:NO];
     td.usage = MTLTextureUsageShaderRead;
     td.storageMode = MTLStorageModeShared;
-    impl_->savedPondTex = [impl_->ctx.device() newTextureWithDescriptor:td];
-    [impl_->savedPondTex replaceRegion:MTLRegionMake2D(0, 0, W, H)
-                           mipmapLevel:0 withBytes:px16.data() bytesPerRow:W * 4 * sizeof(uint16_t)];
-    printf("transition: loaded pond texture from %s (%dx%d)\n", path.c_str(), W, H);
+    savedPondTex = [ctx.device() newTextureWithDescriptor:td];
+    if (!savedPondTex) return false;
+    [savedPondTex replaceRegion:MTLRegionMake2D(0, 0, W, H)
+                    mipmapLevel:0 withBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)];
+    filmRGB8 = rgb;
+    filmW = W;
+    filmH = H;
     return true;
 }
 
-bool TransitionScene::hasSavedPondTexture() const { return impl_->savedPondTex != nil; }
+void TransitionScene::lockFit() {
+    Impl& I = *impl_;
+    if (I.locked) return;
+    if (!I.freezeFilm()) return;   // no film yet: nothing to lock the uv *to*
+    // The uv itself is taken by the next placeFace, which is the only place the
+    // registration correction is applied and therefore the only place the
+    // corrected uv exists. If there is no mesh yet the request simply waits.
+    I.lockWanted = true;
+    if (!I.haveFace) return;
+    I.placeFace(depthScale, maskScale, maskOffset, maskYaw);
+    printf("transition: locked at t=%.2fs -- film %dx%d, %zu vertices\n",
+           I.t, I.filmW, I.filmH, I.lockedUV.size() / 2);
+}
+
+void TransitionScene::unlockFit() {
+    Impl& I = *impl_;
+    I.locked = false;
+    I.lockWanted = false;
+    I.capturePending = false;
+    I.lockedUV.clear();
+    I.modelVertsAtLock.clear();
+    I.savedPondTex = nil;
+    I.filmRGB8.clear();
+    I.filmW = I.filmH = 0;
+}
+
+bool TransitionScene::fitLocked() const { return impl_->locked; }
+bool TransitionScene::capturePending() const { return impl_->capturePending; }
+void TransitionScene::clearCapturePending() { impl_->capturePending = false; }
+
+bool TransitionScene::buildCapture(mirror::FaceCapture& out) const {
+    const Impl& I = *impl_;
+    if (!I.locked || I.modelVertsAtLock.empty() || I.faceTris.empty()) return false;
+    if (I.lockedUV.size() * 3 != I.modelVertsAtLock.size() * 2) return false;
+
+    out = mirror::FaceCapture{};
+    out.verts = I.modelVertsAtLock;
+    out.tris  = I.faceTris;
+    out.uv    = I.lockedUV;
+    out.film  = I.filmRGB8;
+    out.filmW = I.filmW;
+    out.filmH = I.filmH;
+    mirror::BakeCaptureColors(out);
+    return true;
+}
+
+bool TransitionScene::applyCapture(const mirror::FaceCapture& c) {
+    if (!c.valid()) return false;
+    Impl& I = *impl_;
+    setFaceMesh(c.verts, c.tris, c.uv);
+    if (!I.haveFace) return false;
+    // Straight in, not via lockFit: the uv being restored is the one that was
+    // locked when the capture was taken, and re-deriving it from this frame's
+    // registration would be exactly the recomputation the lock exists to stop.
+    I.lockedUV = c.uv;
+    I.modelVertsAtLock = c.verts;
+    I.lockWanted = false;
+    I.locked = true;
+    I.capturePending = false;
+    if (!c.film.empty()) I.adoptFilm(c.film, c.filmW, c.filmH);
+    I.placeFace(depthScale, maskScale, maskOffset, maskYaw);
+    I.uploadFace();
+    return true;
+}
 
 void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::vector<int>& tris,
                                   const std::vector<float>& uv) {
@@ -537,7 +654,6 @@ void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::ve
 
     if (uv.size() >= n * 2) {
         impl_->modelUV.assign(uv.begin(), uv.begin() + n * 2);
-        impl_->initialUV.assign(uv.begin(), uv.begin() + n * 2);
         impl_->haveUV = true;
     } else {
         // No projection supplied: centre the mesh and normalise it by its own
@@ -566,7 +682,6 @@ void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::ve
             impl_->modelUV[i * 2]     = 0.5f + x * 0.5f;
             impl_->modelUV[i * 2 + 1] = 0.5f - y * 0.5f;
         }
-        impl_->initialUV.assign(impl_->modelUV.begin(), impl_->modelUV.end());
         impl_->haveUV = false;
     }
     impl_->haveFace = true;
@@ -576,7 +691,10 @@ void TransitionScene::restart() {
     impl_->t = 0.0;
     impl_->zOffset = 0.f;
     impl_->builtRes = 0;             // force a fresh sheet: flat, fully held
-    impl_->textureCaptured = false;  // allow texture capture on the next advance
+    // A replay is a fresh sitting: the film goes back to live and the uv goes
+    // back to tracking, or the second run through would open on the first
+    // run's frozen face.
+    unlockFit();
     impl_->ensureSheet(sheetRes, float(impl_->w) / float(std::max(1, impl_->h)), oversize);
 }
 
@@ -608,18 +726,16 @@ void TransitionScene::advance(double dt) {
     I.t += dt;
     I.ensureSheet(sheetRes, float(I.w) / float(std::max(1, I.h)), oversize);
 
-    // Capture and freeze the pond texture on the first frame
-    if (!I.textureCaptured && I.pondTex) {
-        const char* home = getenv("HOME");
-        std::string texPath = home ? std::string(home) + "/.mirror/transition_mask.ppm" : "/tmp/transition_mask.ppm";
-        fprintf(stderr, "transition: capturing texture to %s\n", texPath.c_str());
-        if (savePondTexture(texPath) && loadPondTexture(texPath)) {
-            useSavedPondTexture = true;
-            I.useSavedTexture = true;
-            fprintf(stderr, "transition: texture frozen and ready\n");
-        }
-        I.textureCaptured = true;
-    }
+    // The lock, on the frame the press begins.
+    //
+    // Not on the first frame: the hold exists so the scene can open on the live
+    // pond, and freezing before it has run turns the opening into a still. Not
+    // later either -- once the mask starts through the sheet the pond behind it
+    // is no longer a picture of the face, and the film the mask would carry
+    // away would be of the wrong instant. The press starting is the one moment
+    // the two are both true.
+    if (autoLock && !I.locked && float(I.t) >= timing.hold && I.pondTex && I.haveFace)
+        lockFit();
 
     // The alignment hold: the mask fully through, the film flat behind it, the
     // timeline going nowhere. Both are on screen at once, which is the only
@@ -717,7 +833,7 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
     [enc setDepthStencilState:I.dss];
     [enc setCullMode:MTLCullModeNone];
     [enc setTriangleFillMode:wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-    id<MTLTexture> filmTex = (useSavedPondTexture && I.savedPondTex) ? I.savedPondTex : I.pondTex;
+    id<MTLTexture> filmTex = (I.locked && I.savedPondTex) ? I.savedPondTex : I.pondTex;
     [enc setFragmentTexture:filmTex atIndex:0];
 
     Uniforms u;
@@ -807,7 +923,7 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
                                                : MTLTriangleFillModeFill];
     }
     if (showCloth && I.clothIdx && I.clothVB) {
-        u.params = simd_make_float4(refract, reliefShade, 0, 0);
+        u.params = simd_make_float4(refract, reliefShade, reliefSharp, sheen);
         [enc setVertexBuffer:I.clothVB offset:0 atIndex:0];
         [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
         [enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
