@@ -1,9 +1,9 @@
 # Mutable Instruments Wwise plug-ins
 
-Wwise plug-ins wrapping five Mutable Instruments DSP cores. The sound-engine
-(runtime) side was built for Apple Silicon macOS against Wwise 2025.1.9; the
-authoring side (the Windows DLL that makes each plug-in appear in the Wwise UI)
-was built separately against Wwise 2025.1.10 on Windows — see
+Wwise plug-ins wrapping five Mutable Instruments DSP cores. **Wwise 2025.1.10 is
+the target both sides build against.** The sound-engine (runtime) side is built
+for Apple Silicon macOS; the authoring side (the Windows DLL that makes each
+plug-in appear in the Wwise UI) is built separately on Windows — see
 [Authoring plug-in (Windows)](#authoring-plug-in-windows).
 
 | Plug-in | Type | MI module | Rate | Notes |
@@ -43,7 +43,10 @@ tests/              offline DSP harnesses (no Wwise required)
 
 ## Prerequisites
 
-- Wwise 2025.1.9 at `/Applications/Audiokinetic/Wwise_2025.1.9.9197`
+- Wwise 2025.1.10 at `/Applications/Audiokinetic/Wwise_2025.1.10.9233`. An older
+  install (2025.1.9 at `Wwise_2025.1.9.9197`) also works — point `WWISEROOT` at
+  it instead — but 2025.1.10 is what the authoring DLLs in `dist/` are built
+  against, so it's the version to prefer.
 - A `pichenettes/eurorack` checkout. By default it is expected next to the
   project, at `../../eurorack` relative to this directory. Override with
   `MI_EURORACK_DIR`.
@@ -53,12 +56,12 @@ tests/              offline DSP harnesses (no Wwise required)
 ## Building
 
 ```sh
-export WWISEROOT=/Applications/Audiokinetic/Wwise_2025.1.9.9197
+export WWISEROOT=/Applications/Audiokinetic/Wwise_2025.1.10.9233
 export WWISESDK=$WWISEROOT/SDK
 export AK_XCODE_DEVELOPER_DIR_2600=/Applications/Xcode.app/Contents/Developer
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-for P in ModalResonator MacroOscillator GranularTexture ModalVoice DrumSynth SignalScope OnsetTap; do
+for P in RacineComb ModalResonator MacroOscillator GranularTexture ModalVoice DrumSynth SignalScope OnsetTap; do
   (cd $P \
     && python3 $WWISEROOT/Scripts/Build/Plugins/wp.py premake Mac \
     && xcodebuild -workspace ${P}_Mac.xcworkspace -scheme All \
@@ -429,17 +432,22 @@ into:
 
 1. Copy all fourteen files from `wwise_plugins/dist/` (seven `.dll` + seven
    `.xml`) into that `Plugins/` folder, substituting your installed
-   `<Version>` (e.g. `2025.1.9`).
+   `<Version>` — `2025.1.10.9233` for the target version above.
 2. Quit and relaunch Wwise Authoring. Racine Comb, Modal Resonator, Granular
    Texture, Macro Oscillator, Modal Voice, Drum Synth and Signal Scope should
    now show up in the Effects/Sources insert lists.
 
-**Version caveat:** these DLLs were built against the **2025.1.10** SDK, one
-point release ahead of the **2025.1.9** Authoring app this repo's macOS
-prerequisites section names. `AK::Wwise::Plugin` (the API these plug-ins use)
-has been stable since Wwise 2022.1, so 2025.1.10 plug-ins are likely to load
-fine in a 2025.1.9 Authoring host, but this hasn't been verified against an
-actual 2025.1.9 install. If a plug-in fails to appear or Wwise logs a load
-error, that version gap is the first thing to check — rebuild against the
-2025.1.9 SDK's `Win32_vc170`/`x64_vc170` headers and libs instead (or update
-Wwise Authoring to 2025.1.10) to rule it out.
+These DLLs are built against the **2025.1.10** SDK, matching the 2025.1.10
+Authoring app they install into, so there is no version gap to worry about on a
+current install. Installing them into an *older* Authoring app (e.g. 2025.1.9)
+is untested but likely fine — `AK::Wwise::Plugin`, the API these plug-ins use,
+has been stable since Wwise 2022.1. If a plug-in fails to appear there or Wwise
+logs a load error, that version gap is the first thing to check.
+
+**The two sides install independently.** These `.dll`/`.xml` pairs are what
+Authoring loads to show a plug-in in the UI; the Mac `.dylib`/`.a` artifacts
+from [Building](#building) are what a Mac game binary loads or links, and they
+land under whichever `WWISEROOT` you built against. Rebuilding one does not
+update the other, and each Wwise install carries its own copy of both — so
+after switching target versions, check that the version you actually launch has
+current artifacts on both sides.
