@@ -92,7 +92,7 @@ public:
     struct Timing {
         float hold    = 0.5f;   // flat film, nothing happening
         float press   = 1.6f;   // the mask advancing through the sheet plane
-        float settle  = 0.3f;   // fully through, the fabric taut over it
+        float settle  = 8.0f;   // fully through, the fabric taut over it
         float release = 0.7f;   // pins letting go, corners first
         float fall    = 1.8f;   // draping off and away
     };

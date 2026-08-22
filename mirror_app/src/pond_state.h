@@ -218,9 +218,9 @@ private:
     // cost in the render loop before it was cached.
     mx::array fit_feats_ = mx::zeros({1});
     std::optional<std::array<int, 2>> fit_feats_key_;
-    // Features are gathered to match a masked target. Keyed on the pixel count
-    // as well as the grid, so a mask that changes shape rebuilds them.
-    int fit_feats_px_ = -1;
+    // Features are gathered to match a masked target, so they are keyed on the
+    // trainer's target *generation* -- which pixels, not how many of them.
+    uint64_t fit_feats_gen_ = ~0ull;
     // ...and on the input shift and the latent, which are what the features
     // are *of*. Without these in the key, moving either would leave training
     // running against the features built for the old ones -- silently, since

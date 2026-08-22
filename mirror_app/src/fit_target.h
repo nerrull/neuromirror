@@ -54,6 +54,18 @@ struct FeedCrop {
 // A rect in source pixels.
 struct SrcRect { int x = 0, y = 0, w = 0, h = 0; };
 
+// A rect in *destination* pixels: the only part of the output that gets written.
+//
+// The live fit trains on a mask, and the trainer gathers those pixels into a
+// compact batch -- so with a face crop up, some 96% of the target frame is
+// resampled and then never read. Handing the resampler the mask's bounding box
+// turns the most expensive thing on the CPU side of a frame into a few percent
+// of itself. Pixels outside the rect keep whatever they held, which is exactly
+// what "nothing reads them" licenses; a fresh or resized buffer starts zeroed.
+//
+// An empty rect (w or h <= 0) means the whole destination.
+struct DstRect { int x = 0, y = 0, w = 0, h = 0; };
+
 // The rect `c` selects when resampling into a dst_w x dst_h frame: the largest
 // rect of the output's aspect at zoom 1, divided by zoom, centred on (cx, cy)
 // and shifted -- never shrunk -- to stay inside the source. Clamping by shifting
@@ -75,13 +87,35 @@ void DownsampleRGB8(const unsigned char* src, int src_w, int src_h,
 // The same, over a sub-rect of the source (see ComputeFeedRect). The full-frame
 // versions are these with the rect set to the whole image, so there is one
 // filter and the cropped and uncropped paths cannot drift apart.
+//
+// `mirror` flips the image horizontally as it resamples, by reading the source
+// columns backwards. Folded in here rather than left as a second in-place pass
+// because a pass that swaps column x with column dst_w-1-x is wrong the moment
+// only part of the frame is being written -- the column it swaps with is stale.
+// It is also one less traversal of the output.
 void DownsampleRectRGB8(const unsigned char* src, int src_w, int src_h,
                         int stride_px, int r_off, int b_off, const SrcRect& rect,
-                        int dst_w, int dst_h, std::vector<float>& dst);
+                        int dst_w, int dst_h, std::vector<float>& dst,
+                        const DstRect& fill = {}, bool mirror = false);
 void DownsampleRectToRGB8(const unsigned char* src, int src_w, int src_h,
                           int stride_px, int r_off, int b_off,
                           const SrcRect& rect, int dst_w, int dst_h,
-                          std::vector<unsigned char>& dst);
+                          std::vector<unsigned char>& dst,
+                          const DstRect& fill = {}, bool mirror = false);
+
+// The same mapping, taking one source pixel per destination pixel instead of
+// averaging the footprint.
+//
+// For consumers that only have to *look* right to a person: the camera overlay
+// is a diagnostic thumbnail, and nothing downstream measures it. The filtered
+// path exists because the fit is differentiated against its target and the
+// tracker's landmarks become geometry -- neither is true of a preview, so it
+// pays the full box filter over the sensor frame for an image that is about to
+// be drawn 320 px wide.
+void PointSampleRectToRGB8(const unsigned char* src, int src_w, int src_h,
+                           int stride_px, int r_off, int b_off,
+                           const SrcRect& rect, int dst_w, int dst_h,
+                           std::vector<unsigned char>& dst, bool mirror = false);
 
 // The same resampling, to 8-bit RGB. MediaPipe wants bytes, and it wants them
 // at a higher resolution than the fit grid -- the fit runs at a couple of
@@ -107,18 +141,28 @@ void MirrorRGB8(int w, int h, std::vector<unsigned char>& rgb);
 // Edge clamp rather than black fill: the vacated strip is outside the mask and
 // never trained, but a hard black band there would still show up the moment
 // anyone widened the crop.
-void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb);
+//
+// `fill` bounds the work the same way it does for the resamplers: only that part
+// of the output is written, and only the source span it reads is copied aside.
+void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb,
+               const DstRect& fill = {});
 
 // Place a region of the frame: resample so that the normalised point
-// (src_cx, src_cy) lands at the centre and everything is scaled about it by
-// `scale`. Bilinear, clamped at the edges.
+// (src_cx, src_cy) lands at (dst_cx, dst_cy) and everything is scaled about it
+// by `scale`. Bilinear, clamped at the edges.
 //
-// This is the head-centred mode with a size control on it: scale > 1 makes the
-// subject bigger on screen. Unlike ShiftRGBF it must interpolate, so it does
-// refilter the image every frame -- the cost of choosing the size rather than
-// accepting whatever distance the person is standing at.
+// The destination is a parameter rather than the middle of the frame because
+// "make the subject bigger" and "move the subject to the centre" are separate
+// wishes, and welding them meant you could only have the first by accepting the
+// second. Pass (0.5, 0.5) for the head-centred mode; pass the subject's own
+// position to scale them where they stand.
+//
+// Unlike ShiftRGBF it must interpolate, so it does refilter the image every
+// frame -- the cost of choosing the size rather than accepting whatever
+// distance the person is standing at.
 void PlaceRGBF(int w, int h, float src_cx, float src_cy, float scale,
-               std::vector<float>& rgb);
+               float dst_cx, float dst_cy,
+               std::vector<float>& rgb, const DstRect& fill = {});
 
 // A still image loaded once. `load_rgb` is supplied by the caller because
 // decoding is platform code (main.mm uses NSImage) and this header is not.

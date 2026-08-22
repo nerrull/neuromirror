@@ -62,12 +62,19 @@ namespace ui {
 //
 //   Machine   the room, not the piece: sensor, screen, calibration, MIDI map.
 //             One file, loaded at startup, never carried between venues.
+//   Fit       how the face fit is set up: what it crops to, how it holds a
+//             moving head, how hard it trains, what happens outside the crop.
+//             Its own bank because it is neither -- the crop shape is not a
+//             property of the room, and it is emphatically not part of the
+//             mirror's *look*. It used to live in Mirror, which meant loading a
+//             ripple preset to change the colour also silently rewrote whether
+//             the fit was tracking the camera at all.
 //   Show      the running order -- what plays and when.
 //   Look      composition that outlives any one scene: text, transition.
 //   Mirror    the ripple scene. Many presets; this is the one that gets dialled
 //             in per performance.
 //   Roots     the root scene.
-enum class Bank { Unassigned = 0, Machine, Show, Look, Mirror, Roots, Count };
+enum class Bank { Unassigned = 0, Machine, Fit, Show, Look, Mirror, Roots, Count };
 
 const char* BankName(Bank b);
 // Directory a bank's presets live in, and the extension they carry. Machine is
@@ -84,6 +91,27 @@ bool LoadBank(Bank b, const std::string& path, std::string& err);
 
 // How many parameters a bank holds, and how many of those are retired.
 int BankCount(Bank b, int* retired_out = nullptr);
+
+// --- defaults ---------------------------------------------------------------
+// Which preset each bank comes up in, recorded in `presets/defaults` as one
+// `bank = name` line per bank.
+//
+// Machine already loaded itself at startup, on the grounds that having to
+// remember the camera calibration is a way of arriving at a show with the wrong
+// one. Every other bank had exactly the same problem and no answer: the
+// installation boots with nobody in front of it to open the panel and pick a
+// mirror preset, so it came up on the defaults compiled into the structs no
+// matter what had been dialled in the night before.
+//
+// A name that no longer exists on disk is reported and skipped rather than
+// being an error -- a deleted preset should not stop the piece from starting.
+std::string DefaultName(Bank b);
+void SetDefaultName(Bank b, const std::string& name);   // empty clears it
+bool SaveDefaults(std::string& err);
+bool LoadDefaults(std::string& err);
+// Load every bank that names a default. Returns how many were applied; `err`
+// collects the ones that named a file that is not there.
+int LoadBankDefaults(std::string& err);
 
 // --- sections ---------------------------------------------------------------
 // Push a section around a group of controls; the parameter's full name is the

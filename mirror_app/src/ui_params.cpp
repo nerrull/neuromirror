@@ -121,15 +121,31 @@ std::string PathFor(const char* label) {
 // Strip an ImGui label of its "##id" suffix so the saved name is the visible
 // one -- otherwise a cosmetic id change silently invalidates saved presets.
 //
-// A '/' in the label is rewritten, since that character separates sections: a
-// slider called "z rate /s" would otherwise register as a parameter "s" inside
-// a section "z rate ", which is not wrong so much as unreadable in a preset
-// file and in the bindings list.
+// Two characters are rewritten, both because they are punctuation the file
+// format has already spent:
+//
+//   '/'  separates sections. A slider called "z rate /s" would otherwise
+//        register as a parameter "s" inside a section "z rate ", which is not
+//        wrong so much as unreadable in a preset file and in the bindings list.
+//   '='  separates a key from its value. This one is not cosmetic: a label like
+//        "sine layers (0 = tanh only)" wrote a key the reader then split at the
+//        '=' *inside the name*, so it came back as the key
+//        "mirror/network/sine layers (0" with the value "tanh only) = 1" --
+//        claimed by nothing, silently, while the panel reported it only as one
+//        more unclaimed key. Every label that documented its zero case in
+//        parentheses was quietly unsaveable.
+//
+// Rewriting here rather than escaping in the writer keeps the invariant on the
+// side that can enforce it: a *name* can never contain the format's separators,
+// so the reader's split-at-the-first-'=' is correct by construction.
 std::string CleanLabel(const char* label) {
     std::string s = label;
     const size_t h = s.find("##");
     if (h != std::string::npos) s = s.substr(0, h);
-    for (char& c : s) if (c == '/') c = '-';
+    for (char& c : s) {
+        if (c == '/') c = '-';
+        else if (c == '=') c = '-';
+    }
     return s;
 }
 
@@ -272,11 +288,20 @@ bool WriteFile(const std::string& path, Bank only, std::string& err) {
     return true;
 }
 
-bool ReadFile(const std::string& path, std::string& err) {
+// `merge` keeps whatever is already staged instead of replacing it.
+//
+// `loaded` is drained at declaration, which is next frame -- so loading two
+// banks back to back inside one frame, which is exactly what the startup
+// defaults do, had the second file's clear() throw away the first file's values
+// before a single control had seen them. Machine would load and then vanish the
+// moment a mirror default was read after it.
+bool ReadFile(const std::string& path, std::string& err, bool merge = false) {
     std::ifstream f(path);
     if (!f.is_open()) { err = "could not read " + path; return false; }
-    S().loaded.clear();
-    S().unclaimed.clear();
+    if (!merge) {
+        S().loaded.clear();
+        S().unclaimed.clear();
+    }
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -310,6 +335,7 @@ const char* BankName(Bank b) {
     switch (b) {
         case Bank::Unassigned: return "unassigned";
         case Bank::Machine:    return "machine";
+        case Bank::Fit:        return "fit";
         case Bank::Show:       return "show";
         case Bank::Look:       return "look";
         case Bank::Mirror:     return "mirror";
@@ -322,6 +348,7 @@ const char* BankName(Bank b) {
 const char* BankExt(Bank b) {
     switch (b) {
         case Bank::Machine: return ".machine";
+        case Bank::Fit:     return ".fit";
         case Bank::Show:    return ".show";
         case Bank::Look:    return ".look";
         case Bank::Mirror:  return ".mirror";
@@ -367,6 +394,82 @@ bool LoadBank(Bank, const std::string& path, std::string& err) {
     // The bank a key belongs to is decided by the code that declares it, not by
     // the file it arrived in, so loading is the same operation either way.
     return ReadFile(path, err);
+}
+
+// --- defaults ---------------------------------------------------------------
+
+namespace {
+
+std::string& DefaultSlot(Bank b) {
+    static std::string slots[(int)Bank::Count];
+    const int i = (int)b;
+    static std::string none;
+    if (i < 0 || i >= (int)Bank::Count) return none;
+    return slots[i];
+}
+
+std::string DefaultsPath() { return PresetDir() + "/defaults"; }
+
+}  // namespace
+
+std::string DefaultName(Bank b) { return DefaultSlot(b); }
+
+void SetDefaultName(Bank b, const std::string& name) { DefaultSlot(b) = name; }
+
+bool SaveDefaults(std::string& err) {
+    MkDirP(PresetDir());
+    const std::string path = DefaultsPath();
+    std::ofstream f(path);
+    if (!f.is_open()) { err = "could not write " + path; return false; }
+    f << "# which preset each bank comes up in\n";
+    for (int b = (int)Bank::Machine; b < (int)Bank::Count; ++b) {
+        const std::string& n = DefaultSlot((Bank)b);
+        if (n.empty()) continue;
+        f << BankName((Bank)b) << " = " << n << '\n';
+    }
+    return true;
+}
+
+bool LoadDefaults(std::string& err) {
+    const std::string path = DefaultsPath();
+    std::ifstream f(path);
+    if (!f.is_open()) { err = "no defaults file at " + path; return false; }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+        Trim(key); Trim(val);
+        for (int b = (int)Bank::Machine; b < (int)Bank::Count; ++b)
+            if (key == BankName((Bank)b)) DefaultSlot((Bank)b) = val;
+    }
+    return true;
+}
+
+int LoadBankDefaults(std::string& err) {
+    int n = 0;
+    std::string problems;
+    // Merged, so every bank's values are still staged when the last file is
+    // read -- they all land together on the first frame of the panel.
+    for (int b = (int)Bank::Machine; b < (int)Bank::Count; ++b) {
+        const Bank bank = (Bank)b;
+        // Machine is one file and is loaded by name elsewhere; it has no
+        // choice of preset to record.
+        if (bank == Bank::Machine) continue;
+        const std::string& nm = DefaultSlot(bank);
+        if (nm.empty()) continue;
+        const std::string path = BankDir(bank) + "/" + nm + BankExt(bank);
+        std::string e;
+        if (ReadFile(path, e, /*merge=*/true)) {
+            ++n;
+        } else {
+            if (!problems.empty()) problems += "; ";
+            problems += std::string(BankName(bank)) + ": " + e;
+        }
+    }
+    err = problems;
+    return n;
 }
 
 int BankCount(Bank b, int* retired_out) {
@@ -731,6 +834,9 @@ std::string SettingsDoc() {
       << "| `machine` | `presets/machine.machine` | the room, not the piece: sensor,"
       << " screen, camera mask, MIDI map. Loaded at startup, never carried to another"
       << " venue. |\n"
+      << "| `fit` | `presets/fit/*.fit` | how the face fit is set up: crop shape,"
+      << " head mode, grid/steps/lr, and what happens outside the crop. Separate from"
+      << " `mirror` so a ripple preset cannot rewrite it. |\n"
       << "| `show` | `presets/show/*.show` | the running order -- what plays and when. |\n"
       << "| `look` | `presets/look/*.look` | composition that outlives one scene: text"
       << " overlay, transition. |\n"

@@ -39,7 +39,7 @@ p mirror/moving ripple = 0
 p mirror/network/contrast (w out) = 5.871
 p mirror/network/detail (w hidden) = 9.355
 p mirror/network/gain tilt (front<->back) = 0.056
-p mirror/network/sine layers (0 = tanh only) = 0
+p mirror/network/sine layers (0 - tanh only) = 0
 p mirror/network/sine w0 (composition) = 12.9
 p mirror/network/w shape (gauss<->uniform) = 0
 p mirror/radius = 0.12
@@ -55,7 +55,6 @@ p mirror/ripple speed = 1.2
 p mirror/soft centers (anti-alias) = 1
 p mirror/soft edge = 1
 p mirror/track live feed = 0
-p mirror/z rate -s = 0.052
 p mirror/z/z amplitude = 0.548
 p mirror/z/z auto-rate -s = 0.052
 p mirror/z/z step size = 0.1
@@ -130,7 +129,7 @@ p roots/material/color noise = 0.6
 p roots/material/diffuse = 0.55
 p roots/material/radius scale = 1.4
 p roots/material/shininess = 169.697
-p roots/post/DoF focus (0=auto) = 0
+p roots/post/DoF focus (0-auto) = 0
 p roots/post/DoF range = 90
 p roots/post/DoF strength = 1
 p roots/post/bloom = 1

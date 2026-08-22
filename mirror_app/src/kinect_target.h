@@ -34,6 +34,18 @@ public:
     // new sensor frame has arrived since the last call -- the caller should
     // keep training on the previous target rather than treating it as an error.
     bool poll(int w, int h, std::vector<float>& rgb) override;
+    // The same, resampling only `fill` of the destination. Everything outside
+    // it keeps whatever it held -- see DstRect.
+    bool poll(int w, int h, std::vector<float>& rgb, const DstRect& fill);
+
+    // Advance the retained snapshot and nothing else. Returns true if a new
+    // sensor frame arrived.
+    //
+    // For the callers that want the *frame* fresh but do not want a resampling
+    // of it: with the live fit disarmed, the overlay was calling poll() into a
+    // scratch buffer purely to move the snapshot along, which paid for a full
+    // 1920x1080 box filter and then dropped the result on the floor.
+    bool pump();
 
     // The most recently polled frame as RGB8 at (w, h), for the face tracker.
     //
@@ -43,7 +55,20 @@ public:
     // face outline from one frame applied to the pixels of another, which shows
     // up as the fit smearing whenever anyone moves. Returns false before the
     // first successful poll().
-    bool lastFrameRGB8(int w, int h, std::vector<unsigned char>& rgb) const;
+    // `filtered` box-filters the source footprint; false takes one pixel per
+    // destination pixel. The tracker wants the filter -- its landmarks become
+    // the mask, the crop and the region, and sampling noise there turns into
+    // geometry that jitters. The camera overlay does not: it is a thumbnail
+    // nothing measures.
+    bool lastFrameRGB8(int w, int h, std::vector<unsigned char>& rgb,
+                       bool filtered = true) const;
+
+    // The retained frame as float in [0,1], with optional partial fill. Same as
+    // lastFrameRGB8 but returns floats. Used by the fitter to ensure it works
+    // from the same retained snapshot as the tracker, not a fresh poll that would
+    // consume the frame twice.
+    bool lastFrameRGBF(int w, int h, std::vector<float>& rgb,
+                       const DstRect& fill = {}) const;
 
     const char* name() const override { return "kinect"; }
     std::string error() const override;

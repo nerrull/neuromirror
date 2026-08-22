@@ -1,6 +1,6 @@
 # mirror_app settings -- bank: mirror
 p mirror/colour/amp gain = 1.5
-p mirror/colour/color mix (0 grey -> 1 RGB) = 0
+p mirror/colour/color mix (0 grey -> 1 RGB) = 0.621
 p mirror/colour/color travel (palette follows orbit) = 0
 p mirror/colour/gamma (>1 darkens) = 1
 p mirror/colour/grey ch = 0
@@ -20,10 +20,10 @@ p mirror/mask emergence (transition)/transition (0 pond -> 1 mask) = 0
 p mirror/mask emergence (transition)/wet sheen (spec) = 0.5
 p mirror/moving ripple = 0
 p mirror/network/contrast (w out) = 4.717
-p mirror/network/detail (w hidden) = 6.449
-p mirror/network/gain tilt (front<->back) = 0.557
+p mirror/network/detail (w hidden) = 6.07
+p mirror/network/gain tilt (front<->back) = 0.49
 p mirror/network/sine layers (0 - tanh only) = 1
-p mirror/network/sine w0 (composition) = 7.2
+p mirror/network/sine w0 (composition) = 60
 p mirror/network/w shape (gauss<->uniform) = 0
 p mirror/radius = 0.12
 p mirror/rain from audio/hit -> position = 0

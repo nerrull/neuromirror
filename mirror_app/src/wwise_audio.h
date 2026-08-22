@@ -31,13 +31,18 @@
 // audible failure rather than a wrong sound. Everything below must exist in the
 // project with exactly these names.
 //
-//   Events  Play_Amb_Mirror / Stop_Amb_Mirror     the mirror scene's bed
+//   Events  Play_FirePlucker / Stop_FirePlucker   the mirror phase's pluck
+//           Play_Pad        / Stop_Pad            the mirror phase's chord
 //           Play_Amb_Roots  / Stop_Amb_Roots      the root scene's bed
 //           Play_Transition / Stop_Transition     the handoff
 //           Play_Pluck, Play_Bell, Play_Drop      one-shots
+//           Play_Amb_Mirror / Stop_Amb_Mirror     the old mirror bed, unused by
+//                                                 the show since the phase
+//                                                 became pluck + pad
 //   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt   (the room)
 //           FitLevel, SceneProgress                             (the piece)
 //           Key, Intensity                                      (the operator)
+//           Pad_Note1..4, Comb_Tuning                           (the harmony)
 //   States  Phase = Idle | Fitting | Transition | Roots
 //
 // ## Without the SDK
@@ -68,6 +73,14 @@ struct AudioParams {
     float scene_progress = 0.f; // 0..1 through the current phase
     float key = 48.f;           // MIDI note, 24..84 -- the piece's base pitch
     float intensity = 1.f;      // 0..1 master, on the main bus
+
+    // The mirror phase's harmony, computed by `chord` (see chord.h). Four MIDI
+    // notes, one per pad voice, and the comb frequency the pluck rings at.
+    // Sent every frame like everything else: the glide *is* these numbers
+    // moving, so a frame that skipped them would be a frame the pad did not
+    // glide through.
+    float pad_note[4] = {48.f, 58.f, 63.f, 70.f};  // MIDI, 24..96
+    float comb_hz = 466.16f;                       // Hz, 20..2000
 };
 
 class WwiseAudio {

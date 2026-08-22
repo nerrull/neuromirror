@@ -102,6 +102,7 @@ add_library(mirror_core STATIC
     src/show_timeline.cpp
     src/drop_spawner.cpp
     src/presence.cpp
+    src/chord.cpp
     src/pond_state.cpp)
 target_include_directories(mirror_core PUBLIC src ${MLX_INCLUDE_DIRS})
 # external/ is gitignored: face_basis.bin and the MediaPipe dylib are both
@@ -229,6 +230,14 @@ if(_ak_have_all)
         ${_ak_lib}/libModalVoiceFX.a
         ${_ak_lib}/libRacineCombFX.a
         ${_ak_lib}/libAkRoomVerbFX.a
+        # Factory effects the project authors and the engine therefore has to
+        # carry: an unregistered plug-in loads without error and processes
+        # nothing, so each of these was silently a no-op at showtime while
+        # working perfectly in Authoring. Time Stretch and Convolution Reverb
+        # are the pluck's chain; the Peak Limiter is the output ceiling.
+        ${_ak_lib}/libAkTimeStretchFX.a
+        ${_ak_lib}/libAkConvolutionReverbFX.a
+        ${_ak_lib}/libAkPeakLimiterFX.a
         ${_ak_lib}/libAkMemoryMgr.a
         ${_ak_lib}/libAkStreamMgr.a
         ${_ak_lib}/libAkSoundEngine.a
@@ -352,6 +361,13 @@ target_link_libraries(show_timeline_test PRIVATE mirror_core)
 # sound engine) is involved.
 add_executable(presence_test tests/presence_test.cpp)
 target_link_libraries(presence_test PRIVATE mirror_core)
+
+# The mirror phase's harmony: the checkpoints, the glide, and the pluck staying
+# in tune with the pad. Pure arithmetic over a synthetic fit, so a fit that
+# stalls, runs backwards or is abandoned halfway can all be walked without a
+# camera or a sound engine.
+add_executable(chord_test tests/chord_test.cpp)
+target_link_libraries(chord_test PRIVATE mirror_core)
 
 # The text overlay's distance transform, against an analytically known shape.
 # Pure geometry: no Metal, no fonts, no MLX.

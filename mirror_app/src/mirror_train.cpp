@@ -44,11 +44,22 @@ void MlpTrainer::setTarget(const std::vector<float>& rgb, int h, int w,
     target_w_ = w;
     masked_ = !mask.empty();
 
+    // The index set, as one number. Cheap (the mask is walked below anyway) and
+    // exact enough: anything keyed on the identity of the selected pixels keys
+    // on this, so it has to move when they do.
+    auto note_indices = [this](uint64_t h64) {
+        if (h64 == idx_hash_) return;
+        idx_hash_ = h64;
+        ++target_gen_;
+    };
+
     if (!masked_) {
         target_ = mx::astype(mx::array(rgb.data(), {h * w, 3}, mx::float32),
                              mx::float16);
         idx_ = mx::zeros({1}, mx::uint32);
         trained_px_ = h * w;
+        // The whole grid: one state, identified by its size.
+        note_indices(0x9E3779B97F4A7C15ull ^ (uint64_t(h) << 32) ^ uint64_t(w));
         mx::eval(target_);
         return;
     }
@@ -60,14 +71,17 @@ void MlpTrainer::setTarget(const std::vector<float>& rgb, int h, int w,
     std::vector<float> vals;
     idx.reserve(mask.size() / 4);
     vals.reserve(mask.size() / 4 * 3);
+    uint64_t h64 = 1469598103934665603ull;          // FNV-1a over the indices
     for (size_t i = 0; i < mask.size(); ++i) {
         if (!mask[i]) continue;
         idx.push_back(static_cast<uint32_t>(i));
+        h64 = (h64 ^ uint64_t(i)) * 1099511628211ull;
         vals.push_back(rgb[i * 3 + 0]);
         vals.push_back(rgb[i * 3 + 1]);
         vals.push_back(rgb[i * 3 + 2]);
     }
     trained_px_ = static_cast<int>(idx.size());
+    note_indices(h64);
     if (trained_px_ == 0) {
         // An empty mask would make the loss 0/0. Treat it as "nothing to learn
         // this frame" rather than poisoning the weights with NaN.

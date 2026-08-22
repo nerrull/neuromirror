@@ -57,6 +57,19 @@ public:
     // Number of pixels the last setTarget selected, and the grid it came from.
     int trainedPixels() const { return trained_px_; }
     bool masked() const { return masked_; }
+
+    // Bumped whenever the *set of pixels* changes -- not merely how many of
+    // them there are.
+    //
+    // Anything caching something derived from `indices()` has to key on this.
+    // A count is not enough and the difference is not academic: a face crop
+    // that moves across the frame keeps very nearly the same area, so a cache
+    // keyed on the count alone stays valid while every index under it changes.
+    // What that trains is the colour sampled at the mask's *new* position
+    // against the coordinates of its *old* one -- a fit continuously taught a
+    // small, drifting lie, which reads as the reconstruction sliding and
+    // smearing whenever the subject moves rather than as an obvious fault.
+    uint64_t targetGeneration() const { return target_gen_; }
     // Row indices into the h*w fit grid, for gathering the features to match.
     const mx::array& indices() const { return idx_; }
     bool hasTarget() const { return target_h_ > 0; }
@@ -78,6 +91,9 @@ private:
     int target_h_ = 0, target_w_ = 0;
     int trained_px_ = 0;
     bool masked_ = false;
+    // Hash of the index set, and a counter that moves when the hash does.
+    uint64_t idx_hash_ = 0;
+    uint64_t target_gen_ = 0;
     int step_ = 0;
     bool ready_ = false;
 };

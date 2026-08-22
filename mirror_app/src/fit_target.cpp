@@ -1,5 +1,7 @@
 #include "fit_target.h"
 
+#include <dispatch/dispatch.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -11,11 +13,51 @@ namespace {
 // output types -- the fit target wants floats in [0,1], MediaPipe wants bytes
 // -- and having them share this is what keeps the two from drifting apart and
 // giving the tracker a subtly different image from the one being fitted.
+//
+// ## Why this is threaded
+//
+// It is the single most expensive thing on the CPU side of a frame. The colour
+// camera is 1920x1080 and every call reads *every source pixel in the rect
+// once* -- around 1.5M pixels at 4 bytes -- and a frame runs it more than once:
+// once for the fit target, once for the tracker's larger frame, once more for
+// the preview when the overlay is up. That was several milliseconds of a 16 ms
+// budget spent on one core while seven idled.
+//
+// Destination rows are independent by construction -- each reads a disjoint
+// half-open span of source rows and writes only its own output row -- so this
+// parallelises with no coordination at all. dispatch_apply rather than a thread
+// pool because the work is already on a per-frame cadence and libdispatch's
+// pool is the one the rest of the system is scheduling against.
+//
+// Below a threshold the dispatch costs more than it saves; small destinations
+// (the 320px preview) stay on the calling thread.
+constexpr int kParallelMinRows = 64;
+
+// Resize without clobbering, so a partial fill can leave the rest of the buffer
+// alone. A buffer that had to grow (or is new) starts zeroed; one that is
+// already the right size keeps its contents.
+template <typename T>
+void EnsureSize(std::vector<T>& dst, size_t n) {
+    if (dst.size() == n) return;
+    dst.assign(n, T(0));
+}
+
+// Clamp a fill rect to the destination. An empty one means everything.
+DstRect ClampFill(DstRect f, int dst_w, int dst_h) {
+    if (f.w <= 0 || f.h <= 0) return DstRect{0, 0, dst_w, dst_h};
+    f.x = std::min(std::max(f.x, 0), dst_w);
+    f.y = std::min(std::max(f.y, 0), dst_h);
+    f.w = std::min(f.w, dst_w - f.x);
+    f.h = std::min(f.h, dst_h - f.y);
+    return f;
+}
+
 template <typename T, typename Store>
 void BoxDownsample(const unsigned char* src, int src_w, int src_h,
                    int stride_px, int r_off, int b_off, SrcRect rect,
-                   int dst_w, int dst_h, std::vector<T>& dst, Store store) {
-    dst.assign(size_t(dst_w) * dst_h * 3, T(0));
+                   int dst_w, int dst_h, std::vector<T>& dst, Store store,
+                   DstRect fill = {}, bool filter = true, bool mirror = false) {
+    EnsureSize(dst, size_t(dst_w) * dst_h * 3);
     if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
 
     // A rect from a preset or a stale frame size is not trusted to be inside the
@@ -25,23 +67,44 @@ void BoxDownsample(const unsigned char* src, int src_w, int src_h,
     rect.w = std::min(std::max(rect.w, 1), src_w - rect.x);
     rect.h = std::min(std::max(rect.h, 1), src_h - rect.y);
 
+    fill = ClampFill(fill, dst_w, dst_h);
+    if (fill.w <= 0 || fill.h <= 0) return;
+    const int fx0 = fill.x, fx1 = fill.x + fill.w;
+
     const int g_off = (r_off + b_off) / 2;   // green sits between them either way
 
-    for (int dy = 0; dy < dst_h; ++dy) {
+    T* out = dst.data();
+    auto do_row = [=](int dy) {
         // Source rows covered by this destination row. Computed as a half-open
         // span so every source pixel lands in exactly one box -- rounding both
         // ends independently would double-count or drop rows.
         const int y0 = rect.y + int(int64_t(dy) * rect.h / dst_h);
         const int y1 = std::max(y0 + 1, rect.y + int(int64_t(dy + 1) * rect.h / dst_h));
-        for (int dx = 0; dx < dst_w; ++dx) {
-            const int x0 = rect.x + int(int64_t(dx) * rect.w / dst_w);
-            const int x1 = std::max(x0 + 1, rect.x + int(int64_t(dx + 1) * rect.w / dst_w));
+        for (int dx = fx0; dx < fx1; ++dx) {
+            // Which source column this destination column is of. Mirroring is
+            // just reading them backwards.
+            const int sx = mirror ? (dst_w - 1 - dx) : dx;
+            const int x0 = rect.x + int(int64_t(sx) * rect.w / dst_w);
+            const int x1 = std::max(x0 + 1, rect.x + int(int64_t(sx + 1) * rect.w / dst_w));
+
+            // Point sampling takes the middle of the footprint the box would
+            // have averaged, so the two agree on *where* a destination pixel
+            // comes from and differ only in how much of it they look at.
+            if (!filter) {
+                const unsigned char* px = src +
+                    (size_t((y0 + y1) / 2) * src_w + size_t((x0 + x1) / 2)) * stride_px;
+                T* o = out + (size_t(dy) * dst_w + dx) * 3;
+                o[0] = store(float(px[r_off]));
+                o[1] = store(float(px[g_off]));
+                o[2] = store(float(px[b_off]));
+                continue;
+            }
 
             uint32_t acc_r = 0, acc_g = 0, acc_b = 0, n = 0;
             for (int y = y0; y < y1; ++y) {
-                const unsigned char* row = src + size_t(y) * src_w * stride_px;
+                const unsigned char* srow = src + size_t(y) * src_w * stride_px;
                 for (int x = x0; x < x1; ++x) {
-                    const unsigned char* px = row + size_t(x) * stride_px;
+                    const unsigned char* px = srow + size_t(x) * stride_px;
                     acc_r += px[r_off];
                     acc_g += px[g_off];
                     acc_b += px[b_off];
@@ -49,11 +112,20 @@ void BoxDownsample(const unsigned char* src, int src_w, int src_h,
                 }
             }
             if (!n) continue;
-            T* o = &dst[(size_t(dy) * dst_w + dx) * 3];
+            T* o = out + (size_t(dy) * dst_w + dx) * 3;
             o[0] = store(float(acc_r) / n);
             o[1] = store(float(acc_g) / n);
             o[2] = store(float(acc_b) / n);
         }
+    };
+
+    const int fy0 = fill.y;
+    if (fill.h >= kParallelMinRows) {
+        dispatch_apply(size_t(fill.h),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                       ^(size_t i) { do_row(fy0 + int(i)); });
+    } else {
+        for (int i = 0; i < fill.h; ++i) do_row(fy0 + i);
     }
 }
 
@@ -119,17 +191,28 @@ void DownsampleToRGB8(const unsigned char* src, int src_w, int src_h,
 
 void DownsampleRectRGB8(const unsigned char* src, int src_w, int src_h,
                         int stride_px, int r_off, int b_off, const SrcRect& rect,
-                        int dst_w, int dst_h, std::vector<float>& dst) {
+                        int dst_w, int dst_h, std::vector<float>& dst,
+                        const DstRect& fill, bool mirror) {
     BoxDownsample(src, src_w, src_h, stride_px, r_off, b_off, rect,
-                  dst_w, dst_h, dst, StoreF());
+                  dst_w, dst_h, dst, StoreF(), fill, /*filter=*/true, mirror);
 }
 
 void DownsampleRectToRGB8(const unsigned char* src, int src_w, int src_h,
                           int stride_px, int r_off, int b_off,
                           const SrcRect& rect, int dst_w, int dst_h,
-                          std::vector<unsigned char>& dst) {
+                          std::vector<unsigned char>& dst,
+                          const DstRect& fill, bool mirror) {
     BoxDownsample(src, src_w, src_h, stride_px, r_off, b_off, rect,
-                  dst_w, dst_h, dst, StoreU8());
+                  dst_w, dst_h, dst, StoreU8(), fill, /*filter=*/true, mirror);
+}
+
+void PointSampleRectToRGB8(const unsigned char* src, int src_w, int src_h,
+                           int stride_px, int r_off, int b_off,
+                           const SrcRect& rect, int dst_w, int dst_h,
+                           std::vector<unsigned char>& dst, bool mirror) {
+    BoxDownsample(src, src_w, src_h, stride_px, r_off, b_off, rect,
+                  dst_w, dst_h, dst, StoreU8(), DstRect{}, /*filter=*/false,
+                  mirror);
 }
 
 void MirrorRGB8(int w, int h, std::vector<unsigned char>& rgb) {
@@ -144,17 +227,29 @@ void MirrorRGB8(int w, int h, std::vector<unsigned char>& rgb) {
     }
 }
 
-void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb) {
+void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb,
+               const DstRect& fill_in) {
     if (w <= 0 || h <= 0 || rgb.size() != size_t(w) * h * 3) return;
     if (dx == 0 && dy == 0) return;
 
+    const DstRect f = ClampFill(fill_in, w, h);
+    if (f.w <= 0 || f.h <= 0) return;
+
+    // Only the source rows this output rect reads are copied aside. Whole-buffer
+    // was two 2.7 MB passes over a frame of which, under a face crop, a few
+    // percent is ever looked at again.
+    const int sy0 = std::min(h - 1, std::max(0, f.y - dy));
+    const int sy1 = std::min(h - 1, std::max(0, f.y + f.h - 1 - dy));
+    const int rows = sy1 - sy0 + 1;
     static std::vector<float> tmp;
-    tmp = rgb;
-    for (int y = 0; y < h; ++y) {
+    tmp.assign(rgb.begin() + size_t(sy0) * w * 3,
+               rgb.begin() + size_t(sy1 + 1) * w * 3);
+
+    for (int y = f.y; y < f.y + f.h; ++y) {
         const int sy = std::min(h - 1, std::max(0, y - dy));
-        const float* srow = &tmp[size_t(sy) * w * 3];
+        const float* srow = &tmp[size_t(std::min(rows - 1, sy - sy0)) * w * 3];
         float* drow = &rgb[size_t(y) * w * 3];
-        for (int x = 0; x < w; ++x) {
+        for (int x = f.x; x < f.x + f.w; ++x) {
             const int sx = std::min(w - 1, std::max(0, x - dx));
             const float* s = srow + size_t(sx) * 3;
             float* d = drow + size_t(x) * 3;
@@ -164,26 +259,32 @@ void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb) {
 }
 
 void PlaceRGBF(int w, int h, float src_cx, float src_cy, float scale,
-               std::vector<float>& rgb) {
+               float dst_cx, float dst_cy,
+               std::vector<float>& rgb, const DstRect& fill_in) {
     if (w <= 1 || h <= 1 || rgb.size() != size_t(w) * h * 3) return;
     if (scale <= 1e-4f) return;
 
+    const DstRect f = ClampFill(fill_in, w, h);
+    if (f.w <= 0 || f.h <= 0) return;
+
+    // Bilinear reads scattered source rows, so this one keeps the whole-buffer
+    // copy; bounding the *write* is still most of the saving.
     static std::vector<float> tmp;
     tmp = rgb;
     const float inv = 1.f / scale;
-    for (int y = 0; y < h; ++y) {
+    for (int y = f.y; y < f.y + f.h; ++y) {
         // Destination normalised -> source normalised. The inverse map, so
         // every destination pixel is written exactly once; forward-mapping
         // would leave holes wherever scale > 1.
         const float v = (float(y) + 0.5f) / float(h);
-        const float sv = (v - 0.5f) * inv + src_cy;
+        const float sv = (v - dst_cy) * inv + src_cy;
         const float fy = sv * float(h) - 0.5f;
         const float cy = std::min(std::max(fy, 0.f), float(h - 1));
         const int y0 = int(cy), y1 = std::min(y0 + 1, h - 1);
         const float ty = cy - float(y0);
-        for (int x = 0; x < w; ++x) {
+        for (int x = f.x; x < f.x + f.w; ++x) {
             const float u = (float(x) + 0.5f) / float(w);
-            const float su = (u - 0.5f) * inv + src_cx;
+            const float su = (u - dst_cx) * inv + src_cx;
             const float fx = su * float(w) - 0.5f;
             const float cx = std::min(std::max(fx, 0.f), float(w - 1));
             const int x0 = int(cx), x1 = std::min(x0 + 1, w - 1);

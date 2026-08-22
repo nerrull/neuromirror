@@ -15,6 +15,7 @@
 
 #include "fit_target.h"
 #include "pond_state.h"
+#include "mirror_train.h"
 
 #include <cmath>
 #include <cstdio>
@@ -453,11 +454,154 @@ void test_shift() {
     check(finite, "a shift larger than the frame stays in bounds");
 }
 
+
+// --- bounded fills and folded mirroring -------------------------------------
+//
+// Both exist to make the resample cheap, and both are the kind of optimisation
+// that is silently almost-right: a partial fill that is off by a pixel trains
+// the fit on stale surround, and a mirror folded into the source indexing that
+// disagrees with the old flip-afterwards pass puts every landmark on the wrong
+// side of the face. So they are pinned against the unoptimised results they
+// replaced rather than against expected values written out by hand.
+void test_fill_rect() {
+    std::printf("\nbounded fills\n");
+    const int SW = 640, SH = 360, DW = 91, DH = 53;   // deliberately awkward
+    std::vector<unsigned char> src(size_t(SW) * SH * 4);
+    unsigned rng = 7u;
+    for (auto& b : src) { rng = rng * 1664525u + 1013904223u; b = (unsigned char)(rng >> 24); }
+    const mirror::SrcRect r =
+        mirror::ComputeFeedRect(SW, SH, DW, DH, mirror::FeedCrop{});
+
+    std::vector<float> full;
+    mirror::DownsampleRectRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, full);
+
+    const mirror::DstRect fill{17, 9, 30, 21};
+    std::vector<float> part(size_t(DW) * DH * 3, -1.f);
+    mirror::DownsampleRectRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, part, fill);
+
+    bool inside = true, outside = true;
+    for (int y = 0; y < DH; ++y)
+        for (int x = 0; x < DW; ++x) {
+            const bool in = x >= fill.x && x < fill.x + fill.w &&
+                            y >= fill.y && y < fill.y + fill.h;
+            for (int c = 0; c < 3; ++c) {
+                const size_t i = (size_t(y) * DW + x) * 3 + c;
+                if (in && full[i] != part[i]) inside = false;
+                if (!in && part[i] != -1.f)   outside = false;
+            }
+        }
+    check(inside,  "a bounded fill matches the full result inside its rect");
+    check(outside, "a bounded fill leaves everything outside untouched");
+
+    std::vector<float> whole;
+    mirror::DownsampleRectRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, whole,
+                               mirror::DstRect{0, 0, DW, DH});
+    check(whole == full, "an all-covering rect equals the unbounded result");
+
+    // Folded mirroring against the flip-afterwards pass it replaced.
+    std::vector<unsigned char> flipped, folded;
+    mirror::DownsampleRectToRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, flipped);
+    mirror::MirrorRGB8(DW, DH, flipped);
+    mirror::DownsampleRectToRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, folded,
+                                 mirror::DstRect{}, /*mirror=*/true);
+    check(flipped == folded, "a folded mirror equals resample-then-flip");
+
+    std::vector<unsigned char> mpart(size_t(DW) * DH * 3, 0);
+    mirror::DownsampleRectToRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, mpart,
+                                 fill, /*mirror=*/true);
+    bool mok = true;
+    for (int y = fill.y; y < fill.y + fill.h; ++y)
+        for (int x = fill.x; x < fill.x + fill.w; ++x)
+            for (int c = 0; c < 3; ++c) {
+                const size_t i = (size_t(y) * DW + x) * 3 + c;
+                if (mpart[i] != folded[i]) mok = false;
+            }
+    check(mok, "a mirrored bounded fill matches the mirrored full result");
+
+    // The head-centred mode shifts inside the same rect, so the bounded shift
+    // has to agree with the whole-buffer one there too.
+    bool shift_ok = true;
+    for (int dx : {0, 5, -7})
+        for (int dy : {3, -4}) {
+            if (dx == 0 && dy == 0) continue;
+            std::vector<float> a = full, b = full;
+            mirror::ShiftRGBF(DW, DH, dx, dy, a);
+            mirror::ShiftRGBF(DW, DH, dx, dy, b, fill);
+            for (int y = fill.y; y < fill.y + fill.h; ++y)
+                for (int x = fill.x; x < fill.x + fill.w; ++x)
+                    for (int c = 0; c < 3; ++c) {
+                        const size_t i = (size_t(y) * DW + x) * 3 + c;
+                        if (a[i] != b[i]) shift_ok = false;
+                    }
+        }
+    check(shift_ok, "a bounded shift matches the whole-buffer one in its rect");
+
+    std::vector<unsigned char> pt;
+    mirror::PointSampleRectToRGB8(src.data(), SW, SH, 4, 0, 2, r, DW, DH, pt);
+    check(pt.size() == size_t(DW) * DH * 3, "point sampling fills the destination");
+}
+
+
+// --- a mask that moves without changing size --------------------------------
+//
+// The regression this pins: the fit features are the *coordinates* of the
+// pixels the mask selected, cached so they are not rebuilt every step. That
+// cache used to be keyed on the trained pixel *count*, which a crop tracking a
+// face across the frame does not change -- it keeps very nearly the same area
+// the whole way. So the features stayed as they were while every index beneath
+// them moved, and the network was trained on the colour at the mask's new
+// position against the coordinates of its old one.
+//
+// Checked as a property of the trainer rather than through a fit, because the
+// symptom at the far end is "the reconstruction smears when the subject moves",
+// which is exactly the kind of thing a test cannot assert and a person cannot
+// unsee.
+void test_moving_mask_generation() {
+    std::printf("\na mask that moves\n");
+    const int W = 32, H = 24;
+    std::vector<float> rgb(size_t(W) * H * 3, 0.5f);
+
+    auto box_mask = [&](int x0, int y0, int bw, int bh) {
+        std::vector<unsigned char> m(size_t(W) * H, 0);
+        for (int y = y0; y < y0 + bh; ++y)
+            for (int x = x0; x < x0 + bw; ++x) m[size_t(y) * W + x] = 1;
+        return m;
+    };
+
+    mirror::MLPConfig cfg{8, 32, 3, 4, mirror::Act::Tanh, mirror::Act::Sigmoid};
+    mirror::MlpTrainer tr;
+    tr.reset(cfg, mx::zeros({cfg.total_weights()}, mx::float16));
+
+    const auto a = box_mask(4, 4, 8, 8);
+    const auto b = box_mask(12, 4, 8, 8);      // same area, different pixels
+    const auto c = box_mask(12, 4, 8, 9);      // different area too
+
+    tr.setTarget(rgb, H, W, a);
+    const uint64_t g_a = tr.targetGeneration();
+    const int px_a = tr.trainedPixels();
+
+    tr.setTarget(rgb, H, W, b);
+    const uint64_t g_b = tr.targetGeneration();
+    const int px_b = tr.trainedPixels();
+
+    check(px_a == px_b, "a mask that only moves keeps its pixel count");
+    check(g_a != g_b, "...and still reports a new target generation");
+
+    tr.setTarget(rgb, H, W, b);
+    check(tr.targetGeneration() == g_b,
+          "the same mask twice does not churn the generation");
+
+    tr.setTarget(rgb, H, W, c);
+    check(tr.targetGeneration() != g_b, "a resized mask reports a new one too");
+}
+
 }  // namespace
 
 int main() {
     std::printf("fit_target_test: resampling + live-target fitting\n");
     test_downsample();
+    test_fill_rect();
+    test_moving_mask_generation();
     test_static_target();
     test_shift();
     test_tracking();

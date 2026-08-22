@@ -1,0 +1,17 @@
+# mirror_app settings -- bank: fit
+# migrated out of presets/mirror/mirror_bw.mirror, where these used
+# to ride along with the ripple settings and overwrite
+# whatever the fit had been set to.
+p mirror/animate z outside = 0
+p mirror/crop/grid = 1
+p mirror/crop/lr = 0.002
+p mirror/crop/steps = 4
+p mirror/fade starts = 0.02
+p mirror/fade width = 0.35
+p mirror/feed/grid = 3
+p mirror/feed/lr = 0.003
+p mirror/feed/steps = 1
+p mirror/follow the outline = 1
+p mirror/grey outside = 0
+p mirror/soft edge = 1
+p mirror/track live feed = 0

@@ -247,7 +247,7 @@ void Pond::beginFit(const std::vector<float>& rgb, int h, int w,
     // rest of the frame to animate.
     fit_z_ = p.z;
     fit_feats_key_.reset();
-    fit_feats_px_ = -1;
+    fit_feats_gen_ = ~0ull;
     fitting_ = true;
 }
 
@@ -289,7 +289,7 @@ void Pond::rebuildFitFeatures(const PondParams& p) {
     fit_feats_ = mx::contiguous(feats);
     mx::eval(fit_feats_);
     fit_feats_key_ = std::array<int, 2>{h, w};
-    fit_feats_px_ = trainer_.trainedPixels();
+    fit_feats_gen_ = trainer_.targetGeneration();
     fit_feats_in_ = {p.coord_off_x, p.coord_off_y, fit_z_};
 }
 
@@ -297,8 +297,13 @@ float Pond::fitStep(float lr, const PondParams& p) {
     if (!fitting_ || !trainer_.hasTarget()) return -1.f;
     const std::array<int, 2> key{trainer_.targetH(), trainer_.targetW()};
     const std::array<float, 3> in{p.coord_off_x, p.coord_off_y, fit_z_};
+    // The generation, not the pixel *count*. The features are the coordinates
+    // of the pixels the mask selected, so they go stale the moment the mask
+    // selects different ones -- and a crop tracking a face keeps almost exactly
+    // the same area while every index under it changes, so a count never
+    // noticed. See MlpTrainer::targetGeneration.
     if (!fit_feats_key_ || *fit_feats_key_ != key ||
-        fit_feats_px_ != trainer_.trainedPixels() || fit_feats_in_ != in) {
+        fit_feats_gen_ != trainer_.targetGeneration() || fit_feats_in_ != in) {
         // In the head-stabilised mode this rebuild happens on every frame the
         // subject moves. It is affordable because the fit grid is small (a few
         // hundred pixels wide, ~14k rows): the same rebuild at display

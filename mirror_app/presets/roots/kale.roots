@@ -133,7 +133,7 @@ p roots/material/shininess = 150
 p roots/overlays/axes = 0
 p roots/overlays/grid = 0
 p roots/overlays/grid spacing = 5
-p roots/post/DoF focus (0=auto) = 0
+p roots/post/DoF focus (0-auto) = 0
 p roots/post/DoF range = 55
 p roots/post/DoF strength = 0.5
 p roots/post/bloom = 1
