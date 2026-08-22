@@ -6,3 +6,10 @@ greenlab/
 freenect_test/models/
 imgui.ini
 mirror_panel.ini
+
+# Sound work that lives outside the repo: BBC library downloads and the Reaper
+# sessions that chop them up. Large, third-party or re-derivable, and nothing in
+# the tree references either -- the piece's own recordings come in through
+# WwiseProject.
+audio/
+reaper_proj/
