@@ -76,26 +76,40 @@ int main() {
         check(std::fabs(v.note[2] - v.note[0] - 16.f) < 0.05f, "ends major (natural 3rd)");
     }
 
-    // --- the wobble: a fit that goes backwards must not un-resolve ----------
+    // --- the wobble: a fit that genuinely degrades retreats, a small dip ----
+    // --- (inside the hysteresis band) does not -------------------------------
     //
-    // This is the whole reason the stage lives here and not in an RTPC curve.
-    // A blink or a dropped frame drives fit_level back down; the harmony has to
-    // ignore that, because resolution is not a thing that flickers.
+    // fit_level is a live loss now, not a one-shot residual: it can really get
+    // worse (she turns away, tracking degrades), and when it does the chord
+    // has to follow it back down rather than stay pinned at a resolution the
+    // room no longer earns. What still has to hold is that a fit sitting near
+    // a boundary doesn't chatter -- that's what the hysteresis gap is for.
     {
         mirror::Chord c;
         hold(c, 0.80f, 0.f, 2.f);
-        const int high = c.voicing().stage;
-        check(high == 3, "0.80 reaches the fourth checkpoint");
-        hold(c, 0.10f, 0.f, 2.f);
-        check(c.voicing().stage == high, "a fit falling back to 0.10 holds the chord");
-        // And the voices stay put rather than gliding back down.
-        const float* o = mirror::Chord::StageOffsets(high);
+        check(c.voicing().stage == 3, "0.80 reaches the fourth checkpoint");
+        // A small dip that stays above stage 3's retreat threshold (0.75 -
+        // 0.03 = 0.72) must not move the chord.
+        hold(c, 0.73f, 0.f, 2.f);
+        check(c.voicing().stage == 3, "a dip that stays inside the hysteresis band holds");
+        // Past the retreat threshold, but not past the next one down (0.50 -
+        // 0.03 = 0.47): retreats exactly one checkpoint, not further.
+        hold(c, 0.60f, 0.f, 2.f);
+        check(c.voicing().stage == 2, "clearing one retreat threshold steps back by one");
+        // And the voicing actually follows -- no glide left in code (Wwise
+        // owns that now), so it lands on the new checkpoint's exact target.
+        const float* o2 = mirror::Chord::StageOffsets(2);
         for (int i = 0; i < mirror::kChordVoices; ++i)
-            check(std::fabs(c.voicing().target[i] - (36.f + o[i])) < 1e-3f,
-                  "the glide target holds too");
+            check(std::fabs(c.voicing().target[i] - (36.f + o2[i])) < 1e-3f,
+                  "the retreat's glide target lands on the checkpoint it fell back to");
+        // A fit that collapses all the way retreats all the way, same as a
+        // fit that arrives all at once advances all the way (see below).
+        hold(c, 0.10f, 0.f, 2.f);
+        check(c.voicing().stage == 0, "a fit collapsing to 0.10 retreats to the first checkpoint");
     }
 
-    // --- hysteresis: sitting exactly on a boundary does not chatter ---------
+    // --- hysteresis: sitting exactly on a boundary does not chatter, ---------
+    // --- either direction ------------------------------------------------
     {
         mirror::Chord c;
         hold(c, 0.25f, 0.f, 1.f);
@@ -103,6 +117,13 @@ int main() {
               "a fit resting exactly on the 0.25 boundary has not advanced yet");
         hold(c, 0.25f + 0.031f, 0.f, 1.f);
         check(c.voicing().stage == 1, "clearing the boundary by the hysteresis advances");
+        // Coming back down to exactly the boundary is not enough to retreat --
+        // it has to clear the *retreat* threshold, hysteresis below the
+        // boundary, the same gap in the other direction.
+        hold(c, 0.25f, 0.f, 1.f);
+        check(c.voicing().stage == 1, "resting back on the boundary alone does not retreat");
+        hold(c, 0.25f - 0.031f, 0.f, 1.f);
+        check(c.voicing().stage == 0, "clearing the boundary by the hysteresis retreats");
     }
 
     // --- a checkpoint steps the voicing instantly, no glide left in code ----
@@ -160,10 +181,10 @@ int main() {
         check(std::fabs(v.note[3] - still[3]) > 0.03f, "the detune is not smoothed away");
     }
 
-    // --- the pluck stays in tune with the pad, and on a chord tone ----------
+    // --- the pluck is pinned to the chord, and intensity opens it upward ----
     {
         mirror::Chord c;
-        // At the very start it rings on the top of the opening voicing, an
+        // At zero intensity it rings on the top of the opening voicing, an
         // octave up -- 48 + 22 (stage 0's top voice) + 12 lands exactly on
         // pluck_high (34), so the snap is a no-op here by construction.
         c.update(0.f, 0.f, kDt);
@@ -171,16 +192,44 @@ int main() {
               "the pluck starts on the chord's top note, an octave up");
         check(std::fabs(c.voicing().comb_hz - NoteToHz(48.f + 34.f)) < 0.1f,
               "and the comb frequency is that note in Hz");
-        // ...and at a converged fit, the raw target (root + 10) snaps to the
-        // nearest tone of the resolved chord -- the root itself, an octave up.
+        // At fit=1 the chord resolves in the same frame (stage jumps straight
+        // to 4, see the checkpoint test above), and intensity is 0.5 (fit and
+        // movement averaged, movement=0 here) -- the raw target, root + 34 +
+        // 0.5*12 = root + 40, lands exactly on stage 4's top voice an octave
+        // up (28 + 12), so the snap is again a no-op by construction. Higher
+        // than the fit=0 case: intensity opens the pluck upward, it does not
+        // glide it down.
         c.update(1.f, 0.f, kDt);
-        check(std::fabs(c.voicing().pluck_note - (48.f + 12.f)) < 1e-3f,
-              "the pluck ends snapped to the root, an octave up, above the pad");
+        check(std::fabs(c.voicing().pluck_note - (48.f + 40.f)) < 1e-3f,
+              "full fit opens the pluck upward, still on a chord tone");
+        check(c.voicing().comb_hz > NoteToHz(48.f + 34.f),
+              "and the comb frequency rises with it, not falls");
+        // Movement alone (fit held at 0, so the checkpoint never advances --
+        // see the checkpoint test above) is the same 0.5 intensity as the
+        // fit=1 case above, just against stage 0's own, narrower voicing:
+        // it must not be lower than the zero-intensity baseline.
+        mirror::Chord cm;
+        cm.update(0.f, 1.f, kDt);
+        check(cm.voicing().stage == 0, "movement alone does not advance the checkpoint");
+        check(cm.voicing().comb_hz >= NoteToHz(48.f + 34.f) - 0.1f,
+              "movement alone never pulls the pluck below the zero-intensity base");
+        // Full fit and full movement together is the same intensity (1.0
+        // averages to 1.0 either way) as full fit alone would be if the
+        // checkpoint gate let intensity exceed what fit alone reaches --
+        // here it must be at least as high as the fit=1-alone case, since
+        // stage and intensity can only add register, never remove it.
+        mirror::Chord cb;
+        cb.update(1.f, 1.f, kDt);
+        check(cb.voicing().comb_hz >= c.voicing().comb_hz - 0.1f,
+              "fit and movement together open the pluck at least as far as fit alone");
         // The comb's range must stay inside the game parameter's 20..2000 Hz.
         for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
-            c.update(fit, 0.f, kDt);
-            check(c.voicing().comb_hz > 20.f && c.voicing().comb_hz < 2000.f,
-                  "the comb frequency stays inside the Comb_Tuning range");
+            for (float mv = 0.f; mv <= 1.f; mv += 0.5f) {
+                mirror::Chord cr;
+                cr.update(fit, mv, kDt);
+                check(cr.voicing().comb_hz > 20.f && cr.voicing().comb_hz < 2000.f,
+                      "the comb frequency stays inside the Comb_Tuning range");
+            }
         }
     }
 
@@ -192,7 +241,7 @@ int main() {
     {
         mirror::Chord c;
         for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
-            c.update(fit, 0.f, kDt);
+            c.update(fit, fit, kDt);
             const float* o = mirror::Chord::StageOffsets(c.voicing().stage);
             const float pc = std::fmod(std::fmod(c.voicing().pluck_note, 12.f) + 12.f, 12.f);
             bool matches = false;

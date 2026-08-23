@@ -19,15 +19,17 @@
 // Pitch override per voice per state, authored on the Sound objects directly.
 // What stays here, in code, is the one thing a State Group cannot do:
 //
-// **A curve cannot be monotonic.** `fit_level` is a smoothed residual, and a
-// residual goes back up — somebody blinks, turns, or the detector drops a frame
-// and the fit briefly gets worse. A curve follows that down, so the major
-// un-resolves and re-resolves while she stands still. Resolution is a thing
-// that happens *to* you once; it does not flicker. The stage here only ever
-// advances, and only resets when the room empties. `Chord` owns the gate
-// (monotonic + hysteresis) and posts `SetState("ChordStage", ...)`; Wwise owns
-// the glide between states (its own transition time/curve on the State Group)
-// and the per-voice Pitch table.
+// **A curve needs a gate with hysteresis, not just a threshold.** `fit_level`
+// is a live neural fit's loss, and it can genuinely get worse -- she turns
+// away, walks off, the tracking degrades enough that the loss climbs back up
+// -- and when it does, the chord should walk back down with it rather than
+// stay pinned at a resolution the room no longer earns. What a bare threshold
+// per checkpoint would do instead is flicker at the boundary: a fit sitting
+// right on 0.5 walks the chord forward and back every frame. `Chord` owns the
+// gate -- two thresholds per checkpoint, offset by `hysteresis`, one for the
+// advance and one for the retreat (a Schmitt trigger) -- and posts
+// `SetState("ChordStage", ...)`; Wwise owns the glide between states (its own
+// transition time/curve on the State Group) and the per-voice Pitch table.
 //
 // ## Why four separate voices
 //
@@ -103,24 +105,29 @@ public:
         // stack, to the diagnostic `note[]` only -- see its comment above.
         float detune_cents = 4.f;
 
-        // How far past a checkpoint the fit must get before the chord advances.
-        // Guards the boundary: without it a fit sitting exactly on 0.25 walks
-        // the chord back and forth every frame.
+        // How far past a checkpoint the fit must get to advance, and how far
+        // back below it the fit must fall to retreat -- the gap between the
+        // two guards the boundary: without it a fit sitting exactly on 0.25
+        // walks the chord back and forth every frame.
         float hysteresis = 0.03f;
 
-        // Where the pluck ends up, semitones from the root, before the snap to
-        // the nearest chord tone (see Update's pluck section). Raised from the
-        // old -12: now that the pad itself sits an octave higher (see the
-        // `octave` comment above), a pluck ending under the chord's bass voice
-        // read as dipping below the pad rather than resolving into it.
-        float pluck_low = 10.f;
-
-        // Where the pluck starts: the top of the opening voicing, before the
-        // snap. Kept separate from the stage table because the pluck's travel
-        // is continuous in the fit while the chord's is stepped -- that
-        // counter-motion is the point. Raised along with `pluck_low` so the
-        // pluck stays above the pad throughout instead of crossing it.
+        // Where the pluck sits, semitones from the root, before the snap to
+        // the nearest chord tone (see Update's pluck section) -- the base it
+        // is pinned to throughout Fitting, at zero intensity. Kept separate
+        // from the stage table because the pluck's register is fixed while
+        // the chord's is stepped. Raised from the old -12 so the pluck stays
+        // above the pad's register (see the `octave` comment above) instead
+        // of dipping under its bass voice.
         float pluck_high = 34.f;
+
+        // How far above `pluck_high`, semitones, full intensity can push the
+        // pluck before the snap. Intensity is the fit converging and the room
+        // moving (see Update's pluck section) -- it opens the pluck's
+        // register upward without ever taking it out of the chord, since the
+        // snap still lands it on a real tone. The very-low register the
+        // pluck drops to at the Transition handoff is not a note at all and
+        // is not reached through this range -- see main.mm.
+        float pluck_intensity_range = 12.f;
     };
 
     Chord() { reset(); }

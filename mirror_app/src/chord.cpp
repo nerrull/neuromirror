@@ -87,14 +87,21 @@ void Chord::update(float fit, float movement, float dt) {
 
     // --- the checkpoint -----------------------------------------------------
     //
-    // Forward only. The fit going back down -- a blink, a turn, a dropped frame
-    // -- must not un-resolve the harmony; see the header. Advancing more than
-    // one stage in a frame is allowed and deliberate: a fit that lands all at
-    // once should land on the chord it earned, and Wwise's own transition is
-    // what keeps that from being a jump.
+    // Two-sided: the fit is a live loss now, not a one-shot residual, and it
+    // can genuinely get worse -- she turns away, walks off, tracking degrades
+    // -- so the chord retreats when it does, rather than staying pinned at a
+    // resolution the room no longer earns. Each side has its own threshold,
+    // offset by `hysteresis` from the checkpoint boundary (a Schmitt trigger),
+    // so a fit sitting exactly on a boundary doesn't flicker the chord every
+    // frame. Advancing (or retreating) more than one stage in a frame is
+    // allowed and deliberate: a fit that lands all at once should land on the
+    // chord it earned, and Wwise's own transition is what keeps that from
+    // being a jump.
     const int prev_stage = stage_;
     while (stage_ < kStages - 1 && fit >= kThresholds[stage_ + 1] + cfg_.hysteresis)
         ++stage_;
+    while (stage_ > 0 && fit < kThresholds[stage_] - cfg_.hysteresis)
+        --stage_;
     stage_changed_ = (stage_ != prev_stage);
 
     // --- the voicing (diagnostics only) -------------------------------------
@@ -113,14 +120,17 @@ void Chord::update(float fit, float movement, float dt) {
 
     // --- the pluck ----------------------------------------------------------
     //
-    // Continuous in the fit while the chord is stepped, and travelling upward
-    // while the chord opens -- both now above the pad's register, so the pluck
-    // never dips below the voice it is ringing against. The linear travel
-    // between pluck_high and pluck_low is then snapped to the nearest tone of
-    // the *current* chord: continuous motion, discrete landing, same as a
-    // player's hand finding the nearest note on a fretboard.
+    // Pinned to the current chord (root + pluck_high, snapped to the nearest
+    // tone of the current stage) rather than travelling with the fit -- the
+    // pluck belongs to the chord throughout Fitting, it does not slide away
+    // from it. What fit and movement drive is "intensity": how far above that
+    // base the pluck rings, so a converging fit and a moving room open the
+    // pluck's register without ever taking it out of key. The drop to a very
+    // low register is not a note at all -- it happens outside Chord, at the
+    // Transition handoff (see main.mm).
+    const float intensity = std::clamp(0.5f * (fit + movement), 0.f, 1.f);
     const float linear = cfg_.root + cfg_.pluck_high
-                        + (cfg_.pluck_low - cfg_.pluck_high) * fit;
+                        + intensity * cfg_.pluck_intensity_range;
     v_.pluck_note = SnapToChordTone(linear, cfg_.root, stage_);
     v_.comb_hz = NoteToHz(v_.pluck_note);
 }
