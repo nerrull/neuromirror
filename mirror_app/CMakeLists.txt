@@ -39,6 +39,9 @@ target_link_libraries(mirror_imgui PUBLIC glfw
 # --- app ---------------------------------------------------------------------
 add_executable(mirror_app
     src/main.mm
+    src/app_state.mm
+    src/dev_tools.mm
+    src/panel.mm
     src/metal_context.mm
     src/mirror_scene.mm
     src/metal_root_renderer.mm

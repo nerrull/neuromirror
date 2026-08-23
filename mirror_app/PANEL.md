@@ -3,8 +3,9 @@
 How the panel and the parameter registry fit together, and the rules that keep
 them working. Read this before adding a control, a section or a tab.
 
-The registry itself is `src/ui_params.h` / `.cpp`; the panel is built inline in
-`src/main.mm`. `SETTINGS.md` is **generated** from the live registry and lists
+The registry itself is `src/ui_params.h` / `.cpp`; the panel is built in
+`src/panel.mm` (`DrawControlPanel`/`DrawOverlayWindows`), called once per frame
+from `main.mm`'s loop. `SETTINGS.md` is **generated** from the live registry and lists
 every parameter and its bank — do not edit it by hand.
 
 ---

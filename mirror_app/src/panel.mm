@@ -1,0 +1,3656 @@
+// panel.mm — the operator control panel and its always-on-top overlays.
+// Moved out of main.mm's per-frame loop; see panel.h and PANEL.md.
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
+#import <Cocoa/Cocoa.h>
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
+#include "panel.h"
+#include "app_state.h"
+#include "core_frame.h"
+#include "mirror_scene.h"
+#include "fit_target.h"
+#include "face_tracker.h"
+#include "face_capture.h"
+#include "face_fit.h"
+#if MIRROR_HAVE_KINECT
+#include "kinect_target.h"
+#endif
+#include "root_scene.h"
+#include "transition_scene.h"
+#include "ui_params.h"
+#include "text_overlay.h"
+#include "screen_layout.h"
+#include "show_timeline.h"
+#include "presence.h"
+#include "chord.h"
+#include "wwise_audio.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+// Whether the panel is its own window is a property of the machine it is being
+// operated from, not of the show, so it is remembered next to imgui.ini rather
+// than in a preset. One line, because that is all it is.
+static const char* kPanelStatePath = "mirror_panel.ini";
+void PanelStateSave(bool detached) {
+    if (FILE* f = fopen(kPanelStatePath, "w")) {
+        fprintf(f, "detached=%d\n", detached ? 1 : 0);
+        fclose(f);
+    }
+}
+void PanelStateLoad(bool* detached) {
+    FILE* f = fopen(kPanelStatePath, "r");
+    if (!f) return;
+    int v = 0;
+    if (fscanf(f, "detached=%d", &v) == 1) *detached = (v != 0);
+    fclose(f);
+}
+
+static void DrawBankSaveUI(ui::Bank bank) {
+    struct BankSaveUI { char name[128]; std::string msg;
+                         std::vector<std::string> list; };
+    static BankSaveUI bui[(int)ui::Bank::Count];
+    static bool bui_init = false;
+    if (!bui_init) {
+        for (int b = 1; b < (int)ui::Bank::Count; ++b) {
+            snprintf(bui[b].name, sizeof(bui[b].name), "default");
+            bui[b].list = ui::ListBank((ui::Bank)b);
+        }
+        bui_init = true;
+    }
+    const int b = (int)bank;
+    BankSaveUI& U = bui[b];
+    int retired = 0;
+    const int n = ui::BankCount(bank, &retired);
+    ImGui::PushID(b);
+    ImGui::Separator();
+    ImGui::SeparatorText(ui::BankName(bank));
+    ImGui::TextDisabled("%d parameter%s%s", n, n == 1 ? "" : "s",
+                        retired ? " (some retired)" : "");
+
+    if (bank == ui::Bank::Machine) {
+        // One file, always the same one. Offering a choice of machine
+        // configurations is offering to load the wrong one on the night.
+        ImGui::SameLine();
+        ImGui::TextDisabled("| this room only");
+        if (ImGui::Button("save machine")) {
+            std::string e;
+            U.msg = ui::SaveBank(bank, ui::MachinePath(), e)
+                        ? "saved machine settings" : e;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("reload machine")) {
+            std::string e;
+            U.msg = ui::LoadBank(bank, ui::MachinePath(), e)
+                        ? "reloaded machine settings" : e;
+        }
+    } else {
+        ImGui::PushItemWidth(-110);
+        if (ImGui::BeginCombo("load", "choose...")) {
+            for (const std::string& nm : U.list) {
+                if (!ImGui::Selectable(nm.c_str())) continue;
+                std::string e;
+                const std::string p = ui::BankDir(bank) + "/" + nm +
+                                      ui::BankExt(bank);
+                if (ui::LoadBank(bank, p, e)) {
+                    snprintf(U.name, sizeof(U.name), "%s", nm.c_str());
+                    U.msg = "loaded " + nm;
+                } else {
+                    U.msg = e;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::InputText("name", U.name, sizeof(U.name));
+        ImGui::PopItemWidth();
+        if (ImGui::Button("save")) {
+            std::string e;
+            const std::string p = ui::BankDir(bank) + "/" + U.name +
+                                  ui::BankExt(bank);
+            U.msg = ui::SaveBank(bank, p, e)
+                        ? ("saved " + std::string(U.name)) : e;
+            U.list = ui::ListBank(bank);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("rescan")) U.list = ui::ListBank(bank);
+
+        // --- what this bank comes up in -------------------------------
+        //
+        // Written to presets/defaults as a name, not as a copy of the
+        // values: "come up in mirror_bw" and "here are some numbers that
+        // were mirror_bw last Tuesday" are different promises, and only
+        // the first one survives editing the preset.
+        const std::string dflt = ui::DefaultName(bank);
+        ImGui::SameLine();
+        if (ImGui::Button("make default")) {
+            std::string e;
+            ui::SetDefaultName(bank, U.name);
+            U.msg = ui::SaveDefaults(e)
+                        ? (std::string(U.name) + " loads at startup")
+                        : e;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Come up in the preset named above, every\n"
+                "launch. The installation starts with nobody in\n"
+                "front of it -- without this the piece boots on\n"
+                "the built-in defaults however it was left.");
+        }
+        if (!dflt.empty()) {
+            ImGui::SameLine();
+            const bool here = std::find(U.list.begin(), U.list.end(),
+                                        dflt) != U.list.end();
+            if (here) {
+                ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                   "startup: %s", dflt.c_str());
+            } else {
+                // Named but not on disk. Silent until the next launch
+                // otherwise, which is the wrong moment to find out.
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f),
+                                   "startup: %s (missing)",
+                                   dflt.c_str());
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("clear##dflt")) {
+                std::string e;
+                ui::SetDefaultName(bank, "");
+                U.msg = ui::SaveDefaults(e) ? "no startup preset" : e;
+            }
+        }
+    }
+    if (!U.msg.empty()) ImGui::TextDisabled("%s", U.msg.c_str());
+    ImGui::PopID();
+}
+
+void DrawControlPanel(PanelFrameArgs& pf) {
+            // --- the panel, drawn (or not) --------------------------------
+            //
+            // Hidden means invisible and click-through, *not* unsubmitted: a
+            // control takes its pending MIDI or preset value at the moment it
+            // is declared, and it is declared as it is drawn (see ui_params.h).
+            // A panel that stopped drawing would quietly stop the knobs
+            // working, which is the opposite of what hiding it is for.
+            //
+            // While hidden it is also pulled back into the main window, so a
+            // detached panel does not leave an empty transparent OS window
+            // behind; its position is remembered and restored on the way back
+            // out, since the trip through the main viewport can clamp it.
+            static ImVec2 panel_pos(20, 20);
+            static bool panel_was_hidden = false;
+            static bool panel_was_detached = g_ui_detached;
+            static int  panel_frames = 0;
+            const ImGuiViewport* mainvp = ImGui::GetMainViewport();
+            const bool panel_hidden = !g_ui_visible;
+            ImVec2 want_pos, want_size;
+            bool want_pos_set = false, want_size_set = false;
+            if (panel_hidden) {
+                ImGui::SetNextWindowViewport(mainvp->ID);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.f);
+            } else {
+                // One SetNextWindowPos call, decided here. ImGui keeps a single
+                // pending position per frame, so a later default with
+                // ImGuiCond_FirstUseEver does not "fall through" -- it replaces
+                // whatever was asked for above it, which is a silent way to
+                // make every reposition below do nothing at all.
+                if (panel_was_hidden) { want_pos = panel_pos; want_pos_set = true; }
+                // Coming back in -- the box unticked, or --reset-panel for a
+                // panel that imgui.ini has parked on a monitor that is not
+                // plugged in any more. Over the main window is the only place a
+                // panel that is not its own window can be.
+                const bool attaching = (panel_was_detached && !g_ui_detached);
+                if (attaching || g_panel_reset) {
+                    want_pos = ImVec2(mainvp->WorkPos.x + 20,
+                                      mainvp->WorkPos.y + 20);
+                    want_pos_set = true;
+                    if (g_panel_reset) {
+                        want_size = ImVec2(340, 0);
+                        want_size_set = true;
+                        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
+                        g_panel_reset = false;
+                    }
+                }
+                if (!g_ui_detached) {
+                    // Attached is pinned, every frame, not just on the edge:
+                    // ImGui re-picks a window's viewport each frame, and a
+                    // window that has owned one takes it straight back the
+                    // frame after it is handed to the main viewport. Pinning is
+                    // what makes the checkbox mean something in both
+                    // directions -- and while it is ticked off, the panel
+                    // behaves the way it did before viewports existed: inside
+                    // the window, clipped by it.
+                    ImGui::SetNextWindowViewport(mainvp->ID);
+                    // Pinned, a window still keeps whatever desktop position it
+                    // had -- including one from when it was its own OS window
+                    // on another monitor, which draws the panel off the corner
+                    // of the frame with most of it clipped away. So attached
+                    // also means inside: anything outside is pulled back in.
+                    const ImVec2 lo = mainvp->WorkPos;
+                    const ImVec2 hi(mainvp->WorkPos.x + mainvp->WorkSize.x - 120.f,
+                                    mainvp->WorkPos.y + mainvp->WorkSize.y - 80.f);
+                    if (panel_pos.x < lo.x || panel_pos.y < lo.y ||
+                        panel_pos.x > hi.x || panel_pos.y > hi.y) {
+                        want_pos = ImVec2(std::min(std::max(panel_pos.x, lo.x + 20.f),
+                                                   std::max(lo.x + 20.f, hi.x)),
+                                          std::min(std::max(panel_pos.y, lo.y + 20.f),
+                                                   std::max(lo.y + 20.f, hi.y)));
+                        want_pos_set = true;
+                    }
+                    // And it has to *fit*: ImGui only merges a window into the
+                    // main one when the main one contains it whole, and this
+                    // panel is taller than a 720p window with two sections
+                    // open. Without the cap, unticking the box pops the panel
+                    // straight back out and the checkbox looks broken.
+                    // Detached, the height is the operator's business.
+                    ImGui::SetNextWindowSizeConstraints(
+                        ImVec2(0, 0),
+                        ImVec2(FLT_MAX, std::max(200.f, mainvp->WorkSize.y - 40.f)));
+                } else if (panel_frames > 0) {
+                    // The one window allowed to leave the frame on its own.
+                    // Done per-window rather than with ConfigViewportsNoAutoMerge
+                    // so the cam-mask and source overlays stay welded to the
+                    // composition they annotate.
+                    //
+                    // Never on the panel's first frame: the window has no size
+                    // until it has been drawn once, and a zero-size viewport
+                    // gets no platform window -- which the GLFW backend then
+                    // dereferences as it polls focus, and the app is gone
+                    // before it has drawn anything.
+                    //
+                    // TopMost as well as NoAutoMerge. The composition runs in a
+                    // borderless-fullscreen window, which is an ordinary window
+                    // as far as the window server is concerned -- so a panel at
+                    // the same level can end up *behind* it, and a panel behind
+                    // a fullscreen window is one macOS reports as occluded.
+                    // imgui_impl_metal skips rendering an occluded viewport
+                    // (nextDrawable hangs for about a second on one, so it has
+                    // to), and a panel that is never redrawn is a black
+                    // rectangle you cannot get back. Floating keeps it above
+                    // the piece, which is where an operator's panel belongs
+                    // anyway.
+                    ImGuiWindowClass wc;
+                    wc.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge |
+                                                  ImGuiViewportFlags_TopMost;
+                    ImGui::SetNextWindowClass(&wc);
+                }
+            }
+            panel_was_hidden = panel_hidden;
+
+            if (want_pos_set) ImGui::SetNextWindowPos(want_pos, ImGuiCond_Always);
+            else ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+            if (want_size_set) ImGui::SetNextWindowSize(want_size, ImGuiCond_Always);
+            else ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
+            // The frame rate lives in the title, where it is readable with the
+            // panel scrolled anywhere and with the window collapsed. Everything
+            // before "###" is the visible title and everything after is the id,
+            // so the rate can change every frame without imgui.ini losing track
+            // of where this window was put -- a title that is also an id would
+            // make the panel a new window sixty times a second.
+            char panel_title[128];
+            snprintf(panel_title, sizeof(panel_title),
+                     "neuromirror — %.0f fps###controls", pf.fpsShown);
+            ImGui::Begin(panel_title, nullptr,
+                         panel_hidden ? (ImGuiWindowFlags_NoInputs |
+                                         ImGuiWindowFlags_NoNav |
+                                         ImGuiWindowFlags_NoFocusOnAppearing |
+                                         ImGuiWindowFlags_NoSavedSettings)
+                                      : 0);
+            ++panel_frames;
+            if (!panel_hidden) {
+                panel_pos = ImGui::GetWindowPos();
+                // Where the panel lives is remembered by this app rather than
+                // read back out of imgui.ini: the .ini says where a window is,
+                // not why, and a panel that came up in its own viewport merely
+                // because its saved position missed the main window would
+                // otherwise be recorded as a choice the operator made.
+                if (g_ui_detached != panel_was_detached || panel_frames == 2) {
+                    if (panel_frames != 2) PanelStateSave(g_ui_detached);
+                    printf("panel: %s\n", g_ui_detached ? "in its own window"
+                                                        : "in the main window");
+                    fflush(stdout);
+                }
+                panel_was_detached = g_ui_detached;
+            }
+            ImGui::Text("t=%5.1fs", pf.mirror.clock());     // fps is in the title
+            ImGui::SameLine();
+            ImGui::Checkbox("own window", &g_ui_detached);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Give the panel its own OS window, to move to a second\n"
+                    "monitor (or off the composition on a single one).\n"
+                    "Untick to bring it back over the main window.");
+            ImGui::SameLine();
+            if (ImGui::Button("hide")) g_ui_visible = false;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Hide the whole UI. F1 or ` brings it back\n"
+                                  "(on macOS F1 may need fn).");
+            // --- phase navigator ------------------------------------------
+            //
+            // Above the tabs and outside them, because it is not a setting: it
+            // is where the piece currently is. The tabs below are categories of
+            // parameter and nothing else -- opening the roots tab to adjust a
+            // fog value must not cut the projection to the root scene, which is
+            // what a tab that doubled as a scene picker did.
+            //
+            // Everything here goes through the timeline. "go" takes the phase's
+            // forward edge, which is the operator's cue; the named buttons force
+            // a phase outright. Both count as entries, so the scene restarts and
+            // the per-phase setup runs identically either way.
+            {
+                const show::Phase cur = g_show.phase();
+                ImGui::TextUnformatted("phase:");
+                for (int p = 0; p < (int)show::Phase::Count; ++p) {
+                    ImGui::SameLine();
+                    const bool on = (p == (int)cur) && g_view_override < 0;
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.26f, 0.45f, 0.30f, 1.f));
+                    if (ImGui::Button(show::PhaseName((show::Phase)p))) {
+                        g_view_override = -1;
+                        g_show.goTo((show::Phase)p);
+                    }
+                    if (on) ImGui::PopStyleColor();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("go >")) {
+                    // A cue is still a cue while paused: freezing the clock
+                    // should stop the piece running away on its own, not take
+                    // the operator's hands off it.
+                    g_view_override = -1;
+                    g_show_paused = false;
+                    g_show.go();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Take this phase's forward edge now, whatever it was\n"
+                        "waiting for. The same cue as the MIDI CC and the key.");
+
+                // Pause freezes the timeline where it stands. Distinct from
+                // unticking "run the show", which is a mode and re-arms from
+                // the top: this holds the current phase, at its current time,
+                // and resumes into it.
+                ImGui::SameLine();
+                const bool can_pause = g_show_on;
+                ImGui::BeginDisabled(!can_pause);
+                if (g_show_paused) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                         ImVec4(0.55f, 0.42f, 0.16f, 1.f));
+                if (ImGui::Button(g_show_paused ? "paused" : "pause"))
+                    g_show_paused = !g_show_paused;
+                if (g_show_paused) ImGui::PopStyleColor();
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        g_show_on ? "Hold the timeline where it is. The phase and\n"
+                                    "its clock keep their values and resume from\n"
+                                    "them; the scene carries on rendering."
+                                  : "Nothing to pause: the show is not running.\n"
+                                    "The phase buttons drive it by hand.");
+
+                ImGui::SameLine();
+                ImGui::TextDisabled("| %.1fs", g_show.phaseTime());
+                if (g_show.maxTime(cur) > 0.f) {
+                    ImGui::SameLine();
+                    ImGui::ProgressBar(g_show.phaseProgress(), ImVec2(70, 0));
+                }
+
+                // The diagnostic views sit apart, and say so: they are not part
+                // of the running order and leaving one on is a mistake worth
+                // making visible rather than one more button in the same row.
+                ImGui::TextUnformatted("view:");
+                struct ViewBtn { const char* name; int scene; };
+                const ViewBtn views[] = {{"camera",    (int)Scene::Camera},
+                                         {"fit view",  (int)Scene::FitView},
+                                         {"cam mask",  (int)Scene::CamMask}};
+                for (const ViewBtn& v : views) {
+                    ImGui::SameLine();
+                    const bool on = (g_view_override == v.scene);
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.55f, 0.42f, 0.16f, 1.f));
+                    if (ImGui::Button(v.name))
+                        g_view_override = on ? -1 : v.scene;
+                    if (on) ImGui::PopStyleColor();
+                }
+                if (g_view_override >= 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                       "overriding %s", show::PhaseName(cur));
+                }
+            }
+            ImGui::Separator();
+
+            // --- show -----------------------------------------------------
+            // Above everything else, because when it is on it is what is
+            // choosing the scene: a panel that showed the radio buttons as the
+            // authority while a timeline was reassigning them would be lying.
+            ui::BeginTabBar("panel");
+            int panel_test_tab_i = 0;
+            g_panel_test_tab_count = 9;
+            ui::BeginTab("show", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            ui::PushSection("show");
+            {
+                if (ui::Checkbox("run the show", &g_show_on) && g_show_on)
+                    g_show.restart();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!g_show_on);
+                if (ImGui::Button("restart")) g_show.restart();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ui::Checkbox("readout (F2)", &g_show_hud);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Phase, what it is waiting for, and how the fit is\n"
+                        "doing, in a corner -- with or without this panel.");
+                }
+
+                if (g_show_on) {
+                    const show::Phase p = g_show.phase();
+                    ImGui::Text("%s  %.1fs", show::PhaseName(p), g_show.phaseTime());
+                    if (g_show.maxTime(p) > 0.f) {
+                        ImGui::SameLine();
+                        ImGui::ProgressBar(g_show.phaseProgress(), ImVec2(90, 0));
+                    }
+                    ImGui::TextDisabled("%s", g_show.lastReason().c_str());
+
+                    // The two signals, live. Nearly every "why did it not
+                    // advance" question is answered by looking at these while
+                    // standing in front of the camera.
+                    const bool face = ShowFacePresent();
+                    const bool fit = ShowFitConverged();
+                    ImGui::TextColored(face ? ImVec4(0.4f, 0.9f, 0.4f, 1)
+                                            : ImVec4(0.5f, 0.5f, 0.5f, 1),
+                                       "face");
+                    ImGui::SameLine();
+                    ImGui::TextColored(fit ? ImVec4(0.4f, 0.9f, 0.4f, 1)
+                                           : ImVec4(0.5f, 0.5f, 0.5f, 1),
+                                       "fit");
+                    ImGui::SameLine();
+                    if (g_id_residual >= 0.f)
+                        ImGui::TextDisabled("(%.1f px)", g_id_residual);
+                    else
+                        ImGui::TextDisabled(g_collect_id ? "(collecting)" : "(none)");
+
+                    if (!g_track_on) {
+                        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1),
+                                           "face tracking is off: the show");
+                        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1),
+                                           "can only advance on time");
+                    }
+
+                    ImGui::SeparatorText("force");
+                    for (int i = 0; i < (int)show::Phase::Count; ++i) {
+                        if (i) ImGui::SameLine();
+                        if (ImGui::SmallButton(show::PhaseName((show::Phase)i)))
+                            g_show.goTo((show::Phase)i);
+                    }
+                    if (ImGui::SmallButton("go")) g_show.go();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(keys 1-4, space)");
+                }
+
+                ui::BeginHeader("phase -> scene", /*default_open=*/false);
+                {
+                    const char* kScenes[] = {"mirror", "roots", "transition",
+                                             "fit view", "cam mask"};
+                    for (int i = 0; i < (int)show::Phase::Count; ++i) {
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::Combo(show::PhaseName((show::Phase)i),
+                                     &g_show_scene[i], kScenes, IM_ARRAYSIZE(kScenes));
+                        ui::DeclareInt(show::PhaseName((show::Phase)i),
+                                       &g_show_scene[i], 0, IM_ARRAYSIZE(kScenes) - 1);
+                    }
+                }
+                ui::EndHeader();
+
+                // --- per-phase timing, grouped by phase --------------------
+                //
+                // One header per phase: its floor/ceiling, its edges'
+                // debounce (labelled by the graph's own key names, so the
+                // panel and Graph() can never name a knob differently), and
+                // its fog intensity. Roots additionally carries its beat
+                // schedule; Idle carries the fade-in that follows Roots'
+                // outro. Declared every frame regardless of which header is
+                // open, per PANEL.md -- setTiming/setHold are cheap and do
+                // not touch the running clock, so calling them from a value a
+                // preset just wrote is exactly as safe as calling them from a
+                // dragged slider.
+                for (int pi = 0; pi < (int)show::Phase::Count; ++pi) {
+                    const show::Phase p = (show::Phase)pi;
+                    const show::PhaseGraph& g = show::Graph(p);
+                    ui::Section sec(show::PhaseName(p));
+                    ui::BeginHeader(show::PhaseName(p), /*default_open=*/false);
+                    {
+                        ui::SliderFloat("min", &g_show_min[pi], 0.f, 120.f, "%.1fs");
+                        ui::SliderFloat("max (0 = no ceiling)", &g_show_max[pi],
+                                        0.f, 120.f, "%.1fs");
+                        for (int e = 0; e < g.edge_count; ++e)
+                            ui::SliderFloat(g.edges[e].key, &g_show_hold[pi][e],
+                                            0.f, 30.f, "%.1fs");
+                        ui::SliderFloat("fog intensity (visibility, world u)",
+                                        &g_phase_fog_intensity[pi], 8.f, 600.f, "%.0f",
+                                        ImGuiSliderFlags_Logarithmic);
+                        g_show.setTiming(p, g_show_min[pi], g_show_max[pi]);
+                        for (int e = 0; e < g.edge_count; ++e)
+                            g_show.setHold(p, e, g_show_hold[pi][e]);
+
+                        if (p == show::Phase::Idle) {
+                            ui::SliderFloat("intro fade-in (s)", &g_idle_intro_seconds,
+                                            0.f, 8.f, "%.1f");
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip(
+                                    "How long Idle takes to fade in from black on\n"
+                                    "entry -- every entry, not only the one after\n"
+                                    "Roots' outro, so a fresh boot fades in too.");
+                            }
+                        }
+
+                        if (p == show::Phase::Roots) {
+                            struct BeatUI { const char* label; float* dur; float* rmin;
+                                            float* rmax; };
+                            const BeatUI beats[] = {
+                                {"beat 1  face alone", &g_root_beats.beat1_seconds,
+                                 nullptr, nullptr},
+                                {"beat 2  masks deal", &g_root_beats.beat2_seconds,
+                                 &g_root_beats.beat2_rate_min, &g_root_beats.beat2_rate_max},
+                                {"beat 3  growth follows", &g_root_beats.beat3_seconds,
+                                 &g_root_beats.beat3_rate_min, &g_root_beats.beat3_rate_max},
+                            };
+                            for (const BeatUI& b : beats) {
+                                ui::Section bsec(b.label);
+                                ui::BeginHeader(b.label, false);
+                                {
+                                    ui::SliderFloat("duration", b.dur, 0.2f, 20.f, "%.1fs");
+                                    if (b.rmin) {
+                                        ui::SliderFloat("growth rate min (steps/s)", b.rmin,
+                                                        1.f, 2000.f, "%.0f",
+                                                        ImGuiSliderFlags_Logarithmic);
+                                        ui::SliderFloat("growth rate max (steps/s)", b.rmax,
+                                                        1.f, 2000.f, "%.0f",
+                                                        ImGuiSliderFlags_Logarithmic);
+                                    }
+                                }
+                                ui::EndHeader();
+                            }
+                            ui::PushSection("beat 4  meander");
+                            ui::BeginHeader("beat 4  meander", false);
+                            {
+                                ui::SliderFloat("dwell per waypoint (s)",
+                                                &g_root_beats.beat4_dwell_seconds,
+                                                0.5f, 20.f, "%.1f");
+                                ui::SliderFloat("camera speed min", &g_root_beats.beat4_cam_speed_min,
+                                                0.02f, 3.f, "%.2f");
+                                ui::SliderFloat("camera speed max", &g_root_beats.beat4_cam_speed_max,
+                                                0.02f, 3.f, "%.2f");
+                                ui::SliderFloat("max angular speed (rad/s)",
+                                                &g_root_beats.beat4_max_angular_speed,
+                                                0.05f, 4.f, "%.2f");
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "beat 4  meander"
+
+                            ui::PushSection("outro");
+                            ui::BeginHeader("outro  fade to black", false);
+                            {
+                                ui::SliderFloat("fade duration (s)", &g_root_beats.outro_seconds,
+                                                0.2f, 10.f, "%.1f");
+                                ui::SliderFloat("fog fade-in over beat 1 (s)",
+                                                &g_root_beats.beat1_fog_fade_seconds,
+                                                0.f, 20.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Fog only exists in the Roots renderer, so it\n"
+                                        "would otherwise pop on the instant the\n"
+                                        "transition's cloth falls away. This ramps\n"
+                                        "visibility from clear down to the phase's fog\n"
+                                        "intensity over the start of beat 1 instead.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "outro"
+                        }
+                    }
+                    ui::EndHeader();
+                }
+
+                ui::BeginHeader("signals", /*default_open=*/false);
+                {
+                    ui::SliderFloat("mesh fit residual, diagnostic (px)", &g_show_fit_px,
+                                    1.f, 20.f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Mean landmark error of the one-shot identity fit.\n"
+                            "Display only: the mesh fit no longer gates the\n"
+                            "transition, it only shapes the Roots-phase mesh --\n"
+                            "this just colours the \"(N px)\" readouts.");
+                    }
+                    ui::SliderFloat("fit score to convert", &g_show_fit_score,
+                                    0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "AudioParams::fit_level, 0..1. Above this, the\n"
+                            "texture counts as having actually captured the\n"
+                            "face -- it's the Fitting -> Transition gate,\n"
+                            "debounced by the fit_hold above. Tune against\n"
+                            "the live FitLevel readout on the fit panel.");
+                    }
+                    ui::SliderFloat("fit_level half scale (loss)", &g_show_fit_loss_half,
+                                    0.0005f, 0.05f, "%.4f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where AudioParams::fit_level reads 0.5. Deliberately\n"
+                            "looser than the converged-under threshold above --\n"
+                            "a fit already good enough to convert should sound\n"
+                            "close to resolved, not half there. Tune against the\n"
+                            "live \"loss\" and FitLevel readouts together.");
+                    }
+                    ui::SliderInt("cue CC", &g_show_cue_cc, 0, 127);
+                    ui::SliderInt("phase CC", &g_show_phase_cc, 0, 127);
+                    ui::Checkbox("log phase changes", &g_show_log);
+                }
+                ui::EndHeader();
+            }
+            ui::PopSection();               // "show"
+            ImGui::Separator();
+
+            // --- sound ----------------------------------------------------
+            // In the show tab because that is what it is: the piece's audio,
+            // not the machine's. The Wwise project holds every mapping from
+            // these numbers to a filter or an oscillator -- what is here is the
+            // handful of things an operator sets on the night (key, level) and
+            // the readout that answers "is it hearing the room".
+            ui::PushSection("sound");
+            ui::BeginHeader("sound (Wwise)", /*default_open=*/false);
+            {
+                if (ui::Visible()) {
+                    if (g_audio.ready()) {
+                        ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                           "engine up");
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %lu events", g_audio.eventsPosted());
+                    } else {
+                        ImGui::TextColored(ImVec4(1.f, 0.7f, 0.5f, 1.f), "silent");
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %s", g_audio_err.c_str());
+                        if (ImGui::Button("retry")) {
+                            // The usual reason to be here is that the banks had
+                            // not been generated yet when the app started.
+                            if (g_audio.init(mirror::WwiseAudio::DefaultBankDir(),
+                                             g_audio_err))
+                                g_audio_err.clear();
+                        }
+                    }
+                }
+
+                ui::Checkbox("sound on", &g_audio_on);
+                ui::Checkbox("phases post their own events", &g_audio_auto);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Off leaves the beds to the buttons below -- for\n"
+                        "auditioning a scene's sound without moving the piece\n"
+                        "through its phases.");
+                }
+                ui::SliderFloat("key (MIDI note)", &g_audio_key, 24.f, 84.f, "%.0f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The base pitch everything is tuned from: the pad plays\n"
+                        "it, the drone an octave below, the drops and plucks in\n"
+                        "the octaves above. 48 is C3.");
+                }
+                ui::SliderFloat("level", &g_audio_intensity, 0.f, 1.f);
+                ui::SliderFloat("transpose (semitones)", &g_audio_transpose, -24.f, 24.f, "%.0f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Offsets every pad voice, the pluck and the drone\n"
+                        "together, on the Wwise side (bound to `Transpose` on\n"
+                        "each emitter's own Pitch) -- moving this does not touch\n"
+                        "the chord's voicing or the key, only where it all sits.");
+                }
+
+                if (ui::Visible()) {
+                    ImGui::SeparatorText("post");
+                    if (ImGui::Button("pluck bed")) g_audio.post("Play_FirePlucker");
+                    ImGui::SameLine();
+                    if (ImGui::Button("pad")) g_audio.post("Play_Pad");
+                    ImGui::SameLine();
+                    if (ImGui::Button("stop pad")) g_audio.post("Stop_Pad");
+                    if (ImGui::Button("roots bed")) g_audio.post("Play_Amb_Roots");
+                    ImGui::SameLine();
+                    if (ImGui::Button("transition")) g_audio.post("Play_Transition");
+                    if (ImGui::Button("pluck")) g_audio.post("Play_Pluck");
+                    ImGui::SameLine();
+                    if (ImGui::Button("bell")) g_audio.post("Play_Bell");
+                    ImGui::SameLine();
+                    if (ImGui::Button("drop")) g_audio.post("Play_Drop");
+                    ImGui::SameLine();
+                    if (ImGui::Button("stop all")) g_audio.stopAll();
+
+                    ImGui::SeparatorText("the room, as Wwise sees it");
+                    const mirror::AudioParams& a = g_audio.lastSent();
+                    const mirror::PresenceSignals& raw = g_presence.raw();
+                    // Smoothed against raw, side by side: the time constants
+                    // below are unturnable without seeing both.
+                    ImGui::Text("Proximity  %.2f", a.proximity);
+                    ImGui::SameLine(); ImGui::TextDisabled("(raw %.2f)", raw.proximity);
+                    ImGui::Text("Movement   %.2f", a.movement);
+                    ImGui::SameLine(); ImGui::TextDisabled("(raw %.2f)", raw.movement);
+                    ImGui::Text("Centering  %+.2f", a.centering);
+                    ImGui::Text("HeadYaw    %+.0f deg", a.head_yaw);
+                    ImGui::SameLine();
+                    ImGui::Text("HeadTilt %+.0f deg", a.head_tilt);
+                    ImGui::Text("FitLevel   %.2f", a.fit_level);
+                    ImGui::SameLine();
+                    ImGui::Text("SceneProgress %.2f", a.scene_progress);
+
+                    ImGui::SeparatorText("the chord");
+                    const mirror::ChordVoicing& cv = g_chord.voicing();
+                    // Note against target, per voice: a glide in flight is the
+                    // two columns disagreeing, and "did the checkpoint fire"
+                    // is the stage number. Neither is answerable by ear alone
+                    // while the fit is also moving.
+                    ImGui::Text("stage %d/%d  (next at fit %.2f)",
+                                cv.stage + 1, mirror::Chord::kStages,
+                                cv.stage + 1 < mirror::Chord::kStages
+                                    ? mirror::Chord::StageThreshold(cv.stage + 1)
+                                    : 1.f);
+                    for (int i = 0; i < mirror::kChordVoices; ++i) {
+                        ImGui::Text("  V%d  %6.2f", i + 1, cv.note[i]);
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("-> %.0f", cv.target[i]);
+                    }
+                    ImGui::Text("pluck %6.2f", cv.pluck_note);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(comb %.1f Hz)", cv.comb_hz);
+                }
+
+                mirror::Chord::Config& cc = g_chord.config();
+                ui::BeginHeader("chord tuning", /*default_open=*/false);
+                {
+                    ui::SliderFloat("pad octave (semitones)", &cc.octave, -36.f, 12.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where the pad sits relative to the key. The key is\n"
+                            "the piece's pitch, not the pad's register -- and the\n"
+                            "pluck reads the key directly, so this moves the\n"
+                            "chord without moving the pluck.");
+                    }
+                    ui::SliderFloat("detune (cents)", &cc.detune_cents, 0.f, 25.f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far movement pulls the voices apart, alternating\n"
+                            "up the stack. A few cents does not sound out of tune,\n"
+                            "it makes the coinciding harmonics beat.");
+                    }
+                    ui::SliderFloat("checkpoint hysteresis", &cc.hysteresis, 0.f, 0.15f, "%.2f");
+                    ui::SliderFloat("pluck base", &cc.pluck_high, -12.f, 36.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Semitones from the key. Where the pluck is pinned,\n"
+                            "snapped to the nearest chord tone, at zero intensity.");
+                    }
+                    ui::SliderFloat("pluck intensity range", &cc.pluck_intensity_range,
+                                     0.f, 24.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Semitones above the pluck base that full intensity\n"
+                            "(fit and movement, averaged) can push the pluck to,\n"
+                            "before the snap to the nearest chord tone.");
+                    }
+                }
+                ui::EndHeader();
+
+                mirror::Presence::Config& pc = g_presence.config();
+                ui::BeginHeader("presence tuning", /*default_open=*/false);
+                {
+                    ui::SliderFloat("far (face height)", &pc.far_span, 0.02f, 0.4f);
+                    ui::SliderFloat("near (face height)", &pc.near_span, 0.1f, 0.9f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The two numbers worth retuning per room: how much\n"
+                            "of the frame a face fills standing back, and\n"
+                            "standing at the mirror. Everything Proximity\n"
+                            "drives is stretched between them.");
+                    }
+                    ui::SliderFloat("movement full scale", &pc.move_full, 0.2f, 4.f);
+                    ui::SliderFloat("rise (s)", &pc.rise_tau, 0.01f, 1.f, "%.2f");
+                    ui::SliderFloat("fall (s)", &pc.fall_tau, 0.05f, 4.f, "%.2f");
+                }
+                ui::EndHeader();
+            }
+            ui::EndHeader();
+            ui::PopSection();               // "sound"
+            DrawBankSaveUI(ui::Bank::Show);
+
+            // --- screen ---------------------------------------------------
+            // Always visible: the composition's shape is upstream of every
+            // scene, the text's placement and the camera's crop.
+            ui::EndTab();
+            ui::BeginTab("machine", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            ui::PushSection("screen");
+            ui::BeginHeader("screen orientation", /*default_open=*/false);
+            {
+                ImGui::TextUnformatted("compose for:"); ImGui::SameLine();
+                ImGui::RadioButton("auto", &g_orientation,
+                                   (int)mirror::Orientation::Auto);
+                ImGui::SameLine();
+                ImGui::RadioButton("landscape", &g_orientation,
+                                   (int)mirror::Orientation::Landscape);
+                ImGui::SameLine();
+                ImGui::RadioButton("portrait", &g_orientation,
+                                   (int)mirror::Orientation::Portrait);
+                // Declared rather than drawn by ui:: -- a radio group is three
+                // widgets over one value, and the registry stores the value.
+                ui::DeclareInt("orientation", &g_orientation, 0, 2);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The installation's screen is portrait, so macOS is set\n"
+                        "to portrait there and the drawable is already tall --\n"
+                        "'auto' composes for it and nothing is letterboxed.\n\n"
+                        "'portrait' on this landscape monitor is the preview:\n"
+                        "the same aspect, the same camera crop, the same place\n"
+                        "the text lands, in a tall box in the middle.");
+                }
+
+                ui::SliderFloat("panel aspect (w/h)", &g_portrait_aspect,
+                                0.3f, 1.0f, "%.4f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The installation panel's width/height stood on its\n"
+                        "end. 0.5625 is a 1920x1080 panel turned 90 degrees.\n\n"
+                        "Stated rather than taken from this monitor: the\n"
+                        "preview is only worth anything if it matches the\n"
+                        "screen the piece will run on.");
+                }
+
+                ImGui::TextDisabled("compose %d x %d  ->  window %d x %d%s",
+                                    pf.compW, pf.compH, pf.fbw, pf.fbh,
+                                    pf.layout.letterboxed ? "  (letterboxed)" : "");
+
+                ImGui::Separator();
+                ImGui::TextUnformatted("camera framing");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The sensor is 16:9 and does not turn around when the\n"
+                        "screen does, so a portrait frame keeps a tall rect out\n"
+                        "of it and throws the sides away -- about a third of\n"
+                        "the width survives. This is where that rect sits.\n\n"
+                        "The tracker and the fit are given the same crop, so\n"
+                        "moving this cannot put the mask off the face.");
+                }
+                ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
+                ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
+                ui::SliderFloat("feed zoom", &g_feed.zoom, 1.f, 4.f);
+                if (ImGui::Button("centre feed")) {
+                    g_feed = mirror::FeedCrop{};
+                }
+            }
+            ui::EndHeader();
+            ui::PopSection();               // "screen"
+
+            // --- camera mask ---------------------------------------------
+            ui::PushSection("camera mask");
+            ui::BeginHeader("camera mask", /*default_open=*/true);
+            {
+                ui::Checkbox("mask the camera", &g_cam_mask_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Keep a rectangle of the sensor's view and black out\n"
+                        "the rest. The mirror only sells if the frame holds the\n"
+                        "person and nothing that says 'room' -- a doorway, a\n"
+                        "window, the edge of the rig.\n\n"
+                        "Applied in camera space, ahead of everything: the fit\n"
+                        "never sees the masked pixels and the tracker cannot\n"
+                        "find a face in them.");
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("reset")) {
+                    g_cam_x0 = 0.15f; g_cam_y0 = 0.05f;
+                    g_cam_x1 = 0.85f; g_cam_y1 = 0.95f;
+                }
+                ImGui::BeginDisabled(!g_cam_mask_on);
+                ImGui::PushItemWidth(-90);
+                ImGui::DragFloatRange2("x", &g_cam_x0, &g_cam_x1, 0.002f, 0.f, 1.f,
+                                       "%.3f", "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::DragFloatRange2("y", &g_cam_y0, &g_cam_y1, 0.002f, 0.f, 1.f,
+                                       "%.3f", "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ui::SliderFloat("soft edge", &g_cam_feather, 0.f, 0.2f, "%.3f");
+                ImGui::PopItemWidth();
+                ImGui::EndDisabled();
+                if (pf.scene != (int)Scene::CamMask) {
+                    ImGui::TextDisabled("(the 'cam mask' scene has drag handles)");
+                }
+            }
+            ui::EndHeader();
+            ui::PopSection();
+
+            // --- settings edited on other pages ------------------------
+            // Declared under the same section those pages use, so the
+            // preset key is unchanged -- only where this draws moves.
+#if MIRROR_HAVE_KINECT
+            ui::PushSection("mirror");
+            ui::SetBank(ui::Bank::Machine);   // which way round the sensor
+            ui::BeginGate(g_kinect.isOpen());  // is mounted
+            {
+                bool mir = g_kinect.mirrored();
+                if (ui::Checkbox("mirror image", &mir)) g_kinect.setMirrored(mir);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A mirror should put your left hand on your\n"
+                        "left. The sensor does not.");
+                }
+            }
+            ui::EndGate();
+            ui::PopSection();
+#endif
+            ui::PushSection("roots");
+            ui::SetBank(ui::Bank::Machine);
+            ui::Checkbox("auto render-scale", &pf.rootAutoScale);
+            // Both arms declare; only the live one draws. Otherwise
+            // whichever mode was off at save time got written from a stale
+            // cache, and the two would drift apart across a round trip.
+            ui::BeginGate(pf.rootAutoScale);
+            if (ui::Visible()) { ImGui::SameLine(); ImGui::SetNextItemWidth(120); }
+            ui::SliderInt("target px", &pf.rootTargetDim, 720, 3840);
+            ui::EndGate();
+            ui::BeginGate(!pf.rootAutoScale);
+            ui::SliderInt("root downscale", &pf.rootDownscale, 1, 6);
+            ui::EndGate();
+            ui::PopSection();
+
+            // --- face tracking (feeds both scenes) ------------------------
+            ui::PushSection("face tracking");
+            ui::BeginHeader("face tracking", /*default_open=*/false);
+            {
+                ui::BeginGate(!mirror::FaceTracker::available());
+                {
+                    ImGui::TextDisabled("MediaPipe not compiled in");
+                    ImGui::TextDisabled("run ./setup-mediapipe.sh, then re-cmake");
+                }
+                ui::EndGate();
+                ui::BeginGate(!(!mirror::FaceTracker::available()));
+                {
+                    if (ui::Checkbox("track faces", &g_track_on) && g_track_on) {
+                        if (!g_tracker.isOpen()) {
+                            const std::string model =
+                                std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_landmarker.task";
+                            if (!g_tracker.open(model, g_track_err)) g_track_on = false;
+                        }
+                        if (g_track_on && !g_fitter.valid()) {
+                            const std::string basis =
+                                std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin";
+                            std::string ferr;
+                            if (!g_fitter.load(basis, ferr)) g_track_err = ferr;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (g_face_held) {
+                        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "held %.2fs",
+                                           pf.nowT - g_face_last_seen);
+                    } else if (g_face.valid) {
+                        ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "face");
+                    } else {
+                        ImGui::TextDisabled("no face");
+                    }
+                    ImGui::PushItemWidth(90);
+                    ui::SliderFloat("hold on loss", &g_face_hold_secs, 0.f, 3.f,
+                                       "%.2fs");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How long a detection survives after the tracker\n"
+                            "stops returning one. A blink or a turn drops\n"
+                            "frames, and without this the fit target flips from\n"
+                            "a crop to the whole frame and back -- resizing the\n"
+                            "trained pixel set and rebuilding the feature\n"
+                            "gather to report something already over.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderInt("acquire", &g_face_acquire, 1, 10);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Consecutive detections before a face is believed.\n"
+                            "The other half of the same idea: keeps a single\n"
+                            "spurious hit from starting everything up.");
+                    }
+                    ui::SliderInt("tracker px", &g_track_px, 240, 960);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Long edge of the frame handed to MediaPipe. The\n"
+                            "short edge follows the composition's aspect and is\n"
+                            "not a choice: the tracker has to be looking at the\n"
+                            "same crop of the sensor as the fit grid, or the\n"
+                            "landmarks it returns describe a different\n"
+                            "rectangle from the one they get applied to.");
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%d x %d", g_track_w, g_track_h);
+                    ImGui::PopItemWidth();
+#if !MIRROR_HAVE_KINECT
+                    ImGui::TextDisabled("(no camera: tracking needs the Kinect target)");
+#endif
+                    if (!g_track_err.empty())
+                        ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "%s",
+                                           g_track_err.c_str());
+
+                    ui::Checkbox("fitted mesh drives the root masks", &g_drive_roots);
+                    ui::Checkbox("texture the mask from the neural fit",
+                                    &g_texture_mask);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Colour the mask's vertices by projecting them into\n"
+                            "the mirror's own output and sampling it -- so the\n"
+                            "mask wears the network's reconstruction of the\n"
+                            "face, not the camera's pixels.\n\n"
+                            "The colour is captured, not looked up live: the\n"
+                            "mirror and the roots never run at the same time,\n"
+                            "so by the time the roots draw there is no neural\n"
+                            "texture left to sample. Capturing at the handoff\n"
+                            "is what lets the mask keep the face.");
+                    }
+                    if (!g_face_colors.empty()) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "captured");
+                    }
+
+                    // --- frame source --------------------------------------
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("source:"); ImGui::SameLine();
+                    ImGui::RadioButton("sensor", &g_source, (int)Source::Kinect);
+                    ImGui::SameLine();
+                    ImGui::RadioButton("photo", &g_source, (int)Source::Photo);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Substitute a still photo for the camera. Nothing\n"
+                            "downstream knows the difference, so the whole\n"
+                            "path -- tracking, fit, mask, texture -- runs\n"
+                            "without a person in front of the sensor, and runs\n"
+                            "reproducibly on a known face.");
+                    }
+                    ui::DeclareInt("source", &g_source, 0, 1);
+                    if (g_source == (int)Source::Photo) {
+                        ImGui::PushItemWidth(-70);
+                        ImGui::InputText("##photo", g_photo_path, sizeof(g_photo_path));
+                        ImGui::PopItemWidth();
+                        ImGui::SameLine();
+                        if (ImGui::Button("load")) {
+                            std::string perr;
+                            if (!LoadPhotoSource(g_photo_path, perr)) g_track_err = perr;
+                            else g_track_err.clear();
+                        }
+                        if (g_photo.empty()) ImGui::TextDisabled("no photo loaded");
+                        else ImGui::TextDisabled("photo %dx%d", g_photo_w, g_photo_h);
+                    }
+                }
+                ui::EndGate();
+            }
+            ui::EndHeader();
+            ui::PopSection();               // "face tracking"
+            DrawBankSaveUI(ui::Bank::Machine);
+
+            ui::EndTab();
+            ui::BeginTab("fit", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            ui::PushSection("fit");
+            ui::BeginGate(!mirror::FaceTracker::available());
+            {
+                ImGui::TextDisabled("MediaPipe not compiled in");
+                ImGui::TextDisabled("run ./setup-mediapipe.sh, then re-cmake");
+            }
+            ui::EndGate();
+            ui::BeginGate(mirror::FaceTracker::available());
+            {
+                // --- crop & head ---------------------------------------
+                ui::Checkbox("crop the fit to the face", &g_mask_fit);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "With a face tracked, train only on its crop; with\n"
+                        "none, fit the whole video feed. The network stays\n"
+                        "global -- nothing constrains it outside the crop --\n"
+                        "so the person is fitted and the rest of the frame\n"
+                        "stays generative. A face is a few percent of the\n"
+                        "frame, and a cropped step costs about that fraction\n"
+                        "of a full one.");
+                }
+                ImGui::BeginDisabled(!g_mask_fit);
+                ImGui::Indent();
+                ImGui::TextUnformatted("crop:"); ImGui::SameLine();
+                ImGui::RadioButton("landmark box", &g_mask_shape,
+                                   (int)MaskShape::Box);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The landmarks' bounding box: the whole face crop,\n"
+                        "hair and jawline and the background just around\n"
+                        "them included.");
+                }
+                ImGui::SameLine();
+                ImGui::RadioButton("hull", &g_mask_shape, (int)MaskShape::Hull);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The silhouette the landmarks trace. Tighter, but it\n"
+                        "supervises skin only -- the network never sees the\n"
+                        "boundary between a person and the room, so it has\n"
+                        "no reason to draw one.");
+                }
+                // A radio group draws itself, so it has to declare itself by
+                // hand -- and this one never did. The crop shape was saved
+                // by nothing and reset to "box" on every launch, however it
+                // had been left.
+                ui::DeclareInt("crop shape", &g_mask_shape, 0, 1);
+                ImGui::PushItemWidth(90);
+                ui::BeginGate(g_mask_shape == (int)MaskShape::Box);
+                {
+                    ui::SliderFloat("pad", &g_crop_pad, 0.f, 0.6f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Grow the box by a fraction of its own size, so\n"
+                            "the margin scales with how close the person is.");
+                    }
+                    ImGui::SameLine();
+                }
+                ui::EndGate();
+                ui::SliderInt("dilate", &g_mask_dilate, 0, 24);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A fixed margin in fit-grid pixels, on top of the\n"
+                        "crop. A region tight to the outline gives the\n"
+                        "network no background pixels near the edge, and\n"
+                        "with only positive supervision it has no reason to\n"
+                        "form a boundary there -- it converges to a soft\n"
+                        "blob instead of an edge.");
+                }
+                ImGui::PopItemWidth();
+
+                // --- head movement ---------------------------------
+                ImGui::TextUnformatted("head moves:");
+                ImGui::RadioButton("centre it", &g_head_mode,
+                                   (int)HeadMode::Centred);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Shift the frame so the head sits in the middle and\n"
+                        "fit it there. The network is shown the same problem\n"
+                        "every frame, which is the most stable thing to ask\n"
+                        "of it -- but the mirror stops showing where in the\n"
+                        "room the person is.");
+                }
+                ImGui::SameLine();
+                ImGui::RadioButton("follow it", &g_head_mode,
+                                   (int)HeadMode::Track);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Fit the head where the camera found it. Honest, and\n"
+                        "the least stable: a face crossing the frame is a\n"
+                        "different function at every step, so the weights\n"
+                        "spend themselves re-learning one face at a hundred\n"
+                        "addresses.");
+                }
+                ImGui::SameLine();
+                ImGui::RadioButton("shift the inputs", &g_head_mode,
+                                   (int)HeadMode::Stabilised);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Fit the head where it is, but offset the network's\n"
+                        "input coordinates by its displacement -- so the\n"
+                        "subject holds still in the network's own frame\n"
+                        "while still moving on screen. The picture of\n"
+                        "'follow', the weights of 'centre'.\n\n"
+                        "The whole field shifts with the head, background\n"
+                        "included: the offset is on the coordinates, not on\n"
+                        "the subject.");
+                }
+                // Size is only meaningful where the app owns the placement.
+                // In the other two modes the subject is where the camera
+                // found it, and rescaling would be fighting that.
+                ui::DeclareInt("head mode", &g_head_mode, 0, 2);
+                // Available in every mode but the input-shift one, which
+                // moves the network's coordinates and has the render undo
+                // it -- a pixel placement underneath that would be two
+                // placements arguing. Centring is no longer the price of
+                // choosing a size.
+                ImGui::BeginDisabled(g_head_mode == (int)HeadMode::Stabilised);
+                ui::Checkbox("set face size", &g_face_size_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Resample the crop so the head is a chosen size on\n"
+                        "screen, instead of whatever distance the person\n"
+                        "happens to be standing at.\n\n"
+                        "Costs a bilinear resample every frame: at size 1:1\n"
+                        "the centred mode only shifts by whole pixels, which\n"
+                        "is deliberate -- refiltering the face every frame is\n"
+                        "the noise that mode exists to remove.");
+                }
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!g_face_size_on);
+                ImGui::SetNextItemWidth(110);
+                ui::SliderFloat("size", &g_face_size, 0.05f, 0.5f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Half the head's height as a fraction of the frame,\n"
+                        "so 0.25 fills half the screen top to bottom.");
+                }
+                ImGui::EndDisabled();
+                if (g_face_size_on && HaveCrop()) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("x%.2f", PlaceScale());
+                    if (g_head_mode != (int)HeadMode::Centred) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(in place)");
+                    }
+                }
+                ImGui::EndDisabled();
+
+                ImGui::SetNextItemWidth(110);
+                ui::SliderFloat("head smoothing", &g_head_smooth, 0.02f, 1.f,
+                                   "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How fast the tracked box follows the landmarks.\n"
+                        "1 is raw. The box jitters a pixel or two on a still\n"
+                        "head, and both the input shift and the soft edge\n"
+                        "show that jitter directly.");
+                }
+                ImGui::Unindent();
+                ImGui::EndDisabled();
+
+                // --- identity ------------------------------------------
+                ImGui::Separator();
+                ui::PushSection("identity");
+                ImGui::Text("IDENTITY");
+                ImGui::SameLine();
+                if (g_fitter.hasIdentity()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                       "fitted (%.2f px residual)", g_id_residual);
+                } else if (g_collect_id) {
+                    float best = 0, worst = 0;
+                    g_fitter.identityScores(best, worst);
+                    ImGui::TextDisabled("collecting %.1fs  best %.2f",
+                                        g_id_collect_secs - (pf.nowT - g_id_started),
+                                        best);
+                } else {
+                    ImGui::TextDisabled("mean face");
+                }
+                ImGui::BeginDisabled(!g_fitter.valid());
+                if (ImGui::Button(g_collect_id ? "cancel" : "fit identity")) {
+                    if (g_collect_id) {
+                        g_collect_id = false;
+                    } else {
+                        g_fitter.clearIdentity();
+                        g_id_residual = -1.f;
+                        g_collect_id = true;
+                        g_id_started = pf.nowT;
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Look at the camera with a still face for a few\n"
+                        "seconds, then the 100 identity coefficients are\n"
+                        "solved over the best frames at once.\n\n"
+                        "Frames are ranked by frontality x neutrality and\n"
+                        "the best few kept -- not thresholded. MediaPipe\n"
+                        "reports substantial baseline activation on an\n"
+                        "ordinary face, so any fixed threshold either\n"
+                        "accepts everything or nothing depending on the\n"
+                        "person and the lighting.\n\n"
+                        "Expression is known per frame (from the\n"
+                        "blendshapes) and subtracted first, so a smile does\n"
+                        "not get baked into the face.");
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ui::SliderFloat("secs", &g_id_collect_secs, 1.f, 15.f, "%.0fs");
+                ImGui::EndDisabled();
+                ui::Checkbox("fit automatically", &g_auto_fit_id);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Start collecting the moment a face is acquired\n"
+                        "with no identity behind it.\n\n"
+                        "Nothing else starts one outside a running show:\n"
+                        "the button above was the only trigger, and an\n"
+                        "installation has nobody to press it, so the mask\n"
+                        "stayed the basis's average -- a real face, and\n"
+                        "the wrong one. Every path that forgets a sitter\n"
+                        "already clears the identity, so clearing it is\n"
+                        "the same thing as asking for the next one.");
+                }
+
+                ui::BeginGate(g_fitter.valid());
+                {
+                    ImGui::PushItemWidth(90);
+                    ui::SliderInt("modes", &g_fitter.config().n_identity, 10, 100);
+                    ImGui::SameLine();
+                    ui::SliderFloat("ridge", &g_fitter.config().ridge, 0.01f, 20.f,
+                                       "%.2f", ImGuiSliderFlags_Logarithmic);
+                    ImGui::SameLine();
+                    ui::SliderInt("frames", &g_fitter.config().max_frames, 1, 24);
+                    ImGui::PopItemWidth();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "modes: of the basis's 100. The tail modes are\n"
+                            "detail 68 landmarks cannot resolve, and fitting\n"
+                            "them is how the fit starts chasing noise.\n"
+                            "ridge: pulls the solve toward the mean face.\n"
+                            "frames: more samples average out landmark jitter.");
+                    }
+
+                    bool tp = g_fitter.trackerPose();
+                    if (ui::Checkbox("head pose from tracker", &tp))
+                        g_fitter.useTrackerPose(tp);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Rotate the mesh by MediaPipe's 4x4 facial\n"
+                            "transformation matrix. The Python original ran\n"
+                            "solvePnP for this; the Tasks API hands back the\n"
+                            "pose directly, so there is no PnP and no OpenCV.\n"
+                            "Off falls back to the flat 2D similarity, which\n"
+                            "is enough for placement but does not turn.");
+                    }
+                    if (g_face.valid && tp) {
+                        float yaw, pitch, roll;
+                        g_fitter.headAngles(yaw, pitch, roll);
+                        ImGui::TextDisabled("yaw %+.0f°  pitch %+.0f°  roll %+.0f°",
+                                            yaw * 57.2958f, pitch * 57.2958f,
+                                            roll * 57.2958f);
+                    }
+                    ImGui::TextDisabled("basis: %d verts, %d tris (%s)",
+                                        g_fitter.basis().vertexCount(),
+                                        g_fitter.basis().triangleCount(),
+                                        g_fitter.basis().nvfTopology() ? "Maxine/NVF"
+                                                                       : "ICT");
+                }
+                ui::EndGate();
+                ui::BeginGate(!(g_fitter.valid()));
+                {
+                    ImGui::TextDisabled("no face_basis.bin -- run");
+                    ImGui::TextDisabled("tools/export_face_basis.py");
+                }
+                ui::EndGate();
+                ui::PopSection();       // "identity"
+            }
+            ui::EndGate();
+
+            ImGui::Separator();
+            {
+                    mirror::PondParams& P = pf.mirror.params();
+                    // Empty, not a path. This used to be hard-coded to a
+                    // frame from an unrelated project on one developer's disk,
+                    // and since "fit" falls back to the still whenever the live
+                    // feed is not armed, the usual way to meet it was pressing
+                    // fit and watching the mirror converge onto a stranger's
+                    // photograph -- which reads as the camera fit being broken
+                    // rather than as a different target being used.
+                    static char fit_path[512] = "";
+                    static std::string fit_err;
+
+                    ImGui::Text("FIT  %s", pf.mirror.pond().fitted()
+                                    ? (pf.mirror.pond().fitting() ? "training" : "held")
+                                    : "not fitted");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("| %d steps | loss %.5f",
+                                        pf.mirror.pond().fitSteps(), pf.mirror.lastLoss());
+
+                    ImGui::PushItemWidth(-1);
+                    ImGui::InputText("##fitpath", fit_path, sizeof(fit_path));
+                    ImGui::PopItemWidth();
+
+#if MIRROR_HAVE_KINECT
+                    {
+                        ImGui::Separator();
+                        const bool open = g_kinect.isOpen();
+                        ImGui::Text("LIVE");
+                        ImGui::SameLine();
+                        if (open) {
+                            ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "%s",
+                                               g_kinect.deviceInfo().c_str());
+                        } else {
+                            ImGui::TextDisabled("sensor closed");
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("| %llu frames",
+                                            (unsigned long long)g_kinect.frames());
+
+                        if (ImGui::Button(open ? "close sensor" : "open sensor")) {
+                            if (open) {
+                                g_fit_live = false;
+                                g_kinect.close();
+                            } else {
+                                std::string kerr;
+                                if (!g_kinect.open(kerr)) fit_err = kerr;
+                                else fit_err.clear();
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Only one process can hold the sensor -- close\n"
+                                "kinect_v2_demo first, or opening fails with\n"
+                                "LIBUSB_ERROR_NO_DEVICE.");
+                        }
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(!open);
+                        // Arming the feed does not start training: the frame
+                        // pull, the tracker and the preview all come alive, and
+                        // "fit" below is what begins (or restarts) the fit on
+                        // whatever the camera is showing at that moment.
+                        ui::Checkbox("track live feed", &g_fit_live);
+                        ImGui::EndDisabled();
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Retarget from the camera every frame. The fit\n"
+                                "never finishes -- it tracks, running a few\n"
+                                "hundred ms behind whoever is in front of the\n"
+                                "sensor. That lag is the effect.\n\n"
+                                "This only arms the feed. Press fit to start\n"
+                                "training on it.");
+                        }
+                        // --- outside the crop ---------------------------
+                        //
+                        // Inside, the network is reproducing a person and
+                        // every input must hold still. Outside, nothing is
+                        // constrained. These are what that difference is
+                        // allowed to look like.
+                        ui::Checkbox("soft edge", &g_region_on);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Fade the effects below in across a band around\n"
+                                "the crop instead of switching at its border.");
+                        }
+                        ImGui::BeginDisabled(!g_region_on);
+                        ImGui::SameLine();
+                        ui::Checkbox("follow the outline", &g_region_hull);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Fade outward from the mask's actual shape --\n"
+                                "the face outline when the crop is a hull --\n"
+                                "rather than from its bounding box.\n\n"
+                                "Also what makes the band an even width all the\n"
+                                "way round: the box form measures distance as a\n"
+                                "fraction of each half-extent, so a tall crop\n"
+                                "fades over a longer distance vertically than\n"
+                                "horizontally and flares at the corners, which\n"
+                                "is the gradient pooling along the edges.");
+                        }
+                        ImGui::PushItemWidth(90);
+                        ui::SliderFloat("fade starts", &g_fade_start, 0.f, 0.8f,
+                                           "%.3f");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "How far out from the crop the fade begins, in\n"
+                                "coord units (the frame is 2 tall). Push it out\n"
+                                "to keep a clean margin of untouched pixels\n"
+                                "around the subject before anything happens.");
+                        }
+                        ImGui::SameLine();
+                        ui::SliderFloat("fade width", &g_fade_width, 0.01f, 1.5f,
+                                           "%.3f");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "And how far it runs. Start and width are\n"
+                                "separate because 'where the gradient sits' and\n"
+                                "'how long it takes' are separate complaints --\n"
+                                "a fade pinned to the edge pools against it\n"
+                                "however wide you make it.");
+                        }
+                        ImGui::PopItemWidth();
+
+                        ui::Checkbox("animate z outside", &g_z_free);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Let the latent move everywhere except on the\n"
+                                "subject, which stays pinned to the z the fit\n"
+                                "was begun at.\n\n"
+                                "z is an MLP input, not a colour knob: moving it\n"
+                                "under a fitted network asks the same weights a\n"
+                                "different question, and the face comes apart.\n"
+                                "Pinning it inside the crop is what lets the\n"
+                                "rest of the frame keep breathing.");
+                        }
+                        ImGui::BeginDisabled(!g_z_free);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                        // Raw, not ui::. This is the *same* P.z_rate the z latent
+                        // section declares as "mirror/z/z auto-rate /s"; wrapping
+                        // it here too registered one variable under two names, in
+                        // two different banks once this block moved to Fit -- so a
+                        // load would apply both and whichever declared last won.
+                        // A second handle on a control is a convenience; a second
+                        // *name* for it is a bug.
+                        ImGui::SliderFloat("z rate /s", &P.z_rate, -2.f, 2.f);
+                        ImGui::EndDisabled();
+
+                        ImGui::SetNextItemWidth(110);
+                        ui::SliderFloat("grey outside", &g_grey_out, 0.f, 1.f,
+                                           "%.2f");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Drain colour outside the crop: 1 leaves the\n"
+                                "subject in colour on a greyscale field. Rides\n"
+                                "the same falloff as the latent, so there is one\n"
+                                "edge in the picture rather than two that nearly\n"
+                                "agree.");
+                        }
+                        ImGui::EndDisabled();
+                        if (!pf.mirror.pond().fitted()) {
+                            ImGui::TextDisabled("(these need a fit: there is no "
+                                                "inside without one)");
+                        } else if (!HaveCrop()) {
+                            ImGui::TextDisabled("(these need a tracked face)");
+                        }
+                    }
+#endif
+                    // Two tunings, switched by whether a crop is active. The
+                    // live one is marked, because otherwise sliders that do
+                    // nothing right now look broken rather than inactive.
+                    const bool crop_live = g_have_mask;
+                    for (int which = 0; which < 2; ++which) {
+                        FitTune& T = which == 0 ? g_tune_crop : g_tune_full;
+                        const bool active = (which == 0) == crop_live;
+                        ImGui::PushID(which);
+                        // Own section per row: the two rows carry the same
+                        // labels, and without this they would be one parameter
+                        // in the registry rather than two.
+                        ui::PushSection(which == 0 ? "crop" : "feed");
+                        if (active) {
+                            ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "%s",
+                                               which == 0 ? "face crop  >" : "whole feed >");
+                        } else {
+                            ImGui::TextDisabled("%s",
+                                which == 0 ? "face crop   " : "whole feed  ");
+                        }
+                        ImGui::SameLine();
+                        ImGui::PushItemWidth(70);
+                        ui::SliderInt("grid", &T.downscale, 1, 8);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Fit resolution as a divisor of the display\n"
+                                "size, so 1 is the full render grid and 4 is a\n"
+                                "sixteenth of the area.\n\n"
+                                "A step costs roughly 3x a render over the same\n"
+                                "points -- but a crop is only a few percent of\n"
+                                "those points, so it can afford a far finer grid\n"
+                                "than the whole feed ever could, and a face is\n"
+                                "where the detail has to go. The network is\n"
+                                "continuous either way: whatever grid the\n"
+                                "gradient came from, the result renders at full\n"
+                                "size.");
+                        }
+                        ImGui::SameLine();
+                        ui::SliderInt("steps", &T.steps, 1, 32);
+                        ImGui::SameLine();
+                        ui::SliderFloat("lr", &T.lr, 1e-4f, 2e-2f, "%.4f",
+                                           ImGuiSliderFlags_Logarithmic);
+                        ImGui::PopItemWidth();
+                        ui::PopSection();
+                        ImGui::PopID();
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "A crop is a few percent of the pixels, so a step\n"
+                            "costs a few percent as much and many more fit in a\n"
+                            "frame -- but each gradient sees far less data, so a\n"
+                            "smaller step keeps it from chasing the crop box's\n"
+                            "own jitter. The whole feed is the opposite. One\n"
+                            "shared set of numbers meant every crop/no-crop\n"
+                            "transition quietly changed what they meant.");
+                    }
+                    if (pf.fit_w > 0) {
+                        ImGui::TextDisabled("fit grid %d x %d  (%d px%s)", pf.fit_w, pf.fit_h,
+                                            pf.mirror.pond().fitPixels(),
+                                            crop_live ? ", cropped" : "");
+                    }
+
+                    if (ImGui::Button(pf.mirror.pond().fitting() ? "stop" : "fit")) {
+                        if (pf.mirror.pond().fitting()) {
+                            pf.mirror.pond().stopFit();
+                        } else if (g_fit_live &&
+                                   pf.live_rgb.size() != size_t(pf.fit_w) * pf.fit_h * 3) {
+                            // Armed but nothing has arrived yet. Falling back to
+                            // the still here would silently fit the photo and
+                            // then look like the camera fit had failed.
+                            fit_err = "no camera frame yet";
+                        } else if (g_fit_live) {
+                            // Start on the frame the camera is showing right
+                            // now, cropped the same way the per-frame retarget
+                            // will crop it -- beginFit sizes the optimiser to
+                            // the pixel set, so starting unmasked and narrowing
+                            // a frame later would rebuild it immediately.
+                            fit_err.clear();
+                            if (g_have_mask) {
+                                pf.mirror.pond().beginFit(pf.live_rgb, pf.fit_h, pf.fit_w, P,
+                                                       g_fit_mask);
+                            } else {
+                                pf.mirror.pond().beginFit(pf.live_rgb, pf.fit_h, pf.fit_w, P);
+                            }
+                        } else {
+                            // The still-image path has no crop, so it is the
+                            // whole-feed grid that applies.
+                            const int ds = std::max(1, g_tune_full.downscale);
+                            const int fw = std::max(8, pf.mirror.lowW() / ds);
+                            const int fh = std::max(8, pf.mirror.lowH() / ds);
+                            std::vector<float> rgb;
+                            fit_err.clear();
+                            if (fit_path[0] == '\0') {
+                                fit_err = "no image named -- tick 'track live "
+                                          "feed' to fit the camera";
+                            } else if (LoadImageRGB(fit_path, fw, fh, rgb, fit_err)) {
+                                pf.mirror.pond().beginFit(rgb, fh, fw, P);
+                            }
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            g_fit_live
+                                ? "Fit the live feed -- the face crop when one\n"
+                                  "is tracked, the whole frame otherwise."
+                                : "Fit the still image above. Arm 'track live\n"
+                                  "feed' to fit the camera instead.");
+                    }
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(!pf.mirror.pond().fitted());
+                    if (ImGui::Button("clear fit")) pf.mirror.pond().clearFit();
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(clear returns to the generated field)");
+
+                    if (!fit_err.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 140, 120, 255));
+                        ImGui::TextWrapped("%s", fit_err.c_str());
+                        ImGui::PopStyleColor();
+                    }
+                    if (pf.mirror.pond().fitted()) {
+                        ImGui::TextDisabled(
+                            "weights are learned: detail / contrast / tilt no "
+                            "longer apply");
+                    }
+                }
+
+                ui::Checkbox("ramp w0 for the fit", &g_w0_ramp_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Entering the fitting phase, take sine w0 up to the\n"
+                        "value below before starting the fit, and put it back\n"
+                        "on the way out to idle.\n\n"
+                        "It has to happen *before* beginFit. w0 shapes the base\n"
+                        "weights, and the optimiser is seeded from those once --\n"
+                        "after that the network is learned and w0 no longer\n"
+                        "reaches it, so turning it up mid-fit does nothing.");
+                }
+                ui::BeginGate(g_w0_ramp_on);
+                {
+                    ImGui::PushItemWidth(110);
+                    ui::SliderFloat("fit w0", &g_w0_fit, 1.0f, 80.0f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The frequency of the basis the face is\n"
+                            "reconstructed out of. A fit wants far more regions\n"
+                            "than an idle field does -- at the idle value there\n"
+                            "are not enough of them to carry an eye.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderFloat("ramp secs", &g_w0_ramp_secs, 0.f, 8.f, "%.1fs");
+                    ImGui::PopItemWidth();
+                    if (ui::Visible() && g_w0_t0 >= 0.0) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                           "ramping %.0f%%",
+                                           100.f * W0RampT(pf.nowT));
+                    }
+                }
+                ui::EndGate();
+            ui::PopSection();               // "fit"
+            DrawBankSaveUI(ui::Bank::Fit);
+            ui::EndTab();
+            ui::BeginTab("debug", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            ui::PushSection("debug");
+            ui::BeginGate(!mirror::FaceTracker::available());
+            {
+                ImGui::TextDisabled("MediaPipe not compiled in");
+                ImGui::TextDisabled("run ./setup-mediapipe.sh, then re-cmake");
+            }
+            ui::EndGate();
+            ui::BeginGate(mirror::FaceTracker::available());
+            {
+                // --- camera preview -------------------------------------
+                ui::Checkbox("camera overlay", &g_show_source);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Show the raw source frame in a corner -- the same\n"
+                        "image the tracker sees, mirroring included. The\n"
+                        "mirror's own output cannot tell a closed sensor\n"
+                        "from a stale frame from the photo still being\n"
+                        "selected; this can.");
+                }
+                ui::BeginGate(g_show_source);
+                {
+                    ImGui::SameLine();
+                    ui::Checkbox("landmarks", &g_pip_landmarks);
+                    ImGui::PushItemWidth(110);
+                    ui::SliderInt("size", &g_source_pip_w, 160, 640);
+                    ImGui::SameLine();
+                    const char* corners[] = {"top-left", "top-right",
+                                             "bottom-left", "bottom-right"};
+                    ImGui::Combo("corner", &g_source_corner, corners, 4);
+                    ui::DeclareInt("corner", &g_source_corner, 0, 3);
+                    ImGui::PopItemWidth();
+                }
+                ui::EndGate();
+
+                // --- what the network is trained on ------------------
+                ui::Checkbox("network input", &g_show_netin);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The exact buffer handed to the optimiser: the feed\n"
+                        "after the crop, the mirroring, the fit grid and the\n"
+                        "head placement, with the trained pixels bright and\n"
+                        "the rest dimmed.\n\n"
+                        "The camera overlay says a frame is arriving. This\n"
+                        "says what became of it -- which is the question a\n"
+                        "fit that converges onto the wrong thing is asking.");
+                }
+                ui::BeginGate(g_show_netin);
+                {
+                    ImGui::PushItemWidth(110);
+                    ui::SliderInt("input size", &g_netin_pip_w, 160, 640);
+                    ImGui::SameLine();
+                    const char* ncorners[] = {"top-left", "top-right",
+                                              "bottom-left", "bottom-right"};
+                    // Distinct *labels*, not distinct ids: "##net" is
+                    // stripped before naming, so "size##net" registers as
+                    // the camera overlay's own "size" and the two controls
+                    // become one parameter.
+                    ImGui::Combo("input corner", &g_netin_corner, ncorners, 4);
+                    ui::DeclareInt("input corner", &g_netin_corner, 0, 3);
+                    ui::SliderFloat("untrained dim", &g_netin_dim, 0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far down the pixels outside the mask are\n"
+                            "taken. 0 is what the optimiser effectively\n"
+                            "sees; turn it up to check the crop is on the\n"
+                            "person rather than beside them.");
+                    }
+                    ImGui::PopItemWidth();
+                }
+                ui::EndGate();
+            }
+            ui::EndGate();
+            ui::PopSection();               // "debug"
+            DrawBankSaveUI(ui::Bank::Debug);
+            ui::EndTab();
+            ui::BeginTab("look", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            ui::PushSection("transition");
+            // The transition page is a category of settings, not a cue to
+            // play one: what is on screen is the phase navigator's business,
+            // so these declare and draw whenever the look tab is open.
+            {
+                ImGui::Text("%s   t=%.2fs   press %.0f%%   release %.0f%%",
+                            pf.trans.phaseName(), pf.trans.clock(), pf.trans.press() * 100.f,
+                            pf.trans.release() * 100.f);
+                ImGui::SameLine();
+                if (ImGui::Button("replay")) pf.trans.restart();
+
+                // --- the locked fit ------------------------------------
+                //
+                // The one instant the effect turns on: the film stops being
+                // live and every vertex keeps the texel it was covering. Shown
+                // here because it is the thing that goes wrong invisibly --
+                // an unlocked run looks almost right until the head moves, and
+                // then the face slides across the mask like a slide projection.
+                ImGui::SameLine();
+                if (pf.trans.fitLocked()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "locked");
+                } else {
+                    ImGui::TextDisabled("live");
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(pf.trans.fitLocked() ? "unlock" : "lock now")) {
+                    if (pf.trans.fitLocked()) pf.trans.unlockFit(); else pf.trans.lockFit();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Freeze the film and nail the mask's uv to it.\n\n"
+                        "Before the lock the mask wears this frame's\n"
+                        "projection of the live pond, which is what makes it\n"
+                        "invisible against the film it is behind. After it the\n"
+                        "film is a picture and each vertex keeps the texel it\n"
+                        "was covering, so the face travels with the mesh.\n\n"
+                        "Recomputing the uv after the freeze is the failure\n"
+                        "this prevents: geometry and texture then move in\n"
+                        "different frames and the face reads as a still\n"
+                        "projected onto a moving mask from a fixed lamp.");
+                }
+                ui::Checkbox("lock when the press starts", &pf.trans.autoLock);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The press starting is the last frame on which the\n"
+                        "mask and the film are still in register -- after it\n"
+                        "the mask is coming through the sheet and the pond\n"
+                        "behind it is no longer a picture of the face.");
+                }
+                ImGui::SameLine();
+                ui::Checkbox("save a capture on lock", &g_capture_auto);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Write the frozen film, the mesh, the locked uv and\n"
+                        "the baked vertex colours to captures/<id>/, so this\n"
+                        "sitter can be worn again later -- next scene, or next\n"
+                        "night. The id is the local date and time.");
+                }
+                if (!g_capture_msg.empty()) ImGui::TextDisabled("%s", g_capture_msg.c_str());
+
+                if (ImGui::TreeNode("captures")) {
+                    if (ImGui::Button("refresh")) {
+                        g_capture_ids = mirror::ListCaptures();
+                        g_capture_sel = -1;
+                    }
+                    ImGui::SameLine();
+                    if (g_capture_loaded.empty()) {
+                        ImGui::TextDisabled("masks: live fit");
+                    } else {
+                        ImGui::Text("masks: %s", g_capture_loaded.c_str());
+                        ImGui::SameLine();
+                        if (ImGui::Button("release")) {
+                            g_capture_loaded.clear();
+                            pf.roots.clearFittedFace();
+                            g_capture_msg = "masks back to the live fit";
+                        }
+                    }
+                    ImGui::BeginChild("caplist", ImVec2(0, 120), true);
+                    for (int i = 0; i < (int)g_capture_ids.size(); ++i) {
+                        if (ImGui::Selectable(g_capture_ids[i].c_str(), g_capture_sel == i))
+                            g_capture_sel = i;
+                    }
+                    ImGui::EndChild();
+                    const bool has_sel = g_capture_sel >= 0 &&
+                                         g_capture_sel < (int)g_capture_ids.size();
+                    ImGui::BeginDisabled(!has_sel);
+                    if (ImGui::Button("wear on the masks")) {
+                        mirror::FaceCapture cap;
+                        std::string cerr;
+                        if (mirror::LoadCapture(g_capture_ids[g_capture_sel], cap, cerr)) {
+                            // Mesh and colour together, in that order: the
+                            // colours are per vertex of *this* mesh, and
+                            // uploading them against the previous one paints
+                            // one person's face onto another's geometry.
+                            pf.roots.setFittedFace(cap.verts, cap.tris);
+                            pf.roots.setFaceColors(cap.colors);
+                            g_capture_loaded = cap.id;
+                            g_capture_msg = "masks wearing " + cap.id;
+                        } else {
+                            g_capture_msg = cerr;
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Load onto the root scene's masks. The capture\n"
+                            "then outranks the live tracker -- which is the\n"
+                            "point: by the time the roots are up, the sitter\n"
+                            "has gone, and driving the masks from whoever is\n"
+                            "in front of the sensor now would overwrite the\n"
+                            "face the transition just handed over.");
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("load into the transition")) {
+                        mirror::FaceCapture cap;
+                        std::string cerr;
+                        if (mirror::LoadCapture(g_capture_ids[g_capture_sel], cap, cerr) &&
+                            pf.trans.applyCapture(cap)) {
+                            g_capture_msg = "transition replaying " + cap.id;
+                        } else {
+                            g_capture_msg = cerr.empty() ? std::string("capture has no film")
+                                                         : cerr;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("delete")) {
+                        std::string cerr;
+                        const std::string id = g_capture_ids[g_capture_sel];
+                        if (mirror::DeleteCapture(id, cerr)) {
+                            if (g_capture_loaded == id) g_capture_loaded.clear();
+                            g_capture_msg = "deleted " + id;
+                        } else {
+                            g_capture_msg = cerr;
+                        }
+                        g_capture_ids = mirror::ListCaptures();
+                        g_capture_sel = -1;
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::TreePop();
+                }
+
+                if (!pf.trans.hasFace()) {
+                    ImGui::TextDisabled("no mask -- load face_basis.bin");
+                } else if (!g_track_on || !g_face.valid) {
+                    ImGui::TextDisabled("no tracked face -- showing the neutral mask");
+                }
+                ImGui::SeparatorText("timing (seconds)");
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("hold",    &pf.trans.timing.hold,    0.f, 3.f);
+                ImGui::SameLine();
+                ui::SliderFloat("press",   &pf.trans.timing.press,   0.2f, 6.f);
+                ui::SliderFloat("settle",  &pf.trans.timing.settle,  0.f, 2.f);
+                ImGui::SameLine();
+                ui::SliderFloat("release", &pf.trans.timing.release, 0.05f, 3.f);
+                ui::SliderFloat("fall",    &pf.trans.timing.fall,    0.5f, 6.f);
+                ImGui::PopItemWidth();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "hold: the flat film, which is the pond exactly.\n"
+                        "press: the mask advancing through it, tenting it.\n"
+                        "settle: held taut at full press.\n"
+                        "release: the pins letting go, corners first.\n"
+                        "fall: draping off the face and away.");
+                }
+                ImGui::SeparatorText("look");
+                ui::SliderFloat("refraction", &pf.trans.refract, 0.f, 0.25f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How much the film bends the image where the fabric\n"
+                        "bends. Driven by the cloth's own normals, so it is\n"
+                        "exactly zero on the flat sheet -- the opening frame\n"
+                        "has to be the pond, not a displaced copy of it.");
+                }
+                ui::SliderFloat("film relief", &pf.trans.reliefSharp, 0.f, 3.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How hard the film's own curvature is drawn.\n\n"
+                        "Lambert over a tented sheet is a soft wash -- the\n"
+                        "normals turn slowly, so the brow and the nose shade\n"
+                        "barely differently from the cheek beside them, and\n"
+                        "the press reads as the image stretching rather than\n"
+                        "as a face coming through the fabric. What a viewer\n"
+                        "actually reads a covered face by is the sign of the\n"
+                        "surface's second derivative: convex on the brow and\n"
+                        "the nose, concave in the sockets. This is that term,\n"
+                        "and it is zero on a flat sheet.");
+                }
+                ui::SliderFloat("film sheen", &pf.trans.sheen, 0.f, 1.5f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A raking specular on the fabric's bends. Wet film is\n"
+                        "not matte, and the streak along a fold is the other\n"
+                        "half of what says surface rather than printed image.\n"
+                        "Gated to the pressed area like the relief, so the\n"
+                        "untouched film stays exactly the pond.");
+                }
+                ui::SliderFloat("press depth", &pf.trans.pressProud, 0.f, 0.4f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far proud of the film the mask ends up. More\n"
+                        "tents the fabric harder before the pins let go.");
+                }
+                ui::SliderFloat("mask relief", &pf.trans.depthScale, 0.2f, 4.f);
+                ui::SliderFloat("shading span", &pf.trans.shadeSpan, 1.f, 10.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The size the mask is shaded at, in the root scene's\n"
+                        "world units. Its marble, light falloff and spot cone\n"
+                        "are world-space quantities tuned against a mask about\n"
+                        "four units across; this scene places the mask by\n"
+                        "projection at whatever size the fit gives it, so the\n"
+                        "shading space is scaled back to that reference rather\n"
+                        "than every parameter being re-tuned.");
+                }
+                ImGui::TextDisabled("material: the roots' mask (look -> roots -> mask)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The mask's material, environment, exposure and tonemap\n"
+                        "are the root scene's own, copied in every frame -- not\n"
+                        "a second set of knobs. The transition ends with the\n"
+                        "mask alone on screen and the roots phase begins with\n"
+                        "the same mask in a tangle; sharing them is what makes\n"
+                        "that cut land on one object rather than two that\n"
+                        "happen to be tuned alike.\n\n"
+                        "The film is deliberately not on that material: it is\n"
+                        "the mirror's output, display-referred, and has to stay\n"
+                        "identical to the scene the piece cuts from.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Depth exaggeration of the mask. 1 is the fit's own\n"
+                        "proportions; the fit is solved from one view, so a\n"
+                        "little more relief often reads better on screen.");
+                }
+                ImGui::SeparatorText("registration");
+                ui::Checkbox("align mask", &pf.trans.alignMask);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Hold the mask fully pressed through a flat film and\n"
+                        "stop the timeline, so the mask and the face it is\n"
+                        "supposed to sit on are both on screen. This is the\n"
+                        "state to set the scale and offset in; everywhere else\n"
+                        "the mask is either hidden behind the sheet or moving.");
+                }
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("mask scale x", &pf.trans.maskScale[0], 0.6f, 1.4f);
+                ImGui::SameLine();
+                ui::SliderFloat("mask scale y", &pf.trans.maskScale[1], 0.6f, 1.4f);
+                ui::SliderFloat("mask offset x", &pf.trans.maskOffset[0], -0.2f, 0.2f);
+                ImGui::SameLine();
+                ui::SliderFloat("mask offset y", &pf.trans.maskOffset[1], -0.2f, 0.2f);
+                ImGui::PopItemWidth();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The mask is placed by the fit's projection, which is a\n"
+                        "2D similarity -- no perspective, no out-of-plane\n"
+                        "foreshortening. On a face looking at the camera it\n"
+                        "lands on the features; on a head with real pitch it\n"
+                        "comes out too tall, eyes high and mouth low, and\n"
+                        "nothing downstream can recover that. Scale is per-axis\n"
+                        "because the error is.\n\n"
+                        "The texture moves with the geometry, so correcting\n"
+                        "where the mask sits keeps it wearing what it covers.");
+                }
+                if (ImGui::Button("reset registration")) {
+                    pf.trans.maskScale[0] = pf.trans.maskScale[1] = 1.f;
+                    pf.trans.maskOffset[0] = pf.trans.maskOffset[1] = 0.f;
+                }
+
+                ImGui::SeparatorText("cloth");
+                ui::Checkbox("show cloth", &pf.trans.showCloth);
+                ImGui::SameLine();
+                ui::Checkbox("show mask", &pf.trans.showFace);
+                ImGui::SameLine();
+                ui::Checkbox("wireframe", &pf.trans.wireframe);
+                ui::SliderFloat("gravity back (-z)", &pf.trans.gravityBack, 0.f, 20.f);
+                ui::SliderFloat("gravity down (-y)", &pf.trans.gravityDown, 0.f, 8.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Zero by default. A -y pull drags the whole film out of\n"
+                        "frame, so the mask ends up uncovered by something that\n"
+                        "has nothing to do with it. With gravity straight back,\n"
+                        "what takes the film off is the mask's own asymmetry --\n"
+                        "a turned head makes the tangential forces stop\n"
+                        "cancelling, and the fabric peels from the shallow side.");
+                }
+                ui::SliderFloat("friction", &pf.trans.friction, 0.f, 1.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Tangential grip where the sheet touches the mask.\n"
+                        "This is what makes it drape over the brow and the\n"
+                        "nose instead of sliding off them like glass.");
+                }
+                ui::SliderFloat("stretch", &pf.trans.stretch, 0.f, 0.98f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How freely the film lengthens. At 0 it is\n"
+                        "inextensible and bridges the face instead of\n"
+                        "wrapping it; toward 1 it stretches over the form\n"
+                        "the way a dipped film does. Compression stays stiff\n"
+                        "either way, which is what keeps the canvas taut.");
+                }
+                ui::SliderFloat("set (plasticity)", &pf.trans.plastic, 0.f, 8.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How fast a held stretch becomes the sheet's own\n"
+                        "shape. At 0 every bit of tension stored during the\n"
+                        "press comes back at once when the pins let go, and\n"
+                        "the sheet snaps off the face.");
+                }
+                ui::SliderFloat("damping", &pf.trans.damping, 0.9f, 1.f);
+                ui::SliderFloat("relief shading", &pf.trans.reliefShade, 0.f, 1.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far shading swings either side of the flat\n"
+                        "sheet's value. The flat sheet always reads 1, so\n"
+                        "this changes how much the folds show without ever\n"
+                        "changing the film's overall brightness.");
+                }
+                ui::SliderFloat("sheet oversize", &pf.trans.oversize, 1.f, 1.3f);
+                ImGui::PushItemWidth(110);
+                ui::SliderInt("substeps", &pf.trans.substeps, 1, 8);
+                ImGui::SameLine();
+                ui::SliderInt("iterations", &pf.trans.iterations, 4, 64);
+                ui::SliderInt("sheet res", &pf.trans.sheetRes, 16, 128);
+                ImGui::PopItemWidth();
+                ImGui::TextDisabled("%d verts, %zu tris, minZ %.2f",
+                                    (int)pf.trans.cloth().pos.size(),
+                                    pf.trans.cloth().tris.size() / 3, pf.trans.cloth().minZ());
+            }
+            // (the transition page is a category of settings, not a cue to
+            //  play one: what is on screen is the navigator's business)
+            ui::PopSection();               // "transition"
+
+            // --- text overlay -------------------------------------------
+            // Outside the per-scene blocks: it composites in the present pass,
+            // so it is available over every scene.
+            ui::PushSection("text");
+            ui::BeginHeader("text overlay", /*default_open=*/false);
+            {
+                ui::Checkbox("show text", &pf.textp.on);
+                static char buf[256] = {};
+                static bool buf_init = false;
+                if (!buf_init) {
+                    std::snprintf(buf, sizeof(buf), "%s", pf.textp.text.c_str());
+                    buf_init = true;
+                }
+                if (ImGui::InputTextMultiline("##text", buf, sizeof(buf),
+                                              ImVec2(-1, 46))) {
+                    pf.textp.text = buf;
+                }
+                ImGui::TextDisabled("newlines split lines");
+
+                ui::SliderFloat("size", &pf.textp.size, 0.02f, 0.6f);
+                ui::SliderFloat("x", &pf.textp.cx, -2.f, 2.f);
+                ui::SliderFloat("y", &pf.textp.cy, -1.f, 1.f);
+                ui::SliderFloat("inversion", &pf.textp.strength, 0.f, 1.f);
+                ui::SliderFloat("text refraction", &pf.textp.warp, 0.f, 2.f);
+                // Antialiasing, not a glow -- the field only carries distance
+                // out to its spread, and the shader clamps the ramp there.
+                ui::SliderFloat("edge softness", &pf.textp.softness, 0.2f, 3.f);
+                ui::SliderFloat("stroke weight", &pf.textp.dilate, -0.02f, 0.02f,
+                                "%.4f");
+
+                ImGui::Separator();
+                // The one to bind to a fader: it is the whole emerge/dissolve
+                // timeline, and the three under it only shape what it looks
+                // like on the way through.
+                ui::SliderFloat("reveal", &pf.textp.reveal, 0.f, 1.f);
+                ui::SliderFloat("turbulence", &pf.textp.turbulence, 0.f, 1.f);
+                ui::SliderFloat("turb scale", &pf.textp.turb_scale, 0.5f, 30.f);
+                ui::SliderFloat("turb drift", &pf.textp.turb_speed, 0.f, 2.f);
+                ImGui::Separator();
+                // These rebuild the field rather than moving a uniform, which is
+                // why they sit apart from the live knobs above: dragging one
+                // re-rasterises the glyphs and re-runs the distance transform.
+                ui::SliderFloat("tracking", &pf.textp.tracking, -0.1f, 0.5f);
+                static char fontbuf[128] = {};
+                static bool font_init = false;
+                if (!font_init) {
+                    std::snprintf(fontbuf, sizeof(fontbuf), "%s",
+                                  pf.textp.font.c_str());
+                    font_init = true;
+                }
+                if (ImGui::InputText("font", fontbuf, sizeof(fontbuf))) {
+                    pf.textp.font = fontbuf;
+                }
+                ui::SliderInt("raster px", &pf.textp.raster_px, 64, 1024);
+                ImGui::TextDisabled("field %dx%d", pf.text.fieldW(), pf.text.fieldH());
+                if (pf.textp.on && pf.scene != (int)Scene::Mirror && pf.textp.warp > 0.f) {
+                    ImGui::TextDisabled("(no ripples in this scene: unwarped)");
+                }
+            }
+            ui::EndHeader();
+            ui::PopSection();               // "text"
+            DrawBankSaveUI(ui::Bank::Look);
+
+            ui::EndTab();
+
+            ui::BeginTab("mirror", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            {
+                ui::PushSection("mirror");
+                mirror::PondParams& P = pf.mirror.params();
+                // ripples
+                ui::SliderFloat("ring freq", &P.ring_freq, 0.3f, 10.0f);
+                ui::SliderFloat("ripple decay", &P.decay, 0.0f, 5.0f);
+                ui::SliderFloat("ripple speed", &P.speed, 0.0f, 6.0f);
+                ui::SliderFloat("ripple phase", &P.ripple_offset, 0.0f, 2.0f * (float)M_PI);
+                ui::SliderFloat("refraction (warp)", &P.warp, 0.0f, 1.0f);
+                ui::Checkbox("raindrops", &P.drops_on);
+                ui::BeginGroup("rain", true, P.drops_on);
+                {
+                    mirror::DropSpawnParams& S = P.spawn;
+                    if (ui::Visible()) {
+                        ImGui::Text("%d in flight, %d spawned",
+                                    (int)pf.mirror.pond().spawner().drops().size(),
+                                    pf.mirror.pond().spawner().spawnCount());
+                        if (ImGui::Button("drop one")) pf.mirror.pond().triggerDrop();
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(a hit, same as an audio onset)");
+                    }
+
+                    ui::Checkbox("falling", &S.rain_on);
+                    ui::SliderFloat("rate (drops/s)", &S.rate, 0.02f, 12.0f);
+                    ui::SliderFloat("rate jitter", &S.rate_jitter, 0.0f, 1.0f);
+                    ui::SliderFloat("size", &S.width, 0.02f, 0.6f);
+                    ui::SliderFloat("size jitter", &S.width_jitter, 0.0f, 1.0f);
+                    ui::SliderFloat("strength", &S.amp, 0.0f, 2.0f);
+                    ui::SliderFloat("strength jitter", &S.amp_jitter, 0.0f, 1.0f);
+                    ui::SliderFloat("spread jitter", &S.speed_jitter, 0.0f, 1.0f);
+                    ui::SliderFloat("area x", &S.area_x, 0.0f, 1.2f);
+                    ui::SliderFloat("area y", &S.area_y, 0.0f, 1.2f);
+                    ui::SliderFloat("area centre x", &S.bias_x, -1.5f, 1.5f);
+                    ui::SliderFloat("area centre y", &S.bias_y, -1.0f, 1.0f);
+                    ui::SliderInt("max in flight", &S.max_active, 1, 24);
+                }
+                ui::EndGroup();
+
+                ui::BeginGroup("rain from audio", true, P.drops_on);
+                if (ui::Visible()) {
+                    // The tap list comes from whatever OnsetTap instances are
+                    // live in Wwise right now; picking one is the whole setup.
+                    const auto& taps = g_pulses.taps();
+                    std::string current = g_pulses.connected()
+                        ? (g_pulses.label().empty()
+                               ? ("Tap " + std::to_string(g_pulses.tapId()))
+                               : g_pulses.label())
+                        : std::string("(not connected)");
+                    ImGui::SetNextItemWidth(200);
+                    if (ImGui::BeginCombo("tap", current.c_str())) {
+                        if (ImGui::Selectable("(not connected)", !g_pulses.connected()))
+                            g_pulses.disconnect();
+                        for (const mirror::AudioTap& t : taps) {
+                            const std::string name =
+                                (t.label.empty() ? ("Tap " + std::to_string(t.tapId))
+                                                 : t.label) +
+                                "  #" + std::to_string(t.tapId);
+                            const bool sel = g_pulses.connected() &&
+                                             g_pulses.tapId() == t.tapId;
+                            if (ImGui::Selectable(name.c_str(), sel))
+                                g_pulses.connect(t.tapId);
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (taps.empty()) {
+                        ImGui::TextDisabled("no OnsetTap instance is publishing");
+                        ImGui::TextDisabled("(add the Onset Tap effect to a bus in Wwise)");
+                    }
+
+                    if (g_pulses.connected()) {
+                        // Level against the bar it has to clear. Without both,
+                        // "nothing is firing" and "the threshold is too high"
+                        // are the same silence -- and the threshold moves with
+                        // the material, so a static number would not tell you.
+                        const float lvl = g_pulses.levelDb();
+                        ImGui::Text("%s   %.1f dB, needs a %.1f dB rise",
+                                    g_pulses.live() ? "LIVE" : "idle",
+                                    lvl, g_pulses.thresholdDb());
+                        const float norm = std::clamp((lvl + 80.f) / 80.f, 0.f, 1.f);
+                        ImGui::ProgressBar(norm, ImVec2(-1, 6), "");
+                        const double since = g_pulses.sinceLast();
+                        ImGui::Text("%.1f onsets/s", g_pulses.rate());
+                        ImGui::SameLine();
+                        if (since < 0.15)
+                            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "HIT");
+                        else
+                            ImGui::TextDisabled("last %.1fs ago", since);
+                        if (g_pulses.missed())
+                            ImGui::TextDisabled("%u events missed", g_pulses.missed());
+                    }
+                }
+                {
+                    ui::Checkbox("onsets spawn drops", &g_pulse_drops);
+                    ui::SliderFloat("onset gain", &g_pulse_gain, 0.1f, 4.0f);
+                    // How much of the drop the hit gets to decide. At 0 across
+                    // the board the audio only chooses *when*, which is a real
+                    // setting: a steady shower on the beat.
+                    ui::SliderFloat("hit -> strength", &P.spawn.hit_amp, 0.0f, 1.0f);
+                    ui::SliderFloat("hit -> size", &P.spawn.hit_width, 0.0f, 1.0f);
+                    ui::SliderFloat("hit -> position", &P.spawn.hit_pan, 0.0f, 1.0f);
+                }
+                ui::EndGroup();
+
+                ui::Checkbox("moving ripple", &P.orbit_on);
+                ui::Checkbox("soft centers (anti-alias)", &P.core_rolloff);
+                ui::BeginGate(P.core_rolloff);
+                {
+                    ImGui::SameLine(); ImGui::SetNextItemWidth(120);
+                    ui::SliderFloat("radius", &P.core_radius, 0.02f, 0.5f);
+                }
+                ui::EndGate();
+                ImGui::Separator();
+                // --- the network itself -----------------------------------
+                ui::PushSection("network");
+                ui::BeginHeader("network", /*default_open=*/false);
+                {
+                ui::SliderInt("sine layers (0 = tanh only)", &P.sine_layers,
+                                 0, 5);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "SIREN sine activations on the leading hidden layers,\n"
+                        "tanh behind them. One layer is enough: measured on a\n"
+                        "face fit, 1 sine layer scores 0.00250 against 0.00273\n"
+                        "for all-sine and 0.00562 for all-tanh.\n\n"
+                        "Changing this rebuilds the weights (sine layers are\n"
+                        "SIREN-initialised) and recompiles the kernel.");
+                }
+                ImGui::BeginDisabled(P.sine_layers == 0);
+                ui::SliderFloat("sine w0 (composition)", &P.sine_w0, 1.0f, 60.0f,
+                                   "%.1f", ImGuiSliderFlags_Logarithmic);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How many regions the field breaks into. Low (2-10)\n"
+                        "gives large open areas with detail only at the\n"
+                        "boundaries; past ~40 the frame is uniform texture with\n"
+                        "no background left.\n\n"
+                        "Pairs with 'detail' below, which sets how hard those\n"
+                        "boundaries are without changing the layout.");
+                }
+
+                ImGui::EndDisabled();
+                ImGui::Separator();
+                // weight shaping
+                ui::SliderFloat("detail (w hidden)", &P.detail, 0.5f, 10.0f);
+                ui::SliderFloat("gain tilt (front<->back)", &P.gain_tilt, -3.0f, 3.0f);
+                ui::SliderFloat("w shape (gauss<->uniform)", &P.uniform_mix, 0.0f, 1.0f);
+                ui::SliderFloat("contrast (w out)", &P.contrast, 1.0f, 12.0f);
+                if (ImGui::Button("reseed network")) pf.mirror.reseed();
+                }
+                ui::EndHeader();
+                ui::PopSection();
+
+                // --- colour & tone ----------------------------------------
+                ui::PushSection("colour");
+                ui::BeginHeader("colour & tone", /*default_open=*/false);
+                {
+                ui::Checkbox("sRGB fix", &P.srgb_fix); ImGui::SameLine();
+                if (ImGui::Button("reset color")) { P.srgb_fix = false; P.gamma = 1.0f; }
+                ui::SliderFloat("gamma (>1 darkens)", &P.gamma, 0.3f, 2.0f);
+                ui::SliderFloat("color mix (0 grey -> 1 RGB)", &P.color_mix, 0.0f, 1.0f);
+                ImGui::SameLine(); ImGui::SetNextItemWidth(90);
+                const char* greyItems[] = {"R", "G", "B"};
+                ImGui::Combo("grey ch", &P.grey_channel, greyItems, 3);
+                ui::DeclareInt("grey ch", &P.grey_channel, 0, 2);
+                ui::Checkbox("ripple amp -> color", &P.amp_drives_color);
+                ui::BeginGate(P.amp_drives_color);
+                {
+                    ImGui::SameLine(); ImGui::SetNextItemWidth(120);
+                    ui::SliderFloat("amp gain", &P.amp_gain, 0.2f, 6.0f);
+                }
+                ui::EndGate();
+                ui::Checkbox("swap R/B", &P.swap_rb);
+                ui::Checkbox("color travel (palette follows orbit)", &P.color_travel);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+
+                // --- the z latent -----------------------------------------
+                ui::PushSection("z");
+                ui::BeginHeader("z latent", /*default_open=*/false);
+                {
+                // z latent
+                ImGui::Text("z phase = %6.2f  (circular morph)", P.z);
+                ImGui::DragFloat("z", &P.z, 0.02f);
+                ui::SliderFloat("z amplitude", &P.z_amp, 0.0f, 3.0f);
+                ui::SliderFloat("z auto-rate /s", &P.z_rate, -2.0f, 2.0f);
+                ui::SliderFloat("z step size", &P.z_step, 0.01f, 1.0f);
+                if (ImGui::Button("z - step")) P.z -= P.z_step; ImGui::SameLine();
+                if (ImGui::Button("z + step")) P.z += P.z_step; ImGui::SameLine();
+                if (ImGui::Button("z = 0")) P.z = 0.0f;
+                }
+                ui::EndHeader();
+                ui::PopSection();
+
+                // --- clock & render ---------------------------------------
+                ui::PushSection("render");
+                ui::BeginHeader("clock & render", /*default_open=*/false);
+                {
+                // time
+                ui::SliderFloat("ripple time scale", &P.time_scale, 0.0f, 4.0f);
+                ui::Checkbox("pause", &P.paused);
+                ui::SliderInt("downscale", &pf.downscale, 1, 10);
+                ImGui::Text("render %d x %d -> %d x %d", pf.mirror.lowW(), pf.mirror.lowH(), pf.fbw, pf.fbh);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                // mask emergence transition
+                ui::PushSection("mask emergence (transition)");
+                ui::BeginHeader("mask emergence (transition)", /*default_open=*/false);
+                {
+                    ui::SliderFloat("transition (0 pond -> 1 mask)", &P.transition, 0.0f, 1.0f);
+                    ui::Checkbox("auto-play", &P.trans_auto); ImGui::SameLine();
+                    if (ImGui::Button("reset t")) { P.transition = 0.0f; P.trans_auto = false; }
+                    ui::SliderFloat("play rate /s", &P.trans_rate, 0.05f, 1.0f);
+                    ui::SliderFloat("relief height", &P.relief_h, 0.0f, 1.5f);
+                    ui::SliderFloat("mask width", &P.mask_ax, 0.2f, 1.0f);
+                    ui::SliderFloat("mask height", &P.mask_ay, 0.2f, 1.2f);
+                    ui::SliderFloat("light azimuth", &P.light_az, -(float)M_PI, (float)M_PI);
+                    ui::SliderFloat("light elevation", &P.light_elev, 0.1f, (float)M_PI / 2.0f);
+                    ui::SliderFloat("wet sheen (spec)", &P.spec_amt, 0.0f, 1.5f);
+                    ui::SliderFloat("sheen tightness", &P.shininess, 4.0f, 96.0f);
+                    ui::SliderFloat("background dim", &P.bg_dim, 0.0f, 1.0f);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PopSection();          // "mirror"
+                DrawBankSaveUI(ui::Bank::Mirror);
+            }
+            ui::EndTab();
+
+            ui::BeginTab("roots", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            {
+                ui::PushSection("roots");
+                MetalRootRenderer& R = pf.roots.renderer();
+                ImGui::Text("t=%5.1fs", pf.roots.clock());   // fps is in the title
+                ImGui::Text("render %d x %d -> %d x %d  (overdraw-bound)",
+                            pf.roots.width(), pf.roots.height(), pf.fbw, pf.fbh);
+                ImGui::Separator();
+
+                // --- growth ------------------------------------------------
+                ui::PushSection("growth");
+                ui::BeginHeader("growth", /*default_open=*/true);
+                {
+                    rootsim::SimParams& SP = pf.roots.simParams();
+                    ImGui::Text("%s", pf.roots.simActive()
+                                    ? (pf.roots.simDone() ? "grown" : "growing")
+                                    : "stand-in (no CPlantBox parameters)");
+
+                    // The species is saved by name, not by its position in the
+                    // combo: the list is a hand-written table that will grow,
+                    // and an index would repoint every roots preset the day a
+                    // row is inserted above the one they meant.
+                    ui::DeclareString("species", &SP.speciesXml);
+
+                    const auto& sp = RootScene::species();
+                    int si = pf.roots.speciesIndex();
+                    ImGui::PushItemWidth(-90);
+                    if (ImGui::BeginCombo("species",
+                                          si >= 0 ? sp[size_t(si)].first.c_str()
+                                                  : SP.speciesXml.c_str())) {
+                        for (int i = 0; i < (int)sp.size(); ++i) {
+                            const bool selected = (i == si);
+                            if (ImGui::Selectable(sp[size_t(i)].first.c_str(), selected))
+                                pf.roots.setSpeciesIndex(i);
+                            if (selected) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::PopItemWidth();
+
+                    // --- host and pattern -----------------------------
+                    // Two axes, not one: the host is what the roots crawl on,
+                    // the pattern is where the masks sit in its coordinates.
+                    // Any pattern composes with any host -- a helix is a curve
+                    // on a cylinder, not a topology of its own.
+                    ui::DeclareString("host", &SP.host);
+                    ui::DeclareString("pattern", &SP.pattern);
+                    {
+                        static const char* kHosts[] = {"cone", "cylinder", "sphere",
+                                                       "torus", "lobes"};
+                        static const char* kPatterns[] = {"phyllotaxis", "helix",
+                                                          "rosette", "feature"};
+                        ImGui::PushItemWidth(-90);
+                        if (ui::Visible() && ImGui::BeginCombo("host", SP.host.c_str())) {
+                            for (const char* h : kHosts)
+                                if (ImGui::Selectable(h, SP.host == h)) {
+                                    SP.host = h; pf.roots.regrow();
+                                }
+                            ImGui::EndCombo();
+                        }
+                        // Lobes have no surface, so they have no (u, v) for a
+                        // pattern to place into -- the grouping is the layout.
+                        ui::BeginGate(SP.host != "lobes");
+                        if (ui::Visible() && ImGui::BeginCombo("pattern", SP.pattern.c_str())) {
+                            for (const char* q : kPatterns)
+                                if (ImGui::Selectable(q, SP.pattern == q)) {
+                                    SP.pattern = q; pf.roots.regrow();
+                                }
+                            ImGui::EndCombo();
+                        }
+                        ui::EndGate();
+                        ImGui::PopItemWidth();
+                    }
+
+                    ImGui::PushItemWidth(110);
+                    ui::BeginGate(SP.pattern == "helix" && SP.host != "lobes");
+                    ui::SliderFloat("helix turns", &SP.helixTurns, 0.25f, 6.f, "%.2f");
+                    ui::EndGate();
+                    ui::BeginGate(SP.host == "lobes" || SP.pattern == "rosette");
+                    ui::SliderInt("group size", &SP.groupSize, 1, 9);
+                    ui::EndGate();
+                    ui::BeginGate(SP.pattern == "rosette" && SP.host != "lobes");
+                    ImGui::SameLine();
+                    ui::SliderFloat("group spread", &SP.groupSpread, 0.1f, 1.2f);
+                    ui::EndGate();
+                    ui::BeginGate(SP.pattern == "feature" && SP.host != "lobes");
+                    ui::SliderInt("feature clusters", &SP.featureClusters, 1, 6);
+                    ui::EndGate();
+                    ui::BeginGate(SP.host == "torus" || SP.host == "lobes");
+                    ui::SliderFloat("tube radius", &SP.tubeRadius, 2.f, 20.f, "%.1f cm");
+                    ui::EndGate();
+                    ImGui::PopItemWidth();
+
+                    ui::Checkbox("tree relay", &SP.treeRelay);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Each hop leaves from the revealed mask NEAREST the\n"
+                            "next one, rather than from the one just left: the\n"
+                            "system branches instead of threading.\n\n"
+                            "Changes nothing on a spiral, where the nearest mask\n"
+                            "already is the previous one. It is for the clustered\n"
+                            "layouts -- and it currently costs reach there, since\n"
+                            "the hop starts inside a crowded neighbourhood it has\n"
+                            "to escape.");
+                    }
+                    ImGui::Separator();
+
+                    ImGui::PushItemWidth(110);
+                    ui::SliderInt("masks", &SP.N, 1, 24);
+                    ImGui::SameLine();
+                    ui::SliderFloat("cone radius", &SP.R0, 6.f, 24.f, "%.1f cm");
+                    ui::SliderFloat("cone height", &SP.Hh, 24.f, 96.f, "%.1f cm");
+                    ImGui::SameLine();
+                    ui::SliderFloat("taper", &SP.taperPower, 0.4f, 2.5f);
+                    ui::SliderFloat("spiral x golden", &SP.angleStepGoldenMult,
+                                       0.2f, 2.0f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("jitter", &SP.sigma, 0.f, 1.2f);
+                    ui::SliderFloat("travel pull", &SP.weight, 0.f, 1.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("pull reach", &SP.travelPullReach, 0.4f, 3.f);
+                    ui::SliderFloat("lateral", &SP.lateralWeight, 0.f, 1.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("dwell", &SP.dwellWeight, 0.f, 1.f);
+                    ui::SliderFloat("dwell days", &SP.dwellDays, 2.f, 60.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("hop days", &SP.maxHopDays, 10.f, 160.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Ceiling, not the budget. How long a hop's travel\n"
+                            "actually gets is worked out from how far it has to\n"
+                            "go and how fast this species elongates -- this only\n"
+                            "stops a hop that is never going to arrive from\n"
+                            "growing the whole system into a ball.");
+                    }
+                    ui::SliderFloat("travel slack", &SP.travelSlack, 1.f, 4.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How much longer the root's real path is than the\n"
+                            "straight line to the mask. It wanders -- the tropism\n"
+                            "is a random walk with a pull -- and it steers around\n"
+                            "the masks already revealed, so a budget that assumes\n"
+                            "a straight line runs out short of every target.\n\n"
+                            "Too low and late masks get revealed with the root\n"
+                            "still halfway there; too high only costs days on a\n"
+                            "hop that was never going to make it.");
+                    }
+                    ImGui::PopItemWidth();
+
+                    ui::Checkbox("even nests", &SP.evenNests);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The same amount of root at every mask.\n\n"
+                            "The dwell is already the same everywhere, but the\n"
+                            "nest is not: laterals grow during the travel too,\n"
+                            "and travel gets longer as the cone widens -- so the\n"
+                            "last mask ends up with about twice the root of the\n"
+                            "first. This pads every hop out to one age, so the\n"
+                            "early masks wait instead of the late ones being\n"
+                            "fuller.\n\n"
+                            "It costs days, and the days are what make the system\n"
+                            "bushy: turning it on wants a shorter dwell to hold\n"
+                            "the same density.");
+                    }
+                    ui::Checkbox("crawl the cone surface", &SP.coneSurfaceTravel);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Confine the travelling root to a thin shell around\n"
+                            "the cone the masks sit on, so it crawls over the\n"
+                            "surface between them instead of cutting through the\n"
+                            "interior.\n\n"
+                            "Travel only: the dwell wrapping stays free, or the\n"
+                            "nests around each mask would be flattened onto the\n"
+                            "surface instead of bulging into 3D.");
+                    }
+                    ui::BeginGate(SP.coneSurfaceTravel);
+                    if (ui::Visible()) {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                    }
+                    ui::SliderFloat("shell", &SP.coneShellThickness, 1.f, 20.f,
+                                       "%.1f cm");
+                    ui::EndGate();
+
+                    ImGui::SetNextItemWidth(110);
+                    ui::SliderFloat("days / step", &SP.growthDt, 0.05f, 3.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Read live, so it takes effect mid-grow. Not a\n"
+                            "structural knob -- it does not need a regrow.");
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(90);
+                    ui::SliderInt("steps/frame", &pf.roots.simStepsPerFrame, 1, 30);
+
+                    if (ImGui::Button("regrow")) pf.roots.regrow();
+                    ImGui::SameLine();
+                    if (ImGui::Button("reseed")) pf.roots.reseed((uint32_t)(++pf.rootSeed));
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "A new random seed for the same parameters. Reseeds\n"
+                            "the growth itself -- it used to drop a synthetic\n"
+                            "stand-in structure over a running grow, which the\n"
+                            "next frame then overwrote.");
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("seed %u", SP.seed);
+
+                    // --- the rest of SimParams ----------------------------
+                    //
+                    // These had no control at all: they existed only in the
+                    // .root file, which is what made a second preset system
+                    // necessary in the first place. Declaring them here is what
+                    // lets that system go away -- a roots preset is now the
+                    // whole of SimParams, and there is one file per root look
+                    // instead of two that can disagree.
+                    //
+                    // Folded away by default because they are structure, not
+                    // performance: changing one means a regrow.
+                    ui::BeginHeader("structure (needs a regrow)");
+                    {
+                        ImGui::PushItemWidth(110);
+                        ui::SliderFloat("mask start", &SP.startFrac, 0.f, 1.f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("mask end", &SP.endFrac, 0.f, 1.f);
+                        ui::SliderFloat("spiral drift", &SP.distStepFrac, -0.5f, 0.5f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("travel trials", &SP.mainTravelTrials, 1.f, 60.f,
+                                        "%.0f");
+                        ui::SliderFloat("dwell lateral", &SP.dwellLateralWeight, 0.f, 1.f);
+                        ImGui::SameLine();
+                        ui::SliderFloat("reach x", &SP.reachMult, 0.4f, 4.f);
+                        ui::SliderFloat("view cylinder", &SP.viewCylLen, 1.f, 30.f,
+                                        "%.1f cm");
+                        ImGui::SameLine();
+                        ui::SliderFloat("target lift", &SP.targetLift, -10.f, 10.f,
+                                        "%.2f cm");
+                        ui::SliderFloat("spawn behind", &SP.spawnBehind, -10.f, 10.f,
+                                        "%.2f cm");
+                        ImGui::PopItemWidth();
+
+                        // The seed is part of the look -- a preset that came
+                        // back with a different one would not be the same root
+                        // system -- so it is saved, through an int because that
+                        // is the widest kind the registry has.
+                        int seed_i = (int)SP.seed;
+                        ui::DeclareInt("seed", &seed_i, 0, 1 << 30);
+                        SP.seed = (unsigned)seed_i;
+                    }
+                    ui::EndHeader();
+                }
+                ui::EndHeader();
+                ui::PopSection();
+
+                // --- presets -----------------------------------------------
+                // The root scene's presets are the `roots` bank now, saved
+                // from the settings section at the bottom of the panel with
+                // everything else. There used to be a second preset system
+                // here, writing .root files that held the SimParams fields the
+                // panel did not expose -- so "the root preset" and "the root
+                // settings" were two different things that could disagree, and
+                // only one of them was ever in the file you loaded.
+
+                // --- camera ------------------------------------------------
+                ui::PushSection("camera");
+                ui::BeginHeader("camera", /*default_open=*/true);
+                {
+                    ui::Checkbox("authored camera (rootmovie beats)", &g_root_authored_camera);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Play the --rootmovie pull-back live: face alone,\n"
+                            "masks deal out, follow the tip, then meander among\n"
+                            "the neighbours for as long as the phase runs. Reseeds\n"
+                            "on every entry into the roots phase.\n\n"
+                            "The controls below are inert while this is on.");
+                    }
+                    ui::BeginGate(!g_root_authored_camera);
+                    ui::Checkbox("frame automatically", &pf.roots.autoFrame);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Derive the target and distance from the scene's own\n"
+                            "bounds. The constants this replaced were tuned to\n"
+                            "one cone size and pointed at the wrong part of any\n"
+                            "other.");
+                    }
+                    ui::BeginGate(pf.roots.autoFrame);
+                    {
+                        const int nm = pf.roots.maskCount();
+                        std::string label = pf.roots.focusMask >= 0 && pf.roots.focusMask < nm
+                                                ? ("mask " + std::to_string(pf.roots.focusMask))
+                                                : std::string("whole scene");
+                        ImGui::PushItemWidth(-90);
+                        if (ImGui::BeginCombo("focus", label.c_str())) {
+                            if (ImGui::Selectable("whole scene", pf.roots.focusMask < 0))
+                                pf.roots.focusMask = -1;
+                            for (int i = 0; i < nm; ++i) {
+                                const std::string it = "mask " + std::to_string(i);
+                                if (ImGui::Selectable(it.c_str(), pf.roots.focusMask == i))
+                                    pf.roots.focusMask = i;
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopItemWidth();
+                        ImGui::SetNextItemWidth(110);
+                        ui::SliderFloat("zoom", &pf.roots.zoom, 0.15f, 5.f, "%.2fx");
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("reset zoom")) pf.roots.zoom = 1.f;
+
+                        // The middle shot: one cluster rather than one face or
+                        // the whole piece. -1 is off, so the focus combo above
+                        // keeps its meaning.
+                        ImGui::SetNextItemWidth(110);
+                        ui::SliderInt("focus group", &pf.roots.focusGroup, -1, 7);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                        ui::SliderInt("group of", &pf.roots.focusGroupSize, 1, 9);
+
+                        ui::Checkbox("frame on masks", &pf.roots.frameOnMasks);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Frame on the masks rather than on every root\n"
+                                "node.\n\n"
+                                "The roots trail: a couple of laterals hanging a\n"
+                                "long way below the last nest drag the bounding\n"
+                                "box down, and the piece shrinks into the middle\n"
+                                "of the frame to accommodate two threads nobody\n"
+                                "is looking at.");
+                        }
+                        ui::BeginGate(pf.roots.frameOnMasks);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90);
+                        ui::SliderFloat("margin", &pf.roots.frameMargin, 0.f, 1.5f, "%.2f");
+                        ui::EndGate();
+                    }
+                    ui::EndGate();
+                    ui::Checkbox("auto-orbit", &pf.roots.autoOrbit); ImGui::SameLine();
+                    ImGui::SetNextItemWidth(120);
+                    ui::SliderFloat("orbit rate", &pf.roots.orbitRate, -1.0f, 1.0f);
+                    ImGui::BeginDisabled(pf.roots.autoFrame);
+                    ui::SliderFloat("radius", &pf.roots.radius, 5.0f, 120.0f);
+                    ImGui::EndDisabled();
+                    ui::SliderFloat("azimuth", &pf.roots.azimuth, -(float)M_PI, (float)M_PI);
+                    ui::SliderFloat("elevation", &pf.roots.elevation, -1.5f, 1.5f);
+                    ui::SliderFloat("fov", &pf.roots.fov, 0.2f, 1.2f);
+                    ui::EndGate();
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ImGui::Separator();
+                ImGui::Separator();
+                // shading
+                ui::PushSection("material");
+                const char* modes[] = {"Phong", "PBR", "Invert (approx)"};
+                int sm = (int)R.shaderMode;
+                if (ImGui::Combo("shader", &sm, modes, 3)) R.shaderMode = (MetalRootRenderer::ShaderMode)sm;
+                ui::ColorEdit3("base color", R.mat.baseColor);
+                ui::ColorEdit3("base color 2", R.mat.baseColor2);
+                ui::SliderFloat("color noise", &R.mat.colorNoiseStrength, 0.0f, 1.0f);
+                ui::SliderFloat("ambient", &R.mat.ambient, 0.0f, 0.5f);
+                ui::SliderFloat("diffuse", &R.mat.diffuse, 0.0f, 1.5f);
+                ui::SliderFloat("shininess", &R.mat.shininess, 4.0f, 300.0f);
+                ui::BeginGate(sm == 1);
+                {
+                    ui::SliderFloat("metallic", &R.pbr.metallic, 0.0f, 1.0f);
+                    ui::SliderFloat("roughness", &R.pbr.roughness, 0.05f, 1.0f);
+                }
+                ui::EndGate();
+                ui::SliderFloat("radius scale", &R.radiusScale, 0.2f, 4.0f);
+                ui::PopSection();           // "material"
+                ImGui::Separator();
+                // fog
+                ui::PushSection("fog & atmosphere");
+                ui::BeginHeader("fog & atmosphere", /*default_open=*/false);
+                {
+                    ui::Checkbox("fog on", &R.fog.enabled);
+                    ui::ColorEdit3("fog color", R.fog.color);
+                    // Visibility itself is per-phase now (show/<phase>/fog
+                    // intensity, with beat 1's fade-in on top) -- see the
+                    // Roots render branch, which writes R.fog.visibility
+                    // every frame. Everything else about the look stays one
+                    // global Roots-preset value.
+                    ImGui::TextDisabled("visibility: set per phase, in the show tab");
+                    ui::SliderFloat("height scale", &R.fog.heightScale, 2.0f, 120.0f);
+                    ui::Checkbox("height ref follows target", &R.fog.heightRefAuto);
+                    if (!R.fog.heightRefAuto)
+                        ui::SliderFloat("height ref (Y)", &R.fog.heightRef, -20.0f, 60.0f);
+                    ImGui::Separator();
+                    ui::Checkbox("clear radius follows camera", &R.fog.startAuto);
+                    if (R.fog.startAuto)
+                        ui::SliderFloat("clear radius x orbit", &R.fog.startFrac, 0.0f, 1.5f);
+                    else
+                        ui::SliderFloat("clear radius", &R.fog.startDist, 0.0f, 200.0f);
+                    ImGui::TextDisabled("marching from %.1f u", R.fog.startDist);
+                    ImGui::Separator();
+                    ui::SliderFloat("fog noise", &R.fog.noiseStrength, 0.0f, 1.0f);
+                    ui::SliderFloat("noise contrast", &R.fog.noiseContrast, 0.0f, 3.0f);
+                    ui::SliderFloat("noise scale", &R.fog.noiseScale, 0.02f, 2.5f);
+                    ImGui::TextDisabled("feature size ~%.1f world u",
+                                        8.0f / std::max(R.fog.noiseScale, 1e-3f));
+                    ui::SliderFloat("drift speed", &R.fog.driftSpeed, 0.0f, 6.0f);
+                    ui::SliderInt("march steps", &R.fog.steps, 4, 32);
+                    ImGui::Separator();
+                    ui::SliderFloat("scatter (medium albedo)", &R.fog.scatter, 0.0f, 1.5f);
+                    ui::SliderFloat("anisotropy (fwd <-> back)", &R.fog.anisotropy, -0.9f, 0.9f);
+                    ui::SliderFloat("wisp glow", &R.wispGlowStrength, 0.0f, 3.0f);
+                    ui::SliderInt("wisps", &R.wispCount, 0, 8);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                // pulses
+                ui::PushSection("travelling pulses");
+                ui::BeginHeader("travelling pulses", /*default_open=*/false);
+                {
+                    ui::Checkbox("pulses on", &R.pulse.enabled);
+                    ui::SliderFloat("pulse speed", &R.pulse.speed, 0.0f, 40.0f);
+                    ui::SliderFloat("pulse spacing", &R.pulse.spacing, 4.0f, 60.0f);
+                    ui::SliderFloat("pulse width", &R.pulse.width, 0.5f, 12.0f);
+                    ui::SliderFloat("pulse intensity", &R.pulse.intensity, 0.0f, 4.0f);
+                    ui::ColorEdit3("pulse color", R.pulse.color);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("environment & material");
+                ui::BeginHeader("environment & material", /*default_open=*/false);
+                {
+                    // The tranche buttons are a coarse quality dial and the A/B
+                    // control: each one is a whole group of the settings below,
+                    // so a look can be compared against the previous stage
+                    // without hunting for which sliders belonged to it.
+                    ImGui::TextUnformatted("quality tranche");
+                    for (int t = 0; t <= 3; ++t) {
+                        if (t) ImGui::SameLine();
+                        char lbl[8]; snprintf(lbl, sizeof lbl, "%d", t);
+                        if (ImGui::RadioButton(lbl, R.tranche() == t)) {
+                            R.setTranche(t);
+                            pf.roots.rebuildFace();   // smoothNormals is baked into the mesh
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(0 baseline, 3 full)");
+                    ImGui::TextUnformatted("key light");
+                    ui::ColorEdit3("key color", R.env.keyColor);
+                    ui::SliderFloat("key intensity", &R.env.keyIntensity, 0.0f, 4.0f);
+                    ui::SliderFloat("key direction X", &pf.roots.lightDir[0], -1.0f, 1.0f);
+                    ui::SliderFloat("key direction Y", &pf.roots.lightDir[1], -1.0f, 1.0f);
+                    ui::SliderFloat("key direction Z", &pf.roots.lightDir[2], -1.0f, 1.0f);
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("ambient (hemisphere)");
+                    ui::ColorEdit3("background", R.env.background);
+                    ui::ColorEdit3("sky color", R.env.skyColor);
+                    ui::ColorEdit3("ground color", R.env.groundColor);
+                    ui::SliderFloat("hemisphere", &R.env.hemiStrength, 0.0f, 3.0f);
+                    ui::SliderFloat("env specular", &R.env.envSpec, 0.0f, 2.0f);
+                    ui::SliderFloat("rim", &R.env.rimStrength, 0.0f, 1.0f);
+                    ImGui::Separator();
+                    ui::SliderFloat("sss wrap", &R.env.sssWrap, 0.0f, 1.5f);
+                    ui::SliderFloat("sss transmit", &R.env.sssTrans, 0.0f, 2.0f);
+                    ui::SliderFloat("sss power", &R.env.sssPower, 1.0f, 16.0f);
+                    ui::ColorEdit3("sss tint", R.env.sssTint);
+                    ImGui::Separator();
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("root surface (fibre detail)");
+                    ui::SliderFloat("fibre strength", &R.detail.strength, 0.0f, 1.5f);
+                    ui::SliderFloat("fibre scale", &R.detail.scale, 2.0f, 40.0f);
+                    ui::SliderFloat("fibre stretch", &R.detail.stretch, 1.0f, 20.0f);
+                    ui::SliderFloat("fibre break-up", &R.detail.rough, 0.0f, 1.0f);
+                    ui::SliderFloat("per-root tint", &R.detail.tint, 0.0f, 0.5f);
+                    ImGui::Separator();
+                    ui::Checkbox("ambient occlusion", &R.ao.enabled);
+                    ui::SliderFloat("AO radius", &R.ao.radius, 0.2f, 6.0f);
+                    ui::SliderFloat("AO intensity", &R.ao.intensity, 0.0f, 4.0f);
+                    ui::SliderInt("AO samples", &R.ao.samples, 4, 24);
+                    ui::SliderInt("AO downscale", &R.ao.downscale, 1, 4);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("post");
+                ui::BeginHeader("post", /*default_open=*/false);
+                {
+                    ui::Checkbox("post chain", &R.post.enabled);
+                    ui::SliderInt("supersample", &R.post.ssaa, 1, 3);
+                    ImGui::TextDisabled("scene renders at %dx%d", R.width() * R.post.ssaa,
+                                        R.height() * R.post.ssaa);
+                    ui::Checkbox("filmic tonemap", &R.post.tonemap);
+                    ui::SliderFloat("exposure", &R.post.exposure, 0.1f, 4.0f);
+                    ImGui::Separator();
+                    ui::Checkbox("bloom", &R.post.bloom);
+                    ui::SliderFloat("bloom threshold", &R.post.bloomThreshold, 0.2f, 4.0f);
+                    ui::SliderFloat("bloom intensity", &R.post.bloomIntensity, 0.0f, 1.0f);
+                    ui::SliderFloat("bloom radius", &R.post.bloomRadius, 0.5f, 3.0f);
+                    ImGui::Separator();
+                    ui::Checkbox("depth of field", &R.post.dof);
+                    ui::SliderFloat("DoF focus (0=auto)", &R.post.dofFocus, 0.0f, 120.0f);
+                    ui::SliderFloat("DoF range", &R.post.dofRange, 5.0f, 150.0f);
+                    ui::SliderFloat("DoF strength", &R.post.dofStrength, 0.0f, 1.0f);
+                    ImGui::Separator();
+                    ui::SliderFloat("vignette", &R.post.vignette, 0.0f, 1.0f);
+                    ui::SliderFloat("fog dither", &R.post.fogDither, 0.0f, 1.0f);
+                    ui::Checkbox("output dither", &R.post.dither);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("lens & film");
+                ui::BeginHeader("lens & film", /*default_open=*/false);
+                {
+                    ImGui::TextUnformatted("lens");
+                    if (ImGui::Button("wide angle")) pf.roots.setWideAngle(true);
+                    ImGui::SameLine();
+                    if (ImGui::Button("normal")) pf.roots.setWideAngle(false);
+                    ui::Checkbox("set FOV by focal length", &pf.roots.useFocal);
+                    ui::BeginGate(pf.roots.useFocal);
+                    {
+                        ui::SliderFloat("focal length (mm)", &pf.roots.focalMM, 8.0f, 135.0f);
+                        ImGui::TextDisabled("35mm equiv · %.0f deg vertical FOV",
+                                            pf.roots.effectiveFov() * 2.0f * 57.2957795f);
+                    }
+                    ui::EndGate();
+                    ui::BeginGate(!(pf.roots.useFocal));
+                    {
+                        ui::SliderFloat("fov (rad, half-angle)", &pf.roots.fov, 0.15f, 1.2f);
+                    }
+                    ui::EndGate();
+                    ui::SliderFloat("barrel <-> pincushion", &R.post.distortK1, -0.4f, 0.4f);
+                    ui::SliderFloat("distortion (corners)", &R.post.distortK2, -0.2f, 0.2f);
+                    ui::SliderFloat("distortion re-crop", &R.post.distortZoom, 0.6f, 1.2f);
+                    ImGui::Separator();
+                    ui::SliderFloat("chromatic aberration", &R.post.caStrength, 0.0f, 8.0f);
+                    ImGui::TextDisabled("px of channel separation at the corner");
+                    ui::SliderFloat("anamorphic streak", &R.post.streak, 0.0f, 1.0f);
+                    ui::SliderFloat("streak length", &R.post.streakLength, 2.0f, 60.0f);
+                    ui::ColorEdit3("streak tint", R.post.streakTint);
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("film");
+                    ui::SliderFloat("halation", &R.post.halation, 0.0f, 1.0f);
+                    ui::ColorEdit3("halation tint", R.post.halationTint);
+                    ui::SliderInt("halation spread (mip)", &R.post.halationMip, 0, 4);
+                    ImGui::Separator();
+                    ui::SliderFloat("grain", &R.post.grain, 0.0f, 0.12f);
+                    ui::SliderFloat("grain size (px)", &R.post.grainSize, 1.0f, 6.0f);
+                    ui::SliderFloat("grain chroma", &R.post.grainChroma, 0.0f, 1.0f);
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("print grade");
+                    ui::SliderFloat("contrast", &R.post.contrast, 0.5f, 2.0f);
+                    ui::SliderFloat("saturation", &R.post.saturation, 0.0f, 2.0f);
+                    ui::SliderFloat("split strength", &R.post.splitStrength, 0.0f, 1.0f);
+                    ui::SliderFloat("split balance (-1 off)", &R.post.toneBalance, -1.0f, 1.0f);
+                    ui::ColorEdit3("shadow tint", R.post.shadowTint);
+                    ui::ColorEdit3("highlight tint", R.post.highlightTint);
+                    ui::ColorEdit3("lift", R.post.lift);
+                    ui::ColorEdit3("gamma", R.post.gammaC);
+                    ui::ColorEdit3("gain", R.post.gain);
+                    if (ImGui::Button("reset grade")) {
+                        R.post.contrast = 1.f; R.post.saturation = 1.f;
+                        for (int i = 0; i < 3; ++i) {
+                            R.post.lift[i] = 0.f; R.post.gammaC[i] = 1.f; R.post.gain[i] = 1.f;
+                        }
+                    }
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("face masks");
+                ui::BeginHeader("face masks", /*default_open=*/false);
+                {
+                    if (ui::Checkbox("show faces", &pf.roots.showFace)) pf.roots.rebuildFace();
+                    if (ui::SliderFloat("face scale", &pf.roots.faceScale, 0.3f, 1.5f))
+                        pf.roots.rebuildFace();
+                    if (ui::SliderFloat("face recess", &pf.roots.faceRecess, -2.0f, 1.5f))
+                        pf.roots.rebuildFace();
+                    ImGui::TextDisabled("cavity half-depths back along the normal;\n"
+                                        "negative stands the face proud of the nest");
+                    ui::SliderFloat("face light", &R.face.lightIntensity, 0.0f, 8.0f);
+                    ui::SliderFloat("face falloff", &R.face.lightFalloff, 0.001f, 0.1f);
+                    ui::SliderFloat("spot outer angle", &R.face.spotOuterDeg, 5.0f, 90.0f);
+                    ui::SliderFloat("spot inner angle", &R.face.spotInnerDeg, 1.0f, 89.0f);
+                    ImGui::TextDisabled("90 outer = no cone (bare point light)");
+                    ui::SliderFloat("face spec", &R.face.specStrength, 0.0f, 3.0f);
+                    ui::ColorEdit3("vein color", R.face.veinColor);
+                    ui::SliderFloat("vein scale", &R.face.veinScale, 0.1f, 2.0f);
+                    ui::SliderFloat("vein strength", &R.face.veinStrength, 0.0f, 1.0f);
+                    ui::SliderFloat("mask roughness", &R.face.roughness, 0.04f, 1.0f);
+                    ui::SliderFloat("mask relief", &R.face.reliefStrength, 0.0f, 1.5f);
+                    ui::SliderFloat("relief scale", &R.face.reliefScale, 1.0f, 30.0f);
+                    if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
+                        pf.roots.rebuildFace();
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("cached field: LOD & culling");
+                ui::BeginHeader("cached field: LOD & culling", /*default_open=*/false);
+                {
+                    ui::SliderInt("grid NxN", &pf.fieldGrid, 2, 20);
+                    if (ImGui::Button("tile field")) pf.roots.buildField(pf.fieldGrid, 30.0f);
+                    ImGui::SameLine();
+                    if (ImGui::Button("clear field")) { R.clearInstances(); pf.roots.regrow(); }
+                    ui::Checkbox("frustum cull", &R.cullInstances); ImGui::SameLine();
+                    ui::Checkbox("sub-pixel cull", &R.subpixelCull);
+                    ui::SliderFloat("cull below px", &R.instanceCullPx, 0.5f, 20.0f);
+                    ui::SliderFloat("LOD bias (>1 coarser)", &R.lodBias, 0.1f, 4.0f);
+                    ImGui::Text("instances %d   visible %d   culled %d",
+                                R.instanceCount(), R.lastVisibleInstances, R.lastCulledInstances);
+                    ImGui::Text("capsules drawn: %ld", R.lastDrawnSegments);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("overlays");
+                ui::BeginHeader("overlays", /*default_open=*/false);
+                {
+                    ui::Checkbox("axes", &R.overlay.showAxes); ImGui::SameLine();
+                    ui::Checkbox("grid", &R.overlay.showGrid);
+                    ui::SliderFloat("grid spacing", &R.overlay.gridSpacing, 1.0f, 20.0f);
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PopSection();          // "roots"
+                DrawBankSaveUI(ui::Bank::Roots);
+            }
+            ui::EndTab();
+
+            ui::BeginTab("midi", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            // --- midi ------------------------------------------------------
+            //
+            // Near the end on purpose. It is the page that is set up once and
+            // then left alone, and putting it first would push the controls it
+            // binds one tab further away every session.
+            {
+                ImGui::Text("MIDI");
+                ImGui::SameLine();
+                if (g_midi.isOpen()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "%s",
+                                       g_midi.deviceInfo().c_str());
+                } else {
+                    ImGui::TextDisabled("closed");
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("| %llu msgs",
+                                    (unsigned long long)g_midi.received());
+
+                if (ImGui::Button(g_midi.isOpen() ? "close MIDI" : "open MIDI")) {
+                    if (g_midi.isOpen()) {
+                        g_midi.close();
+                    } else {
+                        std::string merr;
+                        if (!g_midi.open(merr)) g_midi_err = merr;
+                        else g_midi_err.clear();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("rescan devices")) g_midi.rescan();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%d bound", ui::BindingCount());
+                if (!g_midi_err.empty())
+                    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "%s",
+                                       g_midi_err.c_str());
+
+                if (!ui::LearnTarget().empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                       "learning: %s -- move a control",
+                                       ui::LearnTarget().c_str());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("cancel")) ui::SetLearnTarget("");
+                } else {
+                    ImGui::TextDisabled("right-click any slider to bind it");
+                }
+
+                // The last few messages, so a controller that is sending
+                // something other than what you expect can be seen doing it --
+                // "nothing is bound" and "nothing is arriving" look identical
+                // otherwise.
+                if (ImGui::TreeNode("incoming")) {
+                    const auto& r = ui::RecentMessages();
+                    if (r.empty()) ImGui::TextDisabled("(nothing yet)");
+                    for (const auto& m : r)
+                        ImGui::TextDisabled("ch %2d  cc %3d  %3d", m.channel + 1,
+                                            m.cc, m.value);
+                    ImGui::TreePop();
+                }
+                if (ImGui::TreeNode("bindings")) {
+                    struct Row { std::string path; int ch, cc; };
+                    static std::vector<Row> rows;
+                    rows.clear();
+                    ui::ForEachBinding(&rows, [](void* u, const char* p, int ch, int cc) {
+                        static_cast<std::vector<Row>*>(u)->push_back({p, ch, cc});
+                    });
+                    if (rows.empty()) ImGui::TextDisabled("(none)");
+                    for (const Row& r : rows) {
+                        ImGui::PushID(r.path.c_str());
+                        if (ImGui::SmallButton("x")) ui::ClearBinding(r.path);
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("ch%d cc%-3d  %s", r.ch + 1, r.cc,
+                                            r.path.c_str());
+                        ImGui::PopID();
+                    }
+                    if (!rows.empty() && ImGui::SmallButton("clear all"))
+                        ui::ClearAllBindings();
+                    ImGui::TreePop();
+                }
+
+            }
+            ui::EndTab();
+
+            // --- save --------------------------------------------------------
+            //
+            // Its own tab, not a footer under the MIDI setup. Saving is the one
+            // thing here done *during* a session rather than once before it, and
+            // having to scroll past the device list to reach it every time was
+            // the reason presets went unsaved.
+            ui::BeginTab("settings", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
+            {
+                // Per-bank save/load lives on the tab that edits that bank --
+                // DrawBankSaveUI(...) at the bottom of show/machine/fit/debug/
+                // look/mirror/roots. What is left here is cross-cutting: it does
+                // not belong to any one bank.
+                ImGui::Text("%d params declared", ui::DeclaredCount());
+
+                static bool show_retired = ui::ShowRetired();
+                if (ImGui::Checkbox("show retired controls", &show_retired))
+                    ui::SetShowRetired(show_retired);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Retired controls are still loaded and still saved --\n"
+                        "they are only hidden. Nothing in a preset breaks.");
+                // --- what nobody has classified ---------------------------
+                // Loud on purpose. A parameter in no bank is saved by nothing
+                // that anyone loads, which looks exactly like a control that
+                // does not work.
+                ImGui::Separator();
+                const auto& unassigned = ui::UnassignedParams();
+                if (!unassigned.empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f),
+                                       "%zu parameter(s) in no bank",
+                                       unassigned.size());
+                    if (ImGui::IsItemHovered()) {
+                        std::string t = "Add a rule to kBankRules in ui_params.cpp:\n\n";
+                        for (size_t i = 0; i < unassigned.size() && i < 30; ++i)
+                            t += unassigned[i] + "\n";
+                        ImGui::SetTooltip("%s", t.c_str());
+                    }
+                }
+                if (!ui::UnclaimedKeys().empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                       "%zu key(s) no control claimed",
+                                       ui::UnclaimedKeys().size());
+                    if (ImGui::IsItemHovered()) {
+                        std::string t;
+                        for (const std::string& k : ui::UnclaimedKeys()) t += k + "\n";
+                        ImGui::SetTooltip("%s", t.c_str());
+                    }
+                }
+
+                // The master document, written from the registry that is live
+                // in this frame. Since declaring no longer depends on what is
+                // open, one frame is the whole app -- which is what makes a
+                // generated document worth having over a written one.
+                static std::string doc_msg;
+                if (ImGui::Button("write SETTINGS.md")) {
+                    const std::string p =
+                        std::string(MIRROR_APP_SRC_DIR) + "/../SETTINGS.md";
+                    std::string e;
+                    doc_msg = ui::WriteSettingsDoc(p, e) ? ("wrote " + p) : e;
+                }
+                if (!doc_msg.empty()) ImGui::TextDisabled("%s", doc_msg.c_str());
+
+                // The whole registry in one file, banks and all. Kept for the
+                // round-trip test and for taking a complete snapshot of a
+                // machine mid-session; not the thing to load on a show night.
+                if (ImGui::TreeNode("whole-registry dump")) {
+                    static std::vector<std::string> sets = ui::ListPresets();
+                    static char set_name[128] = "default";
+                    static std::string set_msg;
+                    ImGui::PushItemWidth(-90);
+                    if (ImGui::BeginCombo("load##set", "choose...")) {
+                        for (const std::string& nm : sets) {
+                            if (!ImGui::Selectable(nm.c_str())) continue;
+                            std::string e;
+                            if (ui::LoadPreset(ui::PresetDir() + "/" + nm + ".set", e)) {
+                                snprintf(set_name, sizeof(set_name), "%s", nm.c_str());
+                                set_msg = "loaded " + nm;
+                            } else {
+                                set_msg = e;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::InputText("name##set", set_name, sizeof(set_name));
+                    ImGui::PopItemWidth();
+                    if (ImGui::Button("save##set")) {
+                        std::string e;
+                        set_msg = ui::SavePreset(ui::PresetDir() + "/" + set_name + ".set", e)
+                                      ? ("saved " + std::string(set_name)) : e;
+                        sets = ui::ListPresets();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("rescan##set")) sets = ui::ListPresets();
+                    if (!set_msg.empty()) ImGui::TextDisabled("%s", set_msg.c_str());
+                    ImGui::TreePop();
+                }
+            }
+            ui::EndTab();
+            ui::EndTabBar();
+
+            // How tall the panel's content came out, which is the one number
+            // that catches a hidden section drawing anyway.
+            //
+            // Declaring without drawing is not something the parameter counts
+            // can check: a section that is declared *and* drawn while it should
+            // be hidden looks perfectly healthy to them, and looks like six tab
+            // pages of loose widgets stacked on top of each other on screen.
+            // With the tabs working this is one page; with the raw ImGui calls
+            // in the hidden bodies escaping, it was fourteen times that.
+            g_panel_content_h = ImGui::GetCurrentWindow()->DC.CursorMaxPos.y -
+                                ImGui::GetCurrentWindow()->Pos.y;
+            ImGui::End();
+            if (panel_hidden) ImGui::PopStyleVar();
+}
+
+void DrawOverlayWindows(PanelFrameArgs& pf) {
+            // --- camera mask: the rectangle, on the frame ------------------
+            //
+            // Drawn over the scene rather than in the control panel: the mask
+            // is a piece of set dressing aimed at a real room, and placing it
+            // by numbers in a list means looking away from the thing being
+            // aimed at.
+            // --- camera debug: is it working, and where is the crop -------
+            //
+            // Two questions that are usually asked together and are usually
+            // both answered "I think so" from the composition alone, which
+            // cannot distinguish a closed sensor from a stale frame from a
+            // tracker that is running but pointed at nothing. So this draws the
+            // numbers rather than an impression: frame size, how long since the
+            // last one, whether a face is believed and how long it has been
+            // held -- over the raw frame, with the boxes on top.
+            if (g_ui_visible && pf.scene == (int)Scene::Camera) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetNextWindowPos(vp->WorkPos);
+                ImGui::SetNextWindowSize(vp->WorkSize);
+                ImGui::Begin("##camera_debug", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoBackground |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoInputs);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 o = vp->WorkPos, sz = vp->WorkSize;
+                auto box = [&](float cx, float cy, float hx, float hy,
+                               ImU32 col, float th) {
+                    dl->AddRect(ImVec2(o.x + (cx - hx) * sz.x, o.y + (cy - hy) * sz.y),
+                                ImVec2(o.x + (cx + hx) * sz.x, o.y + (cy + hy) * sz.y),
+                                col, 0.f, 0, th);
+                };
+
+                // The raw detection, thin and grey, and the smoothed padded box
+                // the fit is actually handed, bright. Both, because the gap
+                // between them *is* what "pad" and "head smoothing" do -- with
+                // only one drawn those two sliders are guesswork.
+                if (g_face.valid) {
+                    box(g_face.centre_x, g_face.centre_y,
+                        0.5f * (g_face.max_x - g_face.min_x),
+                        0.5f * (g_face.max_y - g_face.min_y),
+                        IM_COL32(170, 170, 170, 170), 1.5f);
+                }
+                if (g_head_valid) {
+                    const ImU32 c = g_face_held ? IM_COL32(255, 210, 100, 235)
+                                                : IM_COL32(120, 235, 150, 235);
+                    box(g_head_cx, g_head_cy, g_head_hx, g_head_hy, c, 2.5f);
+                    dl->AddLine(ImVec2(o.x + g_head_cx * sz.x, o.y),
+                                ImVec2(o.x + g_head_cx * sz.x, o.y + sz.y),
+                                IM_COL32(255, 255, 255, 40), 1.f);
+                    dl->AddLine(ImVec2(o.x, o.y + g_head_cy * sz.y),
+                                ImVec2(o.x + sz.x, o.y + g_head_cy * sz.y),
+                                IM_COL32(255, 255, 255, 40), 1.f);
+                }
+                // Where the camera mask will cut, if it is on: the crop has to
+                // be set inside it or the fit is handed pixels that the rest of
+                // the app has already blacked out.
+                if (g_cam_mask_on) {
+                    dl->AddRect(ImVec2(o.x + g_cam_x0 * sz.x, o.y + g_cam_y0 * sz.y),
+                                ImVec2(o.x + g_cam_x1 * sz.x, o.y + g_cam_y1 * sz.y),
+                                IM_COL32(255, 120, 120, 150), 0.f, 0, 1.5f);
+                }
+
+                char l1[192], l2[192];
+                snprintf(l1, sizeof(l1), "camera  %s   %dx%d",
+                         SourceReady() ? "ready" : "NO FRAMES", pf.pipW, pf.pipH);
+                if (!g_track_on)
+                    snprintf(l2, sizeof(l2), "tracking off");
+                else if (g_face_held)
+                    snprintf(l2, sizeof(l2), "face held %.2fs of %.2f",
+                             pf.nowT - g_face_last_seen, g_face_hold_secs);
+                else if (g_face.valid)
+                    snprintf(l2, sizeof(l2), "face  streak %d   crop %s",
+                             g_face_streak, HaveCrop() ? "live" : "off");
+                else
+                    snprintf(l2, sizeof(l2), "no face  (streak %d of %d)",
+                             g_face_streak, g_face_acquire);
+                const ImVec2 at(o.x + 14.f, o.y + 14.f);
+                dl->AddRectFilled(ImVec2(at.x - 6, at.y - 4),
+                                  ImVec2(at.x + 330, at.y + 40),
+                                  IM_COL32(0, 0, 0, 150), 4.f);
+                dl->AddText(at, SourceReady() ? IM_COL32(200, 240, 210, 255)
+                                              : IM_COL32(255, 130, 130, 255), l1);
+                dl->AddText(ImVec2(at.x, at.y + 19), IM_COL32(220, 220, 220, 255), l2);
+                ImGui::End();
+            }
+
+            if (g_ui_visible && pf.scene == (int)Scene::CamMask) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetNextWindowPos(vp->WorkPos);
+                ImGui::SetNextWindowSize(vp->WorkSize);
+                ImGui::Begin("##cammask_overlay", nullptr,
+                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoBackground |
+                             ImGuiWindowFlags_NoFocusOnAppearing);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 o = vp->WorkPos, sz = vp->WorkSize;
+                auto toScreen = [&](float u, float v) {
+                    return ImVec2(o.x + u * sz.x, o.y + v * sz.y);
+                };
+
+                float* xs[2] = {&g_cam_x0, &g_cam_x1};
+                float* ys[2] = {&g_cam_y0, &g_cam_y1};
+                const ImU32 col = g_cam_mask_on ? IM_COL32(255, 210, 120, 230)
+                                                : IM_COL32(150, 150, 150, 140);
+                dl->AddRect(toScreen(*xs[0], *ys[0]), toScreen(*xs[1], *ys[1]), col,
+                            0.f, 0, 2.f);
+
+                // One handle per corner. Corners rather than edges because a
+                // rectangle has four degrees of freedom and four handles is the
+                // fewest that reach all of them without a mode.
+                const float grab = 12.f;
+                for (int i = 0; i < 4; ++i) {
+                    float* px = xs[i & 1];
+                    float* py = ys[i >> 1];
+                    const ImVec2 c = toScreen(*px, *py);
+                    ImGui::SetCursorScreenPos(ImVec2(c.x - grab, c.y - grab));
+                    ImGui::PushID(i);
+                    ImGui::InvisibleButton("h", ImVec2(grab * 2, grab * 2));
+                    const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+                    if (ImGui::IsItemActive()) {
+                        const ImVec2 d = ImGui::GetIO().MouseDelta;
+                        *px = std::min(1.f, std::max(0.f, *px + d.x / sz.x));
+                        *py = std::min(1.f, std::max(0.f, *py + d.y / sz.y));
+                    }
+                    dl->AddCircleFilled(c, hot ? 8.f : 5.f, col);
+                    ImGui::PopID();
+                }
+
+                // Drag the body to move the whole rectangle.
+                const ImVec2 a = toScreen(std::min(g_cam_x0, g_cam_x1),
+                                          std::min(g_cam_y0, g_cam_y1));
+                const ImVec2 b = toScreen(std::max(g_cam_x0, g_cam_x1),
+                                          std::max(g_cam_y0, g_cam_y1));
+                ImGui::SetCursorScreenPos(ImVec2(a.x + grab, a.y + grab));
+                ImGui::InvisibleButton("##body",
+                                       ImVec2(std::max(1.f, b.x - a.x - grab * 2),
+                                              std::max(1.f, b.y - a.y - grab * 2)));
+                if (ImGui::IsItemActive()) {
+                    const ImVec2 d = ImGui::GetIO().MouseDelta;
+                    const float du = d.x / sz.x, dv = d.y / sz.y;
+                    g_cam_x0 += du; g_cam_x1 += du;
+                    g_cam_y0 += dv; g_cam_y1 += dv;
+                }
+                ImGui::End();
+            }
+
+            // --- source overlay: the raw frame, in a corner ----------------
+            //
+            // Answers one question the mirror's own output cannot: is anything
+            // actually arriving, and is it what the fit is being pointed at.
+            if (g_ui_visible && g_show_source && pf.srcTex && pf.srcTexW > 0) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                const float pad = 16.f;
+                const bool right = (g_source_corner == 1 || g_source_corner == 3);
+                const bool bottom = (g_source_corner == 2 || g_source_corner == 3);
+                ImGui::SetNextWindowPos(
+                    ImVec2(vp->WorkPos.x + (right ? vp->WorkSize.x - pad : pad),
+                           vp->WorkPos.y + (bottom ? vp->WorkSize.y - pad : pad)),
+                    ImGuiCond_Always,
+                    ImVec2(right ? 1.f : 0.f, bottom ? 1.f : 0.f));
+                ImGui::SetNextWindowBgAlpha(0.35f);
+                ImGui::Begin("##source_pip", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav);
+                const float iw = (float)g_source_pip_w;
+                const float ih = iw * (float)pf.srcTexH / (float)pf.srcTexW;
+                const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                ImGui::Image((ImTextureID)(intptr_t)(__bridge void*)pf.srcTex,
+                             ImVec2(iw, ih));
+                // Landmarks on top, in the overlay's own coordinates: they are
+                // normalised, so this is the same mapping the mask uses -- if
+                // they sit off the face here, they sit off the face there.
+                if (g_pip_landmarks && g_track_on && g_face.valid) {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    for (const mirror::FaceLandmark& L : g_face.landmarks) {
+                        dl->AddRectFilled(
+                            ImVec2(p0.x + L.x * iw, p0.y + L.y * ih),
+                            ImVec2(p0.x + L.x * iw + 1.5f, p0.y + L.y * ih + 1.5f),
+                            IM_COL32(120, 255, 170, 200));
+                    }
+                    // The crop the fit is supervised on, drawn where its pixels
+                    // are *taken from* -- so in the centred mode this stays on
+                    // the head even though the fit places it in the middle.
+                    // Drawn from the smoothed box the mask is built from, which
+                    // makes the smoothing itself visible: if this lags the face
+                    // badly, that is the setting to turn up.
+                    if (g_mask_fit && g_head_valid &&
+                        g_mask_shape == (int)MaskShape::Box) {
+                        const float px = pf.fit_w > 0 ? float(g_mask_dilate) / pf.fit_w : 0.f;
+                        const float py = pf.fit_h > 0 ? float(g_mask_dilate) / pf.fit_h : 0.f;
+                        dl->AddRect(
+                            ImVec2(p0.x + (g_head_cx - g_head_hx - px) * iw,
+                                   p0.y + (g_head_cy - g_head_hy - py) * ih),
+                            ImVec2(p0.x + (g_head_cx + g_head_hx + px) * iw,
+                                   p0.y + (g_head_cy + g_head_hy + py) * ih),
+                            IM_COL32(255, 210, 120, 220));
+                    }
+                }
+                const bool live = g_fit_live && pf.mirror.pond().fitting() &&
+                                  pf.scene == (int)Scene::Mirror;
+                ImGui::TextDisabled("%s%s", g_source == (int)Source::Photo
+                                                ? "photo" : "sensor",
+                                    pf.srcFresh ? "" : "  (stale)");
+                ImGui::SameLine();
+#if MIRROR_HAVE_KINECT
+                if (g_source == (int)Source::Kinect) {
+                    ImGui::TextDisabled("| %llu frames",
+                                        (unsigned long long)g_kinect.frames());
+                    ImGui::SameLine();
+                }
+#endif
+                if (live) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "| fitting this");
+                } else {
+                    ImGui::TextDisabled("| not the fit target");
+                }
+                ImGui::End();
+            }
+
+            // --- the network's input, in a corner -------------------------
+            //
+            // Everything the fit is given, in one picture. What to look for
+            // when a fit will not take: the subject the right way round, the
+            // bright (trained) region actually on them, the grid fine enough
+            // that a face is more than a smudge.
+            if (g_ui_visible && g_show_netin && pf.netTex && pf.netTexW > 0) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                const float pad = 16.f;
+                const bool right = (g_netin_corner == 1 || g_netin_corner == 3);
+                const bool bottom = (g_netin_corner == 2 || g_netin_corner == 3);
+                ImGui::SetNextWindowPos(
+                    ImVec2(vp->WorkPos.x + (right ? vp->WorkSize.x - pad : pad),
+                           vp->WorkPos.y + (bottom ? vp->WorkSize.y - pad : pad)),
+                    ImGuiCond_Always,
+                    ImVec2(right ? 1.f : 0.f, bottom ? 1.f : 0.f));
+                ImGui::SetNextWindowBgAlpha(0.35f);
+                ImGui::Begin("##netin_pip", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav);
+                const float iw = (float)g_netin_pip_w;
+                const float ih = iw * (float)pf.netTexH / (float)pf.netTexW;
+                const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                ImGui::Image((ImTextureID)(intptr_t)(__bridge void*)pf.netTex,
+                             ImVec2(iw, ih));
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                // The region the resample actually produced. With a crop up
+                // this is the whole of what exists -- outside it the buffer is
+                // last frame's, deliberately, because nothing reads it. Drawn
+                // so that emptiness reads as intended rather than as a fault.
+                if (g_have_mask && g_mask_bbox.w > 0) {
+                    const float sx = iw / (float)pf.netTexW, sy = ih / (float)pf.netTexH;
+                    dl->AddRect(ImVec2(p0.x + g_mask_bbox.x * sx,
+                                       p0.y + g_mask_bbox.y * sy),
+                                ImVec2(p0.x + (g_mask_bbox.x + g_mask_bbox.w) * sx,
+                                       p0.y + (g_mask_bbox.y + g_mask_bbox.h) * sy),
+                                IM_COL32(120, 200, 255, 200));
+                }
+                ImGui::TextDisabled("%dx%d", pf.netTexW, pf.netTexH);
+                ImGui::SameLine();
+                if (pf.mirror.pond().fitting()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
+                                       "| %d px | loss %.5f",
+                                       pf.mirror.pond().fitPixels(), pf.mirror.lastLoss());
+                } else {
+                    ImGui::TextDisabled("| not training");
+                }
+                if (!pf.netFresh) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(held)");
+                }
+                ImGui::End();
+            }
+
+            // --- the running order, as text -------------------------------
+            //
+            // Drawn whether or not the panel is up: this is for watching the
+            // piece run, and the moment it is most needed is the one where a
+            // phase is not advancing and there is nothing on screen saying what
+            // it is waiting for.
+            if (g_show_hud) {
+                const ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 16.f,
+                                               vp->WorkPos.y + vp->WorkSize.y - 16.f),
+                                        ImGuiCond_Always, ImVec2(0.f, 1.f));
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##showhud", nullptr,
+                             ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav |
+                             ImGuiWindowFlags_NoInputs);
+
+                const show::Phase ph = g_show.phase();
+                const show::PhaseGraph& g = show::Graph(ph);
+                const float ps_max = g_show.maxTime(ph);
+                const float ps_min = g_show.minTime(ph);
+
+                ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.f, 1.f), "%s",
+                                   show::PhaseName(ph));
+                ImGui::SameLine();
+                ImGui::Text("%.1fs", g_show.phaseTime());
+                if (ps_max > 0.f) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("/ %.0fs", ps_max);
+                }
+                ImGui::SameLine();
+                if (!g_show_on)          ImGui::TextDisabled("| held (show off)");
+                else if (g_show_paused)  ImGui::TextDisabled("| paused");
+                else if (g_show.phaseTime() < ps_min)
+                    ImGui::TextDisabled("| floor %.1fs", ps_min - g_show.phaseTime());
+                else ImGui::TextDisabled("| open");
+                if (g_view_override >= 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "| view override");
+                }
+                ImGui::TextDisabled("via %s", g_show.lastReason().c_str());
+
+                // What it is waiting for, in the graph's own priority order --
+                // the first of these to come true is the one that moves it.
+                ImGui::Separator();
+                for (int i = 0; i < g.edge_count; ++i) {
+                    const show::Edge& e = g.edges[i];
+                    ImGui::TextDisabled("%s -> %s", show::EventName(e.event),
+                                        show::PhaseName(e.target));
+                }
+
+                ImGui::Separator();
+                const bool face = ShowFacePresent();
+                const bool fit_conv = ShowFitConverged();
+                ImGui::Text("face"); ImGui::SameLine();
+                if (face) ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "yes");
+                else      ImGui::TextDisabled("no");
+                ImGui::SameLine(); ImGui::Text("| converged"); ImGui::SameLine();
+                if (fit_conv) ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "yes");
+                else          ImGui::TextDisabled("no");
+
+                // The identity residual is what "converged" is actually
+                // measuring, so it is shown against the threshold rather than
+                // on its own -- a number with no scale beside it is not a
+                // diagnosis.
+                if (g_id_residual >= 0.f) {
+                    ImGui::TextDisabled("identity %.2f px (needs <= %.2f)%s",
+                                        g_id_residual, g_show_fit_px,
+                                        g_collect_id ? "  collecting" : "");
+                } else if (g_collect_id) {
+                    ImGui::TextDisabled("identity collecting %.1fs",
+                                        g_id_collect_secs - (pf.nowT - g_id_started));
+                } else {
+                    ImGui::TextDisabled("identity not fitted");
+                }
+
+                ImGui::Text("fit"); ImGui::SameLine();
+                if (pf.mirror.pond().fitting()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "training");
+                } else if (pf.mirror.pond().fitted()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f), "held");
+                } else {
+                    ImGui::TextDisabled("none");
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("| %d steps | loss %.5f | %d px",
+                                    pf.mirror.pond().fitSteps(), pf.mirror.lastLoss(),
+                                    pf.mirror.pond().fitPixels());
+                {
+                    const FitTune& t = g_have_mask ? g_tune_crop : g_tune_full;
+                    ImGui::TextDisabled("grid %dx%d %s | %d step-s | lr %.4f",
+                                        pf.fit_w, pf.fit_h,
+                                        g_have_mask ? "cropped" : "whole feed",
+                                        t.steps, t.lr);
+                }
+                if (!g_fit_live) {
+                    ImGui::TextColored(ImVec4(1.f, 0.6f, 0.5f, 1.f),
+                                       "live feed not armed");
+                }
+                // --- rates ------------------------------------------
+                //
+                // Sampled over a second rather than shown per frame: the thing
+                // being diagnosed is a rate going to zero, and a per-frame
+                // reading of a 30 Hz source under a 60 fps loop alternates
+                // between two values and reads as broken when it is fine.
+                {
+                    static double rate_t0 = 0.0;
+                    static unsigned long long sensor_prev = 0;
+                    static unsigned swaps_prev = 0, steps_prev = 0;
+                    static float sensor_hz = 0.f, swap_hz = 0.f, step_hz = 0.f;
+                    const unsigned steps_now = (unsigned)pf.mirror.pond().fitSteps();
+#if MIRROR_HAVE_KINECT
+                    const unsigned long long sensor_now = g_kinect.frames();
+#else
+                    const unsigned long long sensor_now = 0;
+#endif
+                    if (rate_t0 == 0.0) rate_t0 = pf.nowT;
+                    const double dtr = pf.nowT - rate_t0;
+                    if (dtr >= 1.0) {
+                        sensor_hz = float((sensor_now - sensor_prev) / dtr);
+                        swap_hz   = float((g_target_swaps - swaps_prev) / dtr);
+                        step_hz   = float((steps_now - steps_prev) / dtr);
+                        sensor_prev = sensor_now;
+                        swaps_prev = g_target_swaps;
+                        steps_prev = steps_now;
+                        rate_t0 = pf.nowT;
+                    }
+                    // Each stage feeds the next, so the first zero along the
+                    // chain is the one that matters.
+                    ImGui::TextDisabled("sensor %.0f/s -> target %.0f/s -> steps %.0f/s",
+                                        sensor_hz, swap_hz, step_hz);
+                    if (pf.mirror.pond().fitting() && sensor_hz > 0.f && swap_hz == 0.f) {
+                        ImGui::TextColored(ImVec4(1.f, 0.6f, 0.5f, 1.f),
+                                           "frames arriving, target not swapping");
+                    }
+                }
+                if (g_vp_skips || g_vp_relayers) {
+                    ImGui::TextDisabled("panel: %u occluded, %u re-layered",
+                                        g_vp_skips, g_vp_relayers);
+                }
+                ImGui::TextDisabled("%.0f fps", pf.fpsShown);
+                ImGui::End();
+            }
+}
