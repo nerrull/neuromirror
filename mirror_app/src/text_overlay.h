@@ -100,7 +100,7 @@ struct TextUniforms {
     simd::float4 tune  = {1, 0, 1, 0};   // aspect, strength, softness, dilate
     simd::float4 tune2 = {0, 3, 1.8f, 0};// warp, k, decay, core_r2
     simd::float4 cnt   = {0, 0, 0, 1};   // source count, enabled, time, reveal
-    simd::float4 diss  = {0, 6, 0, 0};   // turbulence, turb scale, turb speed, -
+    simd::float4 diss  = {0, 6, 0, 0};   // turbulence, turb scale, turb speed, fade
     simd::float4 src[16] = {};           // cx, cy, phase, amp
     simd::float4 wid[16] = {};           // packet width in .x; a float4 per
                                          // source so the MSL side never has to
@@ -121,8 +121,11 @@ public:
     // The uniforms for this frame. `aspect` is the drawable's, and must be the
     // one the coord grid was built with or the text and the ripples will not
     // agree about where anything is. `time` drives the dissolve's drift only.
+    // `fade` (0..1) is the screen-wide fade to black present_fs applies after
+    // everything else -- the show's outro/intro, not a text property, but
+    // carried in the same uniform buffer since it is already bound every frame.
     TextUniforms uniforms(const TextParams& p, float aspect,
-                          const TextRipple& r, double time) const;
+                          const TextRipple& r, double time, float fade = 0.f) const;
 
     id<MTLTexture> texture() const { return tex_; }
     bool valid() const { return tex_ != nil; }

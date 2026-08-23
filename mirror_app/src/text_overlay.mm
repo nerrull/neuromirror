@@ -165,8 +165,12 @@ void TextOverlay::update(const TextParams& p) {
 }
 
 TextUniforms TextOverlay::uniforms(const TextParams& p, float aspect,
-                                   const TextRipple& r, double time) const {
+                                   const TextRipple& r, double time,
+                                   float fade) const {
     TextUniforms u;
+    // Set before the early return: the fade applies to the whole frame, with
+    // or without the text overlay live.
+    u.diss.w = std::clamp(fade, 0.f, 1.f);
     const bool live = p.on && tex_ != nil && p.strength > 0.f && p.reveal > 0.f;
     u.cnt.y = live ? 1.f : 0.f;
     if (!live) return u;
@@ -187,7 +191,7 @@ TextUniforms TextOverlay::uniforms(const TextParams& p, float aspect,
     u.tune2 = {p.warp, r.k, r.decay, r.core_r2};
 
     u.diss = {std::clamp(p.turbulence, 0.f, 1.f), std::max(p.turb_scale, 0.f),
-              p.turb_speed, 0.f};
+              p.turb_speed, u.diss.w};   // .w is the fade, set above -- keep it
     // Wrapped: the drift is a noise offset, so an installation left running for
     // hours would otherwise walk it out to where float spacing is coarser than
     // the noise itself and the turbulence visibly freezes.

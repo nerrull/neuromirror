@@ -48,21 +48,21 @@ land in `unassigned` and are listed below until somebody decides.
 
 | parameter | type | range | value |
 |---|---|---|---|
-| `fit/animate z outside` | bool | -- | 0 |
-| `fit/crop shape` | int | 0 .. 1 | 0 |
+| `fit/animate z outside` | bool | -- | 1 |
+| `fit/crop shape` | int | 0 .. 1 | 1 |
 | `fit/crop the fit to the face` | bool | -- | 1 |
 | `fit/crop/grid` | int | 1 .. 8 | 1 |
 | `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.002 |
 | `fit/crop/steps` | int | 1 .. 32 | 4 |
 | `fit/dilate` | int | 0 .. 24 | 6 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0.02 |
-| `fit/fade width` | float | 0.01 .. 1.5 | 0.35 |
+| `fit/fade width` | float | 0.01 .. 1.5 | 1.5 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
 | `fit/feed/lr` | float | 0.0001 .. 0.02 | 0.003 |
 | `fit/feed/steps` | int | 1 .. 32 | 1 |
 | `fit/fit w0` | float | 1 .. 80 | 60 |
 | `fit/follow the outline` | bool | -- | 1 |
-| `fit/grey outside` | float | 0 .. 1 | 0 |
+| `fit/grey outside` | float | 0 .. 1 | 1 |
 | `fit/head mode` | int | 0 .. 2 | 1 |
 | `fit/head smoothing` | float | 0.02 .. 1 | 0.25 |
 | `fit/identity/fit automatically` | bool | -- | 1 |
@@ -74,20 +74,32 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
 | `fit/ramp secs` | float | 0 .. 8 | 1.5 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
-| `fit/set face size` | bool | -- | 0 |
-| `fit/size` | float | 0.05 .. 0.5 | 0.25 |
+| `fit/set face size` | bool | -- | 1 |
+| `fit/size` | float | 0.05 .. 0.5 | 0.36 |
 | `fit/soft edge` | bool | -- | 1 |
-| `fit/track live feed` | bool | -- | 0 |
+| `fit/track live feed` | bool | -- | 1 |
 
-## show (25 parameters)
+## show (37 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
 | `show/cue CC` | int | 0 .. 127 | 100 |
-| `show/fit converged under (px)` | float | 1 .. 20 | 6 |
+| `show/fit score to convert` | float | 0 .. 1 | 0.85 |
+| `show/fit_level half scale (loss)` | float | 0.0005 .. 0.05 | 0.005 |
 | `show/fitting` | int | 0 .. 4 | 0 |
+| `show/fitting/absent_hold` | float | 0 .. 30 | 2.5 |
+| `show/fitting/fit_hold` | float | 0 .. 30 | 1.5 |
+| `show/fitting/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
+| `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
+| `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
+| `show/idle/face_hold` | float | 0 .. 30 | 1.5 |
+| `show/idle/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
+| `show/idle/intro fade-in (s)` | float | 0 .. 8 | 1.5 |
+| `show/idle/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
+| `show/idle/min` | float | 0 .. 120 | 8 |
 | `show/log phase changes` | bool | -- | 1 |
+| `show/mesh fit residual, diagnostic (px)` | float | 1 .. 20 | 6 |
 | `show/phase CC` | int | 0 .. 127 | 101 |
 | `show/readout (F2)` | bool | -- | 0 |
 | `show/roots` | int | 0 .. 4 | 1 |
@@ -103,16 +115,20 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/near (face height)` | float | 0.1 .. 0.9 | 0.45 |
 | `sound/pad octave (semitones)` | float | -36 .. 12 | -12 |
 | `sound/phases post their own events` | bool | -- | 1 |
-| `sound/pluck from` | float | -12 .. 36 | 34 |
-| `sound/pluck to` | float | -24 .. 24 | 10 |
+| `sound/pluck base` | float | -12 .. 36 | 34 |
+| `sound/pluck intensity range` | float | 0 .. 24 | 12 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/sound on` | bool | -- | 1 |
 | `sound/transpose (semitones)` | float | -24 .. 24 | 0 |
 
-## look (46 parameters)
+## look (50 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
+| `show/transition/done_hold` | float | 0 .. 30 | 0 |
+| `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
+| `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 12 |
+| `show/transition/min` | float | 0 .. 120 | 0 |
 | `text/edge softness` | float | 0.2 .. 3 | 1 |
 | `text/inversion` | float | 0 .. 1 | 1 |
 | `text/raster px` | int | 64 .. 1024 | 256 |
@@ -165,7 +181,7 @@ land in `unassigned` and are listed below until somebody decides.
 | parameter | type | range | value |
 |---|---|---|---|
 | `mirror/colour/amp gain` | float | 0.2 .. 6 | 1.5 |
-| `mirror/colour/color mix (0 grey -> 1 RGB)` | float | 0 .. 1 | 0.621 |
+| `mirror/colour/color mix (0 grey -> 1 RGB)` | float | 0 .. 1 | 0 |
 | `mirror/colour/color travel (palette follows orbit)` | bool | -- | 0 |
 | `mirror/colour/gamma (>1 darkens)` | float | 0.3 .. 2 | 1 |
 | `mirror/colour/grey ch` | int | 0 .. 2 | 0 |
@@ -185,10 +201,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/mask emergence (transition)/wet sheen (spec)` | float | 0 .. 1.5 | 0.5 |
 | `mirror/moving ripple` | bool | -- | 0 |
 | `mirror/network/contrast (w out)` | float | 1 .. 12 | 4.717 |
-| `mirror/network/detail (w hidden)` | float | 0.5 .. 10 | 6.07 |
-| `mirror/network/gain tilt (front<->back)` | float | -3 .. 3 | 0.49 |
+| `mirror/network/detail (w hidden)` | float | 0.5 .. 10 | 6.449 |
+| `mirror/network/gain tilt (front<->back)` | float | -3 .. 3 | 0.557 |
 | `mirror/network/sine layers (0 - tanh only)` | int | 0 .. 5 | 1 |
-| `mirror/network/sine w0 (composition)` | float | 1 .. 60 | 60 |
+| `mirror/network/sine w0 (composition)` | float | 1 .. 60 | 7.2 |
 | `mirror/network/w shape (gauss<->uniform)` | float | 0 .. 1 | 0 |
 | `mirror/radius` | float | 0.02 .. 0.5 | 0.12 |
 | `mirror/rain from audio/hit -> position` | float | 0 .. 1 | 0 |
@@ -220,10 +236,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/ripple speed` | float | 0 .. 6 | 1.2 |
 | `mirror/soft centers (anti-alias)` | bool | -- | 1 |
 | `mirror/z/z amplitude` | float | 0 .. 3 | 1 |
-| `mirror/z/z auto-rate -s` | float | -2 .. 2 | -0.108 |
+| `mirror/z/z auto-rate -s` | float | -2 .. 2 | 0.019 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
 
-## roots (167 parameters)
+## roots (185 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -395,17 +411,34 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/travelling pulses/pulse speed` | float | 0 .. 40 | 14 |
 | `roots/travelling pulses/pulse width` | float | 0.5 .. 12 | 3.5 |
 | `roots/travelling pulses/pulses on` | bool | -- | 1 |
+| `show/roots/absent_hold` | float | 0 .. 30 | 8 |
+| `show/roots/beat 1  face alone/duration` | float | 0.2 .. 20 | 2.3 |
+| `show/roots/beat 2  masks deal/duration` | float | 0.2 .. 20 | 3.1 |
+| `show/roots/beat 2  masks deal/growth rate max (steps-s)` | float | 1 .. 2000 | 400 |
+| `show/roots/beat 2  masks deal/growth rate min (steps-s)` | float | 1 .. 2000 | 20 |
+| `show/roots/beat 3  growth follows/duration` | float | 0.2 .. 20 | 8.6 |
+| `show/roots/beat 3  growth follows/growth rate max (steps-s)` | float | 1 .. 2000 | 1200 |
+| `show/roots/beat 3  growth follows/growth rate min (steps-s)` | float | 1 .. 2000 | 40 |
+| `show/roots/beat 4  meander/camera speed max` | float | 0.02 .. 3 | 0.9 |
+| `show/roots/beat 4  meander/camera speed min` | float | 0.02 .. 3 | 0.25 |
+| `show/roots/beat 4  meander/dwell per waypoint (s)` | float | 0.5 .. 20 | 4.5 |
+| `show/roots/beat 4  meander/max angular speed (rad-s)` | float | 0.05 .. 4 | 0.9 |
+| `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
+| `show/roots/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
+| `show/roots/min` | float | 0 .. 120 | 40 |
+| `show/roots/outro/fade duration (s)` | float | 0.2 .. 10 | 2 |
+| `show/roots/outro/fog fade-in over beat 1 (s)` | float | 0 .. 20 | 2 |
 
 ## debug (8 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
-| `debug/camera overlay` | bool | -- | 0 |
+| `debug/camera overlay` | bool | -- | 1 |
 | `debug/corner` | int | 0 .. 3 | 1 |
 | `debug/input corner` | int | 0 .. 3 | 3 |
 | `debug/input size` | int | 160 .. 640 | 260 |
 | `debug/landmarks` | bool | -- | 1 |
 | `debug/network input` | bool | -- | 1 |
-| `debug/size` | int | 160 .. 640 | 640 |
+| `debug/size` | int | 160 .. 640 | 298 |
 | `debug/untrained dim` | float | 0 .. 1 | 0.22 |
 

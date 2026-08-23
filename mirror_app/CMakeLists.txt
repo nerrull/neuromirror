@@ -110,9 +110,8 @@ target_include_directories(mirror_core PUBLIC src ${MLX_INCLUDE_DIRS})
 # generated, not committed. PUBLIC so the tests find the basis too.
 target_compile_definitions(mirror_core PUBLIC
     MIRROR_APP_EXTERNAL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/external"
-    # show_timeline resolves shows/ against this, the same way RootScene
-    # resolves presets/ -- scripts are edited in the source tree during an
-    # install, not copied into a build directory.
+    # RootScene resolves presets/ against this -- presets are edited in the
+    # source tree during an install, not copied into a build directory.
     MIRROR_APP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(mirror_core PUBLIC mlx)
 

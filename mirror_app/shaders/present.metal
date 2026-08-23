@@ -34,7 +34,7 @@ struct TextU {
     float4 tune;     // aspect, strength, softness, dilate (encoded units)
     float4 tune2;    // warp, ring_freq, decay, core_radius^2
     float4 cnt;      // source count, enabled, time, reveal
-    float4 diss;     // turbulence, turb scale, turb speed, unused
+    float4 diss;     // turbulence, turb scale, turb speed, fade to black (0..1)
     float4 src[16];  // cx, cy, phase, amp
     float4 wid[16];  // drop-packet width in .x (0 = a standing field)
 };
@@ -88,7 +88,10 @@ fragment float4 present_fs(VOut in [[stage_in]],
     constexpr sampler smp(mag_filter::linear, min_filter::linear,
                           address::clamp_to_edge);
     float4 c = tex.sample(smp, in.uv);
-    if (t.cnt.y == 0.0) return c;
+    // Applies with or without the text overlay live -- the show's outro/intro
+    // fades the whole picture, not just what is composited over it.
+    const float fade = saturate(t.diss.w);
+    if (t.cnt.y == 0.0) return float4(mix(c.rgb, float3(0.0), fade), c.a);
 
     // Coord space: x over (-aspect, aspect), y over (-1, 1). uv.y = 0 is the
     // texture's first row, which present_vs puts at the top of the screen --
@@ -190,5 +193,7 @@ fragment float4 present_fs(VOut in [[stage_in]],
     // Clamped before inverting: the root scene's target is RGBA16F and can carry
     // values above 1, where 1 - c would go negative and the text would come out
     // as a black hole rather than an inversion.
-    return float4(mix(c.rgb, 1.0 - clamp(c.rgb, 0.0, 1.0), cov), c.a);
+    float3 out = mix(c.rgb, 1.0 - clamp(c.rgb, 0.0, 1.0), cov);
+    out = mix(out, float3(0.0), fade);
+    return float4(out, c.a);
 }

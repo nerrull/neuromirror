@@ -1,4 +1,5 @@
 # which preset each bank comes up in
 fit = new_color
+show = default
 mirror = mirror_bw
 debug = debug

@@ -383,11 +383,18 @@ static int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
 
     // The camera and its beat schedule now live in RootCameraSequence, shared
     // with the live app -- begin() reads the layout once, step() drives the
-    // camera/growth-pacing fields each frame. Beats 1-3 fit inside `seconds`;
-    // beat 4 (the meander) would keep going past it if asked to, but the
-    // frame loop below stops at `frames` regardless.
+    // camera/growth-pacing fields each frame. Beats 1-3 split `seconds` in
+    // the same proportions the sequence always has (13% / 17% / 48%); beat 4
+    // (the meander) would keep going past it if asked to, but the frame loop
+    // below stops at `frames` regardless. Growth-rate/camera-speed ranges and
+    // the outro are left at RootBeatParams' defaults -- an export has no
+    // panel and no outro to fade into.
+    RootBeatParams bp;
+    bp.beat1_seconds = float(seconds * 0.13);
+    bp.beat2_seconds = float(seconds * 0.17);
+    bp.beat3_seconds = float(seconds * 0.48);
     RootCameraSequence seq;
-    seq.begin(roots, seconds);
+    seq.begin(roots, bp);
     if (!seq.valid()) { fprintf(stderr, "rootmovie: no masks\n"); return 1; }
 
     const int frames = std::max(2, (int)std::lround(seconds * fps));
@@ -400,7 +407,7 @@ static int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
     for (int f = 0; f < frames; ++f) {
         const double ts = double(f) / (frames - 1) * seconds;
 
-        seq.step(roots, ts, dt);
+        seq.step(roots, ts, dt, bp, /*wantOutro=*/false);
         roots.advance(dt);
 
         id<MTLTexture> tex = nil;
@@ -1001,13 +1008,60 @@ std::string g_track_err;
 // were tuning a shader would be an obstacle. The installation turns it on.
 show::Timeline g_show;
 bool  g_show_on = false;
-std::string g_show_name = "default";
-std::string g_show_err;
 // Which scene each phase renders. A phase is a moment in the piece, not a
 // renderer, and the two are worth being able to repoint independently -- the
 // fitting phase showing the diagnostic fit view instead of the mirror is a
 // setting, not a rebuild. Indexed by show::Phase.
 int g_show_scene[(int)show::Phase::Count] = {0, 0, 2, 1};  // mirror,mirror,trans,roots
+
+// Per-phase timing, panel-declared under `show/<phase>` and pushed into
+// g_show via setTiming/setHold every frame (see the "show" tab) -- these
+// arrays are what a Bank::Show preset actually saves/loads, since Timeline
+// itself holds no path names of its own. Seeded from show::Graph()'s
+// defaults once at startup, below main()'s early setup.
+float g_show_min[(int)show::Phase::Count] = {};
+float g_show_max[(int)show::Phase::Count] = {};
+float g_show_hold[(int)show::Phase::Count][show::kMaxEdges] = {};
+
+// The Roots phase's beat schedule (durations, growth-rate ranges, beat-4
+// camera speed/angular cap, outro length) -- panel-declared under
+// `show/roots/beat N`, see the "show" tab. Passed fresh to RootCameraSequence
+// every frame, so a slider dragged mid-shot retimes what is running rather
+// than requiring a restart.
+RootBeatParams g_root_beats;
+
+// Per-phase fog visibility (world units -- lower is thicker), see
+// MetalRootRenderer::Fog::visibility. Only the Roots renderer ever draws fog,
+// but it is kept one-per-phase as asked rather than one global, so a look
+// dialled in for Roots does not silently apply if fog is ever added to
+// another scene. `beat1_fog_fade_seconds` on g_root_beats is not here: it is
+// a Roots-beat duration, so it lives with the rest of the beat schedule.
+float g_phase_fog_intensity[(int)show::Phase::Count] = {45.f, 45.f, 45.f, 45.f};
+// Fog visibility read as "no fog" while it fades in during Roots beat 1 --
+// the top of the panel's visibility range (see the roots/fog panel section).
+constexpr float kFogClearVisibility = 600.f;
+
+// Screen-wide fade to black (0 = clear, 1 = black), applied in present.metal
+// after everything else is composited. Two things drive it, never at once:
+// RootCameraSequence's outro beat ramps it up as the room empties, and Idle's
+// own intro timer ramps it back down when the mirror resumes. See the
+// entries()-diff block and the Roots render branch below.
+float g_screen_fade = 0.f;
+// How long Idle's fade-in from black takes, once it is entered. Runs on
+// every Idle entry, not only the one after Roots -- harmless (a fade-in from
+// black at boot too) and avoids threading "did we just come from Roots"
+// through the entries()-diff block.
+float g_idle_intro_seconds = 1.5f;
+double g_idle_intro_t0 = -1.0;   // glfwGetTime() Idle was entered at, -1 = not fading
+
+// How long the face has been continuously absent while in Phase::Roots, timed
+// by the host rather than read from show::Timeline (which does not expose its
+// own debounce accumulator). Kept in lockstep with Timeline's own FaceAbsent
+// edge -- same signal, same dt -- so the outro, timed off it below, finishes
+// exactly as Timeline's absent_hold fires and the phase change lands on a
+// fully black screen. Reset whenever a face is present or the phase is not
+// Roots.
+double g_roots_absent_t = 0.0;
 
 // The diagnostic views (fit view, camera mask) are not phases -- nothing in the
 // piece ever cuts to them. They are a lens held over whatever the timeline is
@@ -1019,10 +1073,28 @@ int g_view_override = -1;
 // and restarts from the top when it is switched back on: pausing keeps the
 // phase and its clock and resumes into them.
 bool g_show_paused = false;
-// Mean landmark error, in pixels, under which the identity fit counts as
-// converged. Above ~8 px the mask is visibly the wrong face; this is the
-// threshold the fitting phase waits on.
+// Mean landmark error, in pixels, of the one-shot identity/mesh fit.
+// Diagnostic only: nothing about the show is gated on the mesh fit any more
+// (it still runs once, during Fitting, to personalize the Roots-phase mesh --
+// it just no longer decides when Fitting ends). Kept as a display threshold
+// for the "(N px)" readouts on the fit panel.
 float g_show_fit_px = 6.f;
+// Where AudioParams::fit_level's own curve is half scale, in loss. Tune
+// against the live "loss %.5f" readout on the fit panel and the FitLevel
+// readout together.
+float g_show_fit_loss_half = 0.005f;
+// AudioParams::fit_level score, 0..1, above which the live fit counts as
+// having actually captured the face -- what ShowFitConverged() (the Fitting
+// -> Transition gate, debounced by the script's `fit_hold`) waits on. Scored
+// rather than gated on raw loss directly: fit_level is already the tuned,
+// interpretable number (see g_show_fit_loss_half above), so this is one dial
+// in the same units the FitLevel readout shows, not a second, separate loss
+// threshold to keep in sync with it. ~0.85 by ear/eye.
+float g_show_fit_score = 0.85f;
+// ap.fit_level, mirrored into a global each frame (see the AudioParams block)
+// so ShowFitConverged() -- a free function with no access to the live-loop's
+// local `mirror` -- can read it.
+float g_fit_level_now = 0.f;
 // Operator overrides. Any CC on `cue_cc` past halfway takes the current phase's
 // forward edge -- "go" means the same thing everywhere, so nobody has to know
 // which event it is short-circuiting. Any on `phase_cc` jumps straight to the
@@ -1492,25 +1564,14 @@ static bool ShowFacePresent() {
     return g_track_on && g_face.valid;
 }
 
-// The identity fit has settled on *this* face. Collection running means it has
-// not yet; a residual above the threshold means it landed on the wrong shape,
-// which is a fit that should time out rather than one to hand a transition.
+// The neural (CPPN/pond) fit has actually captured this face -- not the mesh
+// fit, which only ever runs once to personalize the Roots-phase mesh and
+// never gates anything here. `g_fit_level_now` lags this frame's training
+// step by one frame (see where it's written); at 60 fps that is not a
+// meaningful delay against the `fit_hold` debounce the script applies to this
+// signal, which is what actually earns "confident" against a score this noisy.
 static bool ShowFitConverged() {
-    return g_track_on && g_face.valid && !g_collect_id && g_id_residual >= 0.f &&
-           g_id_residual <= g_show_fit_px;
-}
-
-// Loads `shows/<name>.show`, keeping the running script on failure -- a typo
-// saved mid-show must not leave the installation with no running order. Returns
-// false with g_show_err set.
-static bool ShowLoad(const std::string& name) {
-    show::ShowScript s;
-    if (!show::LoadShow(show::ShowDir() + "/" + name + ".show", s, g_show_err))
-        return false;
-    g_show.setScript(s);
-    g_show_name = name;
-    g_show_err.clear();
-    return true;
+    return g_track_on && g_face.valid && g_fit_level_now >= g_show_fit_score;
 }
 
 // Is there a face to narrow the fit to at all?
@@ -3714,12 +3775,17 @@ int main(int argc, char** argv) {
                        CamMask = 4, Camera = 5 };
     int scene = (int)Scene::Mirror;
 
-    // The running order off disk, falling back to the built-in one. A missing
-    // or broken file is reported rather than fatal: the app is still usable
-    // scene by scene without a show, and the panel says why the file did not
-    // take.
-    if (!ShowLoad(g_show_name))
-        printf("show: %s -- using the built-in running order\n", g_show_err.c_str());
+    // Seed the panel's per-phase timing arrays from the graph's own defaults,
+    // so a fresh install with no Bank::Show preset saved yet still runs the
+    // designed piece -- exactly what ShowScript's constructor used to do,
+    // now done once here since Timeline no longer holds a script object to
+    // default-construct.
+    for (int pi = 0; pi < (int)show::Phase::Count; ++pi) {
+        const show::PhaseGraph& g = show::Graph((show::Phase)pi);
+        g_show_min[pi] = g.min_time;
+        g_show_max[pi] = g.max_time;
+        for (int e = 0; e < g.edge_count; ++e) g_show_hold[pi][e] = g.edges[e].hold;
+    }
 
 #if MIRROR_HAVE_KINECT
     // The installation has nobody to press "open sensor", so the camera comes
@@ -4033,6 +4099,13 @@ int main(int argc, char** argv) {
                 if (scene == (int)Scene::Transition && trans.valid() && trans.done())
                     g_show.sceneDone();
 
+                // Kept in lockstep with Timeline's own FaceAbsent debounce
+                // (same phase check, same signal, same dt, computed before
+                // advance() below can move the phase off Roots this frame) --
+                // see the outro trigger in the Roots render branch.
+                if (g_show_on && !g_show_paused && g_show.phase() == show::Phase::Roots)
+                    g_roots_absent_t = sig.face_present ? 0.0 : g_roots_absent_t + dt;
+
                 if (g_show_on && !g_show_paused) g_show.advance(dt);
 
                 // Compared across frames rather than around advance(), so a
@@ -4061,6 +4134,7 @@ int main(int argc, char** argv) {
                             // face while it waited for the next person.
                             g_fit_arm = false;
                             mirror.pond().clearFit();
+                            g_fit_level_now = 0.f;
                             // Put the idle field back the way the preset had
                             // it, or every pass through the piece would leave
                             // the mirror a little more textured than the last.
@@ -4072,6 +4146,13 @@ int main(int argc, char** argv) {
                             // on the last one's resolved major and the whole
                             // arc has already happened.
                             g_chord.reset();
+                            // Every entry into Idle starts a fade-in from
+                            // black -- the one after Roots' outro, where the
+                            // screen is already black and this is what
+                            // brings the mirror back; and, harmlessly, the
+                            // very first one at boot too.
+                            g_screen_fade = 1.f;
+                            g_idle_intro_t0 = nowT;
                             break;
                         case show::Phase::Fitting:
                             // Start collecting the moment the phase opens, so
@@ -4121,7 +4202,10 @@ int main(int argc, char** argv) {
                     // just when g_root_authored_camera is on) so switching the
                     // toggle on mid-phase has a ready sequence to switch to.
                     rootCamSeqActive = (p == show::Phase::Roots);
-                    if (rootCamSeqActive) rootCamSeq.begin(roots, 18.0);
+                    if (rootCamSeqActive) rootCamSeq.begin(roots, g_root_beats);
+                    // The absence timer that times the outro (see the Roots
+                    // render branch below) starts fresh on every entry too.
+                    g_roots_absent_t = 0.0;
 
                     // The sound follows the same edge as the scene, from the
                     // same place, so there is no second notion of "which phase
@@ -4157,9 +4241,12 @@ int main(int argc, char** argv) {
                                 g_audio.post("Play_Pad");
                                 break;
                             case show::Phase::Transition:
+                                // The pluck itself keeps ringing -- see the
+                                // Comb_Tuning override below, which glides it
+                                // down to a very low register instead. It
+                                // stops for real on the way into Roots.
                                 g_audio.post("Play_Transition");
                                 g_audio.post("Stop_Pad");
-                                g_audio.post("Stop_FirePlucker");
                                 break;
                             case show::Phase::Roots:
                                 g_audio.post("Play_Amb_Roots");
@@ -4178,6 +4265,19 @@ int main(int argc, char** argv) {
                 // is still whatever it was, still showing what it should.
                 scene = (g_view_override >= 0) ? g_view_override
                                                : g_show_scene[(int)g_show.phase()];
+
+                // Idle's fade-in from black, started at the entries()-diff
+                // above. Timed off nowT rather than dt so pausing the show
+                // (which stops advance() but not the render loop) does not
+                // stall it -- there is no clock this could be inconsistent
+                // with, unlike the outro, which is why that one uses dt.
+                if (g_idle_intro_t0 >= 0.0) {
+                    const float t = g_idle_intro_seconds > 0.f
+                        ? (float)((nowT - g_idle_intro_t0) / g_idle_intro_seconds)
+                        : 1.f;
+                    g_screen_fade = 1.f - std::clamp(t, 0.f, 1.f);
+                    if (t >= 1.f) g_idle_intro_t0 = -1.0;
+                }
 
                 // --- honour a requested fit ---------------------------------
                 //
@@ -4240,15 +4340,28 @@ int main(int argc, char** argv) {
                 ap.centering = ps.centering;
                 ap.head_yaw  = ps.head_yaw;
                 ap.head_tilt = ps.head_tilt;
-                // How well she has been captured, as one number: the mean
-                // landmark error against the threshold the fitting phase waits
-                // on. Half scale at exactly the threshold, so the sound keeps
-                // tightening after the piece has already accepted the fit --
-                // converged is where it gets interesting, not where it stops.
-                ap.fit_level = (g_id_residual < 0.f)
-                    ? 0.f
-                    : std::clamp(1.f - g_id_residual / std::max(0.01f, 2.f * g_show_fit_px),
-                                 0.f, 1.f);
+                // How well she has been captured, as one number: the *neural*
+                // (CPPN/pond) fit's training loss against the threshold the
+                // fitting phase waits on -- not the one-shot mesh/identity
+                // fit (g_id_residual), which only ever produces a single
+                // value a second or two into the phase and says nothing
+                // about how the live fit is doing frame to frame. Loss falls
+                // fast early and slowly thereafter, so a linear map against
+                // the threshold hit 1.0 almost immediately; mapped in log
+                // space instead (1/(1+loss/threshold), equivalent to a
+                // sigmoid of log(loss/threshold)), so it's the *ratio* the
+                // loss has closed that matters, not the absolute distance --
+                // still half scale at exactly the threshold, but it keeps
+                // tightening at a matching pace after, all the way in.
+                ap.fit_level = mirror.pond().fitting()
+                    ? std::clamp(1.f / (1.f + mirror.lastLoss() /
+                                     std::max(1e-4f, g_show_fit_loss_half)),
+                                 0.f, 1.f)
+                    : 0.f;
+                // Mirrored into a global for ShowFitConverged() to read -- see
+                // its declaration -- right where it's computed, so there's one
+                // place that decides what the fit score is this frame, not two.
+                g_fit_level_now = ap.fit_level;
                 ap.scene_progress = g_show.phaseProgress();
                 ap.key = g_audio_key;
                 ap.intensity = g_audio_on ? g_audio_intensity : 0.f;
@@ -4268,6 +4381,16 @@ int main(int argc, char** argv) {
                         "Stage0", "Stage1", "Stage2", "Stage3", "Stage4"
                     };
                     g_audio.setState("ChordStage", kStageNames[g_chord.stage()]);
+                }
+
+                // The Transition handoff drops the pluck to a very low
+                // register -- not a chord tone, so it bypasses Chord
+                // entirely. The pluck event itself keeps playing (see the
+                // Phase::Transition case above); the effect's own Glide
+                // portamentos down to this from wherever the pluck was.
+                if (g_show.phase() == show::Phase::Transition) {
+                    constexpr float kTransitionCombHz = 25.f;  // 20-40 Hz
+                    ap.comb_hz = kTransitionCombHz;
                 }
 
                 g_audio.update(ap);
@@ -4615,8 +4738,35 @@ int main(int argc, char** argv) {
                     g_face_colors_fresh = false;
                 }
                 roots.ensureSize(compW / effDs, compH / effDs);
-                if (rootCamSeqActive && g_root_authored_camera)
-                    rootCamSeq.step(roots, g_show.phaseTime(), dt);
+                if (rootCamSeqActive && g_root_authored_camera) {
+                    // Timed to land the outro's fade-to-black exactly when
+                    // Timeline's own FaceAbsent+absent_hold edge would fire
+                    // (g_roots_absent_t is kept in lockstep with it above),
+                    // clamped so an outro authored longer than the hold
+                    // itself cannot outrun the phase change it is supposed
+                    // to hide.
+                    const float absentHold = g_show.hold(show::Phase::Roots, 0);
+                    const float effOutro = std::min(g_root_beats.outro_seconds,
+                                                    std::max(0.f, absentHold));
+                    const float outroStart = std::max(0.f, absentHold - effOutro);
+                    const bool wantOutro = (float)g_roots_absent_t >= outroStart;
+                    rootCamSeq.step(roots, g_show.phaseTime(), dt, g_root_beats, wantOutro);
+                    if (rootCamSeq.beat() == RootCameraSequence::Beat::Outro)
+                        g_screen_fade = rootCamSeq.outroFade();
+                }
+
+                // Fog only exists here -- the Transition scene has none -- so
+                // it fades in over beat 1 instead of snapping on, or the
+                // instant the cloth falls away would read as a pop. Flat at
+                // the phase's own intensity from beat 2 on.
+                {
+                    const float fadeSecs = std::max(1e-3f, g_root_beats.beat1_fog_fade_seconds);
+                    const float ft = std::clamp((float)(g_show.phaseTime() / fadeSecs), 0.f, 1.f);
+                    const float target = g_phase_fog_intensity[(int)show::Phase::Roots];
+                    roots.renderer().fog.visibility =
+                        kFogClearVisibility + (target - kFogClearVisibility) * ft;
+                }
+
                 roots.advance(dt);
                 sceneTex = roots.render(cb);   // encodes geometry + fog passes into cb
             }
@@ -4922,7 +5072,7 @@ int main(int argc, char** argv) {
 
                 ImGui::SameLine();
                 ImGui::TextDisabled("| %.1fs", g_show.phaseTime());
-                if (g_show.script()[cur].max_time > 0.f) {
+                if (g_show.maxTime(cur) > 0.f) {
                     ImGui::SameLine();
                     ImGui::ProgressBar(g_show.phaseProgress(), ImVec2(70, 0));
                 }
@@ -4978,9 +5128,8 @@ int main(int argc, char** argv) {
 
                 if (g_show_on) {
                     const show::Phase p = g_show.phase();
-                    const show::PhaseScript& ps = g_show.script()[p];
                     ImGui::Text("%s  %.1fs", show::PhaseName(p), g_show.phaseTime());
-                    if (ps.max_time > 0.f) {
+                    if (g_show.maxTime(p) > 0.f) {
                         ImGui::SameLine();
                         ImGui::ProgressBar(g_show.phaseProgress(), ImVec2(90, 0));
                     }
@@ -5011,11 +5160,6 @@ int main(int argc, char** argv) {
                                            "can only advance on time");
                     }
 
-                    const show::ActiveText& at = g_show.text();
-                    if (at.on)
-                        ImGui::TextDisabled("text: \"%s\" %.0f%%",
-                                            at.text.c_str(), at.reveal * 100.f);
-
                     ImGui::SeparatorText("force");
                     for (int i = 0; i < (int)show::Phase::Count; ++i) {
                         if (i) ImGui::SameLine();
@@ -5027,30 +5171,8 @@ int main(int argc, char** argv) {
                     ImGui::TextDisabled("(keys 1-4, space)");
                 }
 
-                ui::BeginHeader("script", /*default_open=*/false);
+                ui::BeginHeader("phase -> scene", /*default_open=*/false);
                 {
-                    static std::vector<std::string> shows = show::ListShows();
-                    if (ImGui::BeginCombo("file", g_show_name.c_str())) {
-                        for (const std::string& n : shows) {
-                            if (ImGui::Selectable(n.c_str(), n == g_show_name))
-                                ShowLoad(n);
-                        }
-                        ImGui::EndCombo();
-                    }
-                    // Reload is the install-day control: edit the file in an
-                    // editor, save, click. The phase that is running stays,
-                    // with its clock restarted, so retiming does not cut back
-                    // to the top of the piece.
-                    if (ImGui::Button("reload")) ShowLoad(g_show_name);
-                    ImGui::SameLine();
-                    if (ImGui::Button("rescan")) shows = show::ListShows();
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("%s", show::ShowDir().c_str());
-                    if (!g_show_err.empty())
-                        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s",
-                                           g_show_err.c_str());
-
-                    ImGui::SeparatorText("phase -> scene");
                     const char* kScenes[] = {"mirror", "roots", "transition",
                                              "fit view", "cam mask"};
                     for (int i = 0; i < (int)show::Phase::Count; ++i) {
@@ -5060,16 +5182,149 @@ int main(int argc, char** argv) {
                         ui::DeclareInt(show::PhaseName((show::Phase)i),
                                        &g_show_scene[i], 0, IM_ARRAYSIZE(kScenes) - 1);
                     }
+                }
+                ui::EndHeader();
 
-                    ImGui::SeparatorText("signals");
-                    ui::SliderFloat("fit converged under (px)", &g_show_fit_px,
+                // --- per-phase timing, grouped by phase --------------------
+                //
+                // One header per phase: its floor/ceiling, its edges'
+                // debounce (labelled by the graph's own key names, so the
+                // panel and Graph() can never name a knob differently), and
+                // its fog intensity. Roots additionally carries its beat
+                // schedule; Idle carries the fade-in that follows Roots'
+                // outro. Declared every frame regardless of which header is
+                // open, per PANEL.md -- setTiming/setHold are cheap and do
+                // not touch the running clock, so calling them from a value a
+                // preset just wrote is exactly as safe as calling them from a
+                // dragged slider.
+                for (int pi = 0; pi < (int)show::Phase::Count; ++pi) {
+                    const show::Phase p = (show::Phase)pi;
+                    const show::PhaseGraph& g = show::Graph(p);
+                    ui::Section sec(show::PhaseName(p));
+                    ui::BeginHeader(show::PhaseName(p), /*default_open=*/false);
+                    {
+                        ui::SliderFloat("min", &g_show_min[pi], 0.f, 120.f, "%.1fs");
+                        ui::SliderFloat("max (0 = no ceiling)", &g_show_max[pi],
+                                        0.f, 120.f, "%.1fs");
+                        for (int e = 0; e < g.edge_count; ++e)
+                            ui::SliderFloat(g.edges[e].key, &g_show_hold[pi][e],
+                                            0.f, 30.f, "%.1fs");
+                        ui::SliderFloat("fog intensity (visibility, world u)",
+                                        &g_phase_fog_intensity[pi], 8.f, 600.f, "%.0f",
+                                        ImGuiSliderFlags_Logarithmic);
+                        g_show.setTiming(p, g_show_min[pi], g_show_max[pi]);
+                        for (int e = 0; e < g.edge_count; ++e)
+                            g_show.setHold(p, e, g_show_hold[pi][e]);
+
+                        if (p == show::Phase::Idle) {
+                            ui::SliderFloat("intro fade-in (s)", &g_idle_intro_seconds,
+                                            0.f, 8.f, "%.1f");
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip(
+                                    "How long Idle takes to fade in from black on\n"
+                                    "entry -- every entry, not only the one after\n"
+                                    "Roots' outro, so a fresh boot fades in too.");
+                            }
+                        }
+
+                        if (p == show::Phase::Roots) {
+                            struct BeatUI { const char* label; float* dur; float* rmin;
+                                            float* rmax; };
+                            const BeatUI beats[] = {
+                                {"beat 1  face alone", &g_root_beats.beat1_seconds,
+                                 nullptr, nullptr},
+                                {"beat 2  masks deal", &g_root_beats.beat2_seconds,
+                                 &g_root_beats.beat2_rate_min, &g_root_beats.beat2_rate_max},
+                                {"beat 3  growth follows", &g_root_beats.beat3_seconds,
+                                 &g_root_beats.beat3_rate_min, &g_root_beats.beat3_rate_max},
+                            };
+                            for (const BeatUI& b : beats) {
+                                ui::Section bsec(b.label);
+                                ui::BeginHeader(b.label, false);
+                                {
+                                    ui::SliderFloat("duration", b.dur, 0.2f, 20.f, "%.1fs");
+                                    if (b.rmin) {
+                                        ui::SliderFloat("growth rate min (steps/s)", b.rmin,
+                                                        1.f, 2000.f, "%.0f",
+                                                        ImGuiSliderFlags_Logarithmic);
+                                        ui::SliderFloat("growth rate max (steps/s)", b.rmax,
+                                                        1.f, 2000.f, "%.0f",
+                                                        ImGuiSliderFlags_Logarithmic);
+                                    }
+                                }
+                                ui::EndHeader();
+                            }
+                            ui::PushSection("beat 4  meander");
+                            ui::BeginHeader("beat 4  meander", false);
+                            {
+                                ui::SliderFloat("dwell per waypoint (s)",
+                                                &g_root_beats.beat4_dwell_seconds,
+                                                0.5f, 20.f, "%.1f");
+                                ui::SliderFloat("camera speed min", &g_root_beats.beat4_cam_speed_min,
+                                                0.02f, 3.f, "%.2f");
+                                ui::SliderFloat("camera speed max", &g_root_beats.beat4_cam_speed_max,
+                                                0.02f, 3.f, "%.2f");
+                                ui::SliderFloat("max angular speed (rad/s)",
+                                                &g_root_beats.beat4_max_angular_speed,
+                                                0.05f, 4.f, "%.2f");
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "beat 4  meander"
+
+                            ui::PushSection("outro");
+                            ui::BeginHeader("outro  fade to black", false);
+                            {
+                                ui::SliderFloat("fade duration (s)", &g_root_beats.outro_seconds,
+                                                0.2f, 10.f, "%.1f");
+                                ui::SliderFloat("fog fade-in over beat 1 (s)",
+                                                &g_root_beats.beat1_fog_fade_seconds,
+                                                0.f, 20.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Fog only exists in the Roots renderer, so it\n"
+                                        "would otherwise pop on the instant the\n"
+                                        "transition's cloth falls away. This ramps\n"
+                                        "visibility from clear down to the phase's fog\n"
+                                        "intensity over the start of beat 1 instead.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "outro"
+                        }
+                    }
+                    ui::EndHeader();
+                }
+
+                ui::BeginHeader("signals", /*default_open=*/false);
+                {
+                    ui::SliderFloat("mesh fit residual, diagnostic (px)", &g_show_fit_px,
                                     1.f, 20.f, "%.1f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Mean landmark error of the identity fit. Above\n"
-                            "~8 px the mask is visibly a different face, so a\n"
-                            "fit that never gets under this should time out\n"
-                            "rather than be handed to the transition.");
+                            "Mean landmark error of the one-shot identity fit.\n"
+                            "Display only: the mesh fit no longer gates the\n"
+                            "transition, it only shapes the Roots-phase mesh --\n"
+                            "this just colours the \"(N px)\" readouts.");
+                    }
+                    ui::SliderFloat("fit score to convert", &g_show_fit_score,
+                                    0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "AudioParams::fit_level, 0..1. Above this, the\n"
+                            "texture counts as having actually captured the\n"
+                            "face -- it's the Fitting -> Transition gate,\n"
+                            "debounced by the fit_hold above. Tune against\n"
+                            "the live FitLevel readout on the fit panel.");
+                    }
+                    ui::SliderFloat("fit_level half scale (loss)", &g_show_fit_loss_half,
+                                    0.0005f, 0.05f, "%.4f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where AudioParams::fit_level reads 0.5. Deliberately\n"
+                            "looser than the converged-under threshold above --\n"
+                            "a fit already good enough to convert should sound\n"
+                            "close to resolved, not half there. Tune against the\n"
+                            "live \"loss\" and FitLevel readouts together.");
                     }
                     ui::SliderInt("cue CC", &g_show_cue_cc, 0, 127);
                     ui::SliderInt("phase CC", &g_show_phase_cc, 0, 127);
@@ -5209,13 +5464,19 @@ int main(int argc, char** argv) {
                             "it makes the coinciding harmonics beat.");
                     }
                     ui::SliderFloat("checkpoint hysteresis", &cc.hysteresis, 0.f, 0.15f, "%.2f");
-                    ui::SliderFloat("pluck from", &cc.pluck_high, -12.f, 36.f, "%.0f");
-                    ui::SliderFloat("pluck to", &cc.pluck_low, -24.f, 24.f, "%.0f");
+                    ui::SliderFloat("pluck base", &cc.pluck_high, -12.f, 36.f, "%.0f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Semitones from the key. The pluck travels between\n"
-                            "these continuously as the fit progresses, against\n"
-                            "the chord's stepped motion.");
+                            "Semitones from the key. Where the pluck is pinned,\n"
+                            "snapped to the nearest chord tone, at zero intensity.");
+                    }
+                    ui::SliderFloat("pluck intensity range", &cc.pluck_intensity_range,
+                                     0.f, 24.f, "%.0f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Semitones above the pluck base that full intensity\n"
+                            "(fit and movement, averaged) can push the pluck to,\n"
+                            "before the snap to the nearest chord tone.");
                     }
                 }
                 ui::EndHeader();
@@ -7198,12 +7459,12 @@ int main(int argc, char** argv) {
                 {
                     ui::Checkbox("fog on", &R.fog.enabled);
                     ui::ColorEdit3("fog color", R.fog.color);
-                    // Visibility rather than density, on a logarithmic slider:
-                    // the quantity lives in an exponent, so a linear control over
-                    // it spends nearly all its travel on "opaque".
-                    ImGui::SliderFloat("visibility (world u)", &R.fog.visibility,
-                                       8.0f, 600.0f, "%.0f",
-                                       ImGuiSliderFlags_Logarithmic);
+                    // Visibility itself is per-phase now (show/<phase>/fog
+                    // intensity, with beat 1's fade-in on top) -- see the
+                    // Roots render branch, which writes R.fog.visibility
+                    // every frame. Everything else about the look stays one
+                    // global Roots-preset value.
+                    ImGui::TextDisabled("visibility: set per phase, in the show tab");
                     ui::SliderFloat("height scale", &R.fog.heightScale, 2.0f, 120.0f);
                     ui::Checkbox("height ref follows target", &R.fog.heightRefAuto);
                     if (!R.fog.heightRefAuto)
@@ -8261,21 +8522,22 @@ int main(int argc, char** argv) {
 
                 const show::Phase ph = g_show.phase();
                 const show::PhaseGraph& g = show::Graph(ph);
-                const show::PhaseScript& ps = g_show.script()[ph];
+                const float ps_max = g_show.maxTime(ph);
+                const float ps_min = g_show.minTime(ph);
 
                 ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.f, 1.f), "%s",
                                    show::PhaseName(ph));
                 ImGui::SameLine();
                 ImGui::Text("%.1fs", g_show.phaseTime());
-                if (ps.max_time > 0.f) {
+                if (ps_max > 0.f) {
                     ImGui::SameLine();
-                    ImGui::TextDisabled("/ %.0fs", ps.max_time);
+                    ImGui::TextDisabled("/ %.0fs", ps_max);
                 }
                 ImGui::SameLine();
                 if (!g_show_on)          ImGui::TextDisabled("| held (show off)");
                 else if (g_show_paused)  ImGui::TextDisabled("| paused");
-                else if (g_show.phaseTime() < ps.min_time)
-                    ImGui::TextDisabled("| floor %.1fs", ps.min_time - g_show.phaseTime());
+                else if (g_show.phaseTime() < ps_min)
+                    ImGui::TextDisabled("| floor %.1fs", ps_min - g_show.phaseTime());
                 else ImGui::TextDisabled("| open");
                 if (g_view_override >= 0) {
                     ImGui::SameLine();
@@ -8402,24 +8664,12 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < tr.n; ++i)
                     for (int j = 0; j < mirror::RIPPLE_SRC_DIM; ++j) tr.src[i][j] = srcs[i][j];
             }
-            // The show owns *what* the text says and *when*, and nothing else:
-            // placement, size, font and the turbulence all stay whatever the
-            // panel and the preset set them to. So the script is a running
-            // order rather than a second, worse text editor, and a caption
-            // scheduled at 3s looks exactly like the one that was dialled in by
-            // hand -- the same font, in the same place, with the same warp.
             mirror::TextParams eff = textp;
-            if (g_show_on) {
-                const show::ActiveText& at = g_show.text();
-                eff.on = at.on;
-                eff.text = at.text;
-                eff.reveal = at.reveal;
-            }
             text.update(eff);
             const float texAsp =
                 sceneTex ? float(sceneTex.width) / float(sceneTex.height) : 1.f;
             const mirror::TextUniforms tu =
-                text.uniforms(eff, texAsp, tr, glfwGetTime());
+                text.uniforms(eff, texAsp, tr, glfwGetTime(), g_screen_fade);
 
             id<MTLRenderCommandEncoder> re = [cb renderCommandEncoderWithDescriptor:rpd];
             if (sceneTex) {
