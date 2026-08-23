@@ -4,10 +4,22 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <libfreenect2/logger.h>
 #include <libfreenect2/packet_pipeline.h>
 
 namespace {
 constexpr double kRateWindow = 0.5;  // seconds per rate-estimate window
+
+// libfreenect2's default logger is Info level, which makes the RGB decoder
+// (VTRgbPacketProcessor on macOS, TurboJpegRgbPacketProcessor elsewhere) print
+// an "avg. time / Hz" line every second. Warning still surfaces real problems
+// (USB stalls, decode failures) without the steady-state spam.
+struct QuietFreenect2Logger {
+  QuietFreenect2Logger() {
+    libfreenect2::setGlobalLogger(
+        libfreenect2::createConsoleLogger(libfreenect2::Logger::Warning));
+  }
+} g_quiet_freenect2_logger;
 }  // namespace
 
 double NowSeconds() {
