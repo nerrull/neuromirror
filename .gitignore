@@ -13,3 +13,8 @@ mirror_panel.ini
 # WwiseProject.
 audio/
 reaper_proj/
+
+# Instruments profiling sessions and crash dumps: large, machine-local, and
+# not something anyone downstream needs.
+WwiseProject/*.prof
+mirror_app/crashlogs/

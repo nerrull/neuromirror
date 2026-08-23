@@ -1,0 +1,13 @@
+[
+  {
+    "label": "mirror_app: Debug",
+    "build": {
+      "command": "cmake",
+      "args": ["--build", "build", "--target", "mirror_app"],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    },
+    "program": "$ZED_WORKTREE_ROOT/build/mirror_app/mirror_app",
+    "request": "launch",
+    "adapter": "CodeLLDB"
+  }
+]

@@ -32,4 +32,14 @@
     "cwd": "$ZED_WORKTREE_ROOT/kinect_v2_validate",
     "allow_concurrent_runs": false,
   },
+  {
+    "label": "mirror_app: Build",
+    "command": "cmake --build build --target mirror_app -j$(sysctl -n hw.logicalcpu)",
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+  {
+    "label": "mirror_app: Build & Run",
+    "command": "cmake --build build --target mirror_app -j$(sysctl -n hw.logicalcpu) && ./build/mirror_app/mirror_app",
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
 ]
