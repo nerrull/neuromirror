@@ -35,6 +35,27 @@ float NoteToHz(float midi) {
     return 440.f * std::pow(2.f, (midi - 69.f) / 12.f);
 }
 
+// Snap a linear target to the nearest actual chord tone of `stage`, searching
+// each voice's offset across the octave above and below (never wider -- see
+// the header on `Comb_Tuning`'s range). This is what keeps the pluck sounding
+// like it belongs to the chord instead of sliding across it on its own scale.
+float SnapToChordTone(float linear_target, float root, int stage) {
+    static const int kOctaveShift[3] = {-12, 0, 12};
+    float best = linear_target;
+    float best_dist = 1e9f;
+    for (int i = 0; i < kChordVoices; ++i) {
+        for (int shift : kOctaveShift) {
+            const float candidate = root + kOffsets[stage][i] + (float)shift;
+            const float dist = std::fabs(candidate - linear_target);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = candidate;
+            }
+        }
+    }
+    return best;
+}
+
 }  // namespace
 
 const float* Chord::StageOffsets(int stage) {
@@ -47,11 +68,11 @@ float Chord::StageThreshold(int stage) {
 
 void Chord::reset() {
     stage_ = 0;
-    primed_ = false;
+    stage_changed_ = false;
     for (int i = 0; i < kChordVoices; ++i) {
-        cur_[i] = cfg_.root + cfg_.octave + kOffsets[0][i];
-        v_.note[i] = cur_[i];
-        v_.target[i] = cur_[i];
+        const float tgt = cfg_.root + cfg_.octave + kOffsets[0][i];
+        v_.note[i] = tgt;
+        v_.target[i] = tgt;
     }
     v_.stage = 0;
     v_.pluck_note = cfg_.root + cfg_.pluck_high;
@@ -62,62 +83,45 @@ void Chord::update(float fit, float movement, float dt) {
     fit = std::clamp(fit, 0.f, 1.f);
     movement = std::clamp(movement, 0.f, 1.f);
     dt = std::max(0.f, dt);
-
-    // A change of key *or* of the pad's octave is a transposition, not a chord
-    // change: it should take every voice with it immediately rather than glide,
-    // or the pad spends four seconds arriving at a register nobody is listening
-    // for any more. Both are folded into one base, so moving either slider is
-    // the same operation.
-    const float base = cfg_.root + cfg_.octave;
-    if (!primed_) {
-        for (int i = 0; i < kChordVoices; ++i) cur_[i] = base + kOffsets[stage_][i];
-        primed_ = true;
-        base_at_prime_ = base;
-    } else if (base != base_at_prime_) {
-        const float shift = base - base_at_prime_;
-        for (int i = 0; i < kChordVoices; ++i) cur_[i] += shift;
-        base_at_prime_ = base;
-    }
+    (void)dt;  // no glide left to time -- Wwise's ChordStage transition owns it
 
     // --- the checkpoint -----------------------------------------------------
     //
     // Forward only. The fit going back down -- a blink, a turn, a dropped frame
     // -- must not un-resolve the harmony; see the header. Advancing more than
     // one stage in a frame is allowed and deliberate: a fit that lands all at
-    // once should land on the chord it earned, and the glide below is what
-    // keeps that from being a jump.
+    // once should land on the chord it earned, and Wwise's own transition is
+    // what keeps that from being a jump.
+    const int prev_stage = stage_;
     while (stage_ < kStages - 1 && fit >= kThresholds[stage_ + 1] + cfg_.hysteresis)
         ++stage_;
+    stage_changed_ = (stage_ != prev_stage);
 
-    // --- the glide ----------------------------------------------------------
+    // --- the voicing (diagnostics only) -------------------------------------
     //
-    // Exponential toward the target rather than a fixed-length ramp: it starts
-    // at the moment of the checkpoint, which is what makes the change audible,
-    // and it settles rather than arriving, which is what keeps four voices
-    // moving different intervals from sounding mechanically synchronised.
-    const float k = (cfg_.glide_secs > 1e-4f)
-        ? (1.f - std::exp(-dt / cfg_.glide_secs))
-        : 1.f;
-
+    // Stepped directly, no smoothing: the actual glide now happens inside
+    // Wwise's `ChordStage` state transition, driven by the `SetState` the
+    // caller posts on `stageChanged()`. `note`/`target` exist so the panel can
+    // still show the checkpoint's voicing at a glance.
+    const float base = cfg_.root + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
         const float tgt = base + kOffsets[stage_][i];
-        cur_[i] += (tgt - cur_[i]) * k;
         v_.target[i] = tgt;
-        // Detune added *after* the glide, never inside it: folded in before,
-        // the glide's time constant would smooth the movement signal into
-        // nothing, and the beating is supposed to answer the room immediately.
-        v_.note[i] = cur_[i] + kDetuneDir[i] * movement * cfg_.detune_cents / 100.f;
+        v_.note[i] = tgt + kDetuneDir[i] * movement * cfg_.detune_cents / 100.f;
     }
     v_.stage = stage_;
 
     // --- the pluck ----------------------------------------------------------
     //
-    // Continuous in the fit while the chord is stepped, and travelling downward
-    // while the chord opens upward. Both ends are offsets from the same root as
-    // the chord, so the comb is in tune with the pad by construction rather
-    // than by two numbers being kept in agreement by hand.
-    v_.pluck_note = cfg_.root + cfg_.pluck_high
-                  + (cfg_.pluck_low - cfg_.pluck_high) * fit;
+    // Continuous in the fit while the chord is stepped, and travelling upward
+    // while the chord opens -- both now above the pad's register, so the pluck
+    // never dips below the voice it is ringing against. The linear travel
+    // between pluck_high and pluck_low is then snapped to the nearest tone of
+    // the *current* chord: continuous motion, discrete landing, same as a
+    // player's hand finding the nearest note on a fretboard.
+    const float linear = cfg_.root + cfg_.pluck_high
+                        + (cfg_.pluck_low - cfg_.pluck_high) * fit;
+    v_.pluck_note = SnapToChordTone(linear, cfg_.root, stage_);
     v_.comb_hz = NoteToHz(v_.pluck_note);
 }
 

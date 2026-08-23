@@ -105,24 +105,41 @@ int main() {
         check(c.voicing().stage == 1, "clearing the boundary by the hysteresis advances");
     }
 
-    // --- the glide is a glide, not a jump -----------------------------------
+    // --- a checkpoint steps the voicing instantly, no glide left in code ----
+    //
+    // The glide is Wwise's `ChordStage` state transition now; what is left
+    // here is that `note`/`target` land on the checkpoint's exact voicing the
+    // same frame it fires, with nothing in between.
     {
         mirror::Chord c;
-        c.config().glide_secs = 4.f;
         // Straight to the last stage in one frame -- the worst case, a fit that
         // lands all at once.
         c.update(1.f, 0.f, kDt);
         check(c.voicing().stage == mirror::Chord::kStages - 1, "jumped to the last stage");
-        // Voice 3 has to travel 16 - 15 = 1 semitone and voice 1 seven - ten = -3.
-        // After one frame it must have moved, but nowhere near arrived.
-        const float moved = std::fabs(c.voicing().note[1] - (36.f + 10.f));
-        check(moved > 0.f, "the voice started moving on the frame the checkpoint fired");
-        check(moved < 0.2f, "and did not jump there");
-        // Roughly one time constant in, it should be about two thirds of the way.
+        const float* o = mirror::Chord::StageOffsets(mirror::Chord::kStages - 1);
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            check(std::fabs(c.voicing().note[i] - (36.f + o[i])) < 1e-3f,
+                  "the voicing lands on the checkpoint's exact target the same frame");
+        // Holding steady afterwards changes nothing -- there is no settling left.
         hold(c, 1.f, 0.f, 4.f);
-        const float travelled = (36.f + 10.f) - c.voicing().note[1];   // of 3 semitones
-        check(travelled > 1.6f && travelled < 2.4f,
-              "about 63% of the interval covered in one time constant");
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            check(std::fabs(c.voicing().note[i] - (36.f + o[i])) < 1e-3f,
+                  "and it stays exactly there, not just close");
+    }
+
+    // --- stageChanged() is the edge, not the level --------------------------
+    {
+        mirror::Chord c;
+        check(!c.stageChanged(), "no checkpoint has fired before the first update");
+        c.update(0.10f, 0.f, kDt);
+        check(!c.stageChanged() && c.stage() == 0,
+              "0.10 has not reached the first checkpoint yet");
+        c.update(0.30f, 0.f, kDt);
+        check(c.stageChanged() && c.stage() == 1,
+              "crossing 0.25 fires the checkpoint edge");
+        c.update(0.30f, 0.f, kDt);
+        check(!c.stageChanged() && c.stage() == 1,
+              "holding at the same fit does not re-fire it");
     }
 
     // --- detune: movement beats, stillness does not -------------------------
@@ -143,24 +160,47 @@ int main() {
         check(std::fabs(v.note[3] - still[3]) > 0.03f, "the detune is not smoothed away");
     }
 
-    // --- the pluck stays in tune with the pad -------------------------------
+    // --- the pluck stays in tune with the pad, and on a chord tone ----------
     {
         mirror::Chord c;
-        // At the very start it rings on the top of the opening voicing...
+        // At the very start it rings on the top of the opening voicing, an
+        // octave up -- 48 + 22 (stage 0's top voice) + 12 lands exactly on
+        // pluck_high (34), so the snap is a no-op here by construction.
         c.update(0.f, 0.f, kDt);
-        check(std::fabs(c.voicing().pluck_note - (48.f + 22.f)) < 1e-3f,
-              "the pluck starts on the chord's top note");
-        check(std::fabs(c.voicing().comb_hz - NoteToHz(48.f + 22.f)) < 0.1f,
+        check(std::fabs(c.voicing().pluck_note - (48.f + 34.f)) < 1e-3f,
+              "the pluck starts on the chord's top note, an octave up");
+        check(std::fabs(c.voicing().comb_hz - NoteToHz(48.f + 34.f)) < 0.1f,
               "and the comb frequency is that note in Hz");
-        // ...and at a converged fit, an octave under the root.
+        // ...and at a converged fit, the raw target (root + 10) snaps to the
+        // nearest tone of the resolved chord -- the root itself, an octave up.
         c.update(1.f, 0.f, kDt);
-        check(std::fabs(c.voicing().pluck_note - (48.f - 12.f)) < 1e-3f,
-              "the pluck ends a bass octave below the root");
+        check(std::fabs(c.voicing().pluck_note - (48.f + 12.f)) < 1e-3f,
+              "the pluck ends snapped to the root, an octave up, above the pad");
         // The comb's range must stay inside the game parameter's 20..2000 Hz.
         for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
             c.update(fit, 0.f, kDt);
             check(c.voicing().comb_hz > 20.f && c.voicing().comb_hz < 2000.f,
                   "the comb frequency stays inside the Comb_Tuning range");
+        }
+    }
+
+    // --- the pluck always lands on a real chord tone -------------------------
+    //
+    // At every fit, for whatever stage is current, pluck_note mod 12 must
+    // match one of that stage's offsets mod 12 -- the snap must never leave a
+    // note that is not actually in the chord.
+    {
+        mirror::Chord c;
+        for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
+            c.update(fit, 0.f, kDt);
+            const float* o = mirror::Chord::StageOffsets(c.voicing().stage);
+            const float pc = std::fmod(std::fmod(c.voicing().pluck_note, 12.f) + 12.f, 12.f);
+            bool matches = false;
+            for (int i = 0; i < mirror::kChordVoices; ++i) {
+                const float oc = std::fmod(std::fmod(o[i], 12.f) + 12.f, 12.f);
+                if (std::fabs(pc - oc) < 1e-2f) { matches = true; break; }
+            }
+            check(matches, "the pluck's pitch class is one of the chord's own");
         }
     }
 
@@ -178,7 +218,7 @@ int main() {
         for (int i = 0; i < mirror::kChordVoices; ++i)
             check(std::fabs(c.voicing().note[i] - (55.f - 12.f + o[i])) < 1e-3f,
                   "a key change moves every voice at once");
-        check(std::fabs(c.voicing().pluck_note - (55.f + 22.f)) < 1e-3f,
+        check(std::fabs(c.voicing().pluck_note - (55.f + 34.f)) < 1e-3f,
               "the pluck follows the key too");
     }
 

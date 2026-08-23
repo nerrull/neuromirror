@@ -223,18 +223,9 @@ void WwiseAudio::update(const AudioParams& p) {
         AK::SoundEngine::SetRTPCValue("Key", p.key);
     if (all || Moved(p.intensity, sent_.intensity))
         AK::SoundEngine::SetRTPCValue("Intensity", p.intensity);
+    if (all || Moved(p.transpose, sent_.transpose))
+        AK::SoundEngine::SetRTPCValue("Transpose", p.transpose);
 
-    // The chord, one game parameter per pad voice. Four parameters rather than
-    // one `Key` because a chord change moves the voices by different intervals
-    // -- the minor third rises a semitone while the seventh falls a whole tone
-    // -- which a single transposition cannot say. See chord.h.
-    static const char* const kPadNote[4] = {
-        "Pad_Note1", "Pad_Note2", "Pad_Note3", "Pad_Note4"
-    };
-    for (int i = 0; i < 4; ++i) {
-        if (all || Moved(p.pad_note[i], sent_.pad_note[i]))
-            AK::SoundEngine::SetRTPCValue(kPadNote[i], p.pad_note[i]);
-    }
     // The pluck's pitch, as the comb's centre frequency. Hz rather than a MIDI
     // note because that is the unit the comb's Frequency property is in, and
     // the note-to-Hz conversion is an exponential a two-point RTPC curve cannot

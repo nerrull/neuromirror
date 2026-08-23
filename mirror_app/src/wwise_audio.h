@@ -41,9 +41,10 @@
 //                                                 became pluck + pad
 //   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt   (the room)
 //           FitLevel, SceneProgress                             (the piece)
-//           Key, Intensity                                      (the operator)
-//           Pad_Note1..4, Comb_Tuning                           (the harmony)
-//   States  Phase = Idle | Fitting | Transition | Roots
+//           Key, Intensity, Transpose                            (the operator)
+//           Comb_Tuning                                          (the harmony)
+//   States  Phase      = Idle | Fitting | Transition | Roots
+//           ChordStage = Stage0..Stage4
 //
 // ## Without the SDK
 //
@@ -73,14 +74,14 @@ struct AudioParams {
     float scene_progress = 0.f; // 0..1 through the current phase
     float key = 48.f;           // MIDI note, 24..84 -- the piece's base pitch
     float intensity = 1.f;      // 0..1 master, on the main bus
+    float transpose = 0.f;      // semitones, -24..24 -- offsets every emitter
 
-    // The mirror phase's harmony, computed by `chord` (see chord.h). Four MIDI
-    // notes, one per pad voice, and the comb frequency the pluck rings at.
-    // Sent every frame like everything else: the glide *is* these numbers
-    // moving, so a frame that skipped them would be a frame the pad did not
-    // glide through.
-    float pad_note[4] = {48.f, 58.f, 63.f, 70.f};  // MIDI, 24..96
-    float comb_hz = 466.16f;                       // Hz, 20..2000
+    // The pluck's pitch, as the comb's centre frequency. The pad's own voicing
+    // no longer travels through here: it lives entirely in Wwise now, driven
+    // by `Key`, `Transpose`, and the `ChordStage` state (see chord.h and
+    // `setState`). Only the comb, which has no State Group of its own, still
+    // needs a value pushed every frame.
+    float comb_hz = 466.16f;    // Hz, 20..2000
 };
 
 class WwiseAudio {

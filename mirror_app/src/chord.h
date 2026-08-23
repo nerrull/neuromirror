@@ -6,38 +6,35 @@
 // checkpoints in between where one or two voices move and nothing else does.
 //
 // Deliberately no Wwise and no tracker: it takes a fit level, a movement
-// signal and a dt, and produces four MIDI notes and one comb frequency. That is
-// what lets `chord_test` walk a whole fit — including one that stalls, one that
-// runs backwards and one that is abandoned halfway — without a camera or a
-// sound engine, which is the only way to hear a bug in the voice leading before
-// an exhibition does.
+// signal and a dt, and produces a checkpoint. That is what lets `chord_test`
+// walk a whole fit — including one that stalls, one that runs backwards and
+// one that is abandoned halfway — without a camera or a sound engine, which is
+// the only way to hear a bug in the voice leading before an exhibition does.
 //
-// ## Why the chord is here and not in Wwise
+// ## Why the checkpoint is here and not in Wwise
 //
 // The obvious Wwise answer is a staircase RTPC curve per voice: FitLevel in,
-// pitch out, one step per checkpoint. It does work, and it was the first plan.
-// Two things killed it.
+// pitch out, one step per checkpoint. It does work for the voicing, and the
+// voicing itself now *is* that curve — a `ChordStage` State Group with one
+// Pitch override per voice per state, authored on the Sound objects directly.
+// What stays here, in code, is the one thing a State Group cannot do:
 //
 // **A curve cannot be monotonic.** `fit_level` is a smoothed residual, and a
 // residual goes back up — somebody blinks, turns, or the detector drops a frame
 // and the fit briefly gets worse. A curve follows that down, so the major
 // un-resolves and re-resolves while she stands still. Resolution is a thing
 // that happens *to* you once; it does not flicker. The stage here only ever
-// advances, and only resets when the room empties.
-//
-// **A curve's glide rate is the fit's rate.** With the pitch read straight off
-// a curve, a fit that jumps from 0.2 to 0.8 in one frame jumps the chord with
-// it. Gliding here, on a time constant, means the checkpoint is what *starts*
-// the movement and the movement always takes the same musical amount of time.
+// advances, and only resets when the room empties. `Chord` owns the gate
+// (monotonic + hysteresis) and posts `SetState("ChordStage", ...)`; Wwise owns
+// the glide between states (its own transition time/curve on the State Group)
+// and the per-voice Pitch table.
 //
 // ## Why four separate voices
 //
 // One Macro Oscillator is one pitch, so a chord is four of them, and a chord
 // *change* is four pitches moving by different intervals — which one `Key`
-// parameter cannot express. Hence `Pad_Note1..4` in the project, one per voice,
-// and hence the split of `Mirror_Pad` into a Blend Container of four. The glide
-// is the whole reason: the minor third sliding up to the major third is the
-// moment the piece turns, and it only reads as a turn if you can hear it move.
+// parameter cannot express. Hence one `ChordStage` Pitch override per voice,
+// and hence the split of `Mirror_Pad` into a Blend Container of four.
 
 #pragma once
 
@@ -50,11 +47,12 @@ inline constexpr int kChordVoices = 4;
 
 // What the pad and the pluck are told to do this frame.
 struct ChordVoicing {
-    // MIDI note per voice, glided and detuned -- exactly what goes to
-    // Pad_Note1..4. Fractional: the detune lives in the fraction.
+    // The stepped target per voice, undetuned -- diagnostics only. The actual
+    // voicing lives in Wwise's `ChordStage` Pitch table now, stepped instantly
+    // (no C++ glide any more; Wwise's own state transition owns the glide), so
+    // `note` and `target` always agree. Neither is sent to the bank -- kept
+    // for the panel and for the pluck's chord-tone snap below.
     float note[kChordVoices] = {36.f, 46.f, 51.f, 58.f};
-    // Where the glide is heading, undetuned. Diagnostics only -- the panel
-    // shows both so "is it gliding" is answerable at a glance.
     float target[kChordVoices] = {36.f, 46.f, 51.f, 58.f};
     // The comb's centre frequency, Hz -- the pluck's pitch. Derived from the
     // same root as the chord, so the two can never drift out of tune.
@@ -92,16 +90,17 @@ public:
         // Deliberately separate from `root` rather than folded into it: the
         // operator's key slider still means the piece's key, and the pluck
         // (which reads `root` directly) keeps its own register.
+        //
+        // `root=48, octave=-12, pluck_high=+22, pluck_low=-12` was the config
+        // that shipped before the voicing moved into Wwise -- spreads the final
+        // voicing C2 to E4. That is the register the transition/roots phase
+        // still wants; kept here as a reference. The mirror phase itself now
+        // uses a higher register, set on the Wwise side: see the `Key -> Pitch`
+        // curve on `Pad_V1..V4\Osc` in the WwiseProject.
         float octave = -12.f;
 
-        // Time constant of the glide between chords, seconds. Not a duration:
-        // the voice covers ~63% of the interval in this long and settles after,
-        // which is what a string section does and what a ramp does not.
-        float glide_secs = 4.f;
-
         // Full-scale movement detune, cents, applied +/- alternately up the
-        // stack. Small on purpose: at this depth neighbouring voices do not
-        // sound out of tune, their coinciding harmonics just start to beat.
+        // stack, to the diagnostic `note[]` only -- see its comment above.
         float detune_cents = 4.f;
 
         // How far past a checkpoint the fit must get before the chord advances.
@@ -109,14 +108,19 @@ public:
         // the chord back and forth every frame.
         float hysteresis = 0.03f;
 
-        // Where the pluck ends up, semitones from the root. An octave below, so
-        // it lands under the chord rather than doubling its bass voice.
-        float pluck_low = -12.f;
+        // Where the pluck ends up, semitones from the root, before the snap to
+        // the nearest chord tone (see Update's pluck section). Raised from the
+        // old -12: now that the pad itself sits an octave higher (see the
+        // `octave` comment above), a pluck ending under the chord's bass voice
+        // read as dipping below the pad rather than resolving into it.
+        float pluck_low = 10.f;
 
-        // Where the pluck starts: the top of the opening voicing. Kept separate
-        // from the stage table because the pluck's travel is continuous in the
-        // fit while the chord's is stepped -- that counter-motion is the point.
-        float pluck_high = 22.f;
+        // Where the pluck starts: the top of the opening voicing, before the
+        // snap. Kept separate from the stage table because the pluck's travel
+        // is continuous in the fit while the chord's is stepped -- that
+        // counter-motion is the point. Raised along with `pluck_low` so the
+        // pluck stays above the pad throughout instead of crossing it.
+        float pluck_high = 34.f;
     };
 
     Chord() { reset(); }
@@ -124,15 +128,20 @@ public:
     Config& config() { return cfg_; }
     const Config& config() const { return cfg_; }
 
-    // Back to the opening voicing, glide and all. Called when the room empties:
-    // the next person gets the piece unresolved, not wearing the last one's
-    // ending.
+    // Back to the opening checkpoint. Called when the room empties: the next
+    // person gets the piece unresolved, not wearing the last one's ending.
     void reset();
 
     // One frame. `fit` is 0..1 (AudioParams::fit_level), `movement` is 0..1.
     void update(float fit, float movement, float dt);
 
     const ChordVoicing& voicing() const { return v_; }
+
+    // The current checkpoint, and whether `update()` just advanced it -- lets
+    // the caller post SetState("ChordStage", ...) only on the edge, the same
+    // Moved()-gated pattern every other push to Wwise already uses.
+    int stage() const { return v_.stage; }
+    bool stageChanged() const { return stage_changed_; }
 
     // The stage table, for the panel and the test.
     static const float* StageOffsets(int stage);
@@ -141,13 +150,8 @@ public:
 private:
     Config cfg_;
     ChordVoicing v_;
-    int   stage_ = 0;
-    float cur_[kChordVoices] = {0.f, 0.f, 0.f, 0.f};  // glided, undetuned
-    bool  primed_ = false;
-    // The root+octave the glide state was last expressed against. A change to
-    // either is a transposition of where the voices already are, not a new
-    // glide target.
-    float base_at_prime_ = 36.f;
+    int  stage_ = 0;
+    bool stage_changed_ = false;
 };
 
 }  // namespace mirror
