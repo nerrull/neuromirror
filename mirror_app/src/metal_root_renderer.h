@@ -421,6 +421,13 @@ private:
     void buildTargets();
     void buildNoiseTexture();
     id<MTLBuffer> makeBuffer(const void* data, size_t bytes);
+    // Reuses `buf` (memcpy in place) when it is already >= bytes; otherwise
+    // replaces it with a fresh, larger buffer. `buf` and `capBytes` are a pair
+    // (capBytes tracks the buffer's real allocated size, not the live data
+    // size) -- see uploadSegments, which calls this every frame while the sim
+    // is growing and would otherwise reallocate all eight buffers per frame,
+    // every frame, for as long as growth runs.
+    void uploadBuffer(id<MTLBuffer>& buf, size_t& capBytes, const void* data, size_t bytes);
 
     id<MTLDevice> device_ = nil;
     int w_ = 0, h_ = 0;
@@ -467,6 +474,10 @@ private:
 
     id<MTLBuffer> nodeBuf_ = nil, segBuf_ = nil, radBuf_ = nil, distBuf_ = nil;
     id<MTLBuffer> grpBuf_ = nil, primBuf_ = nil, frameBuf_ = nil, auxBuf_ = nil;
+    // Allocated size of each of the above, in bytes -- may be larger than the
+    // buffer's live contents; see uploadBuffer().
+    size_t nodeCap_ = 0, segCap_ = 0, radCap_ = 0, distCap_ = 0;
+    size_t grpCap_ = 0, primCap_ = 0, frameCap_ = 0, auxCap_ = 0;
     int segCount_ = 0;
 
     // A cached, static capsule system. node/dist are per-node (shared across LODs);

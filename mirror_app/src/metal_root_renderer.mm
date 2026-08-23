@@ -375,6 +375,17 @@ id<MTLBuffer> MetalRootRenderer::makeBuffer(const void* data, size_t bytes) {
     return b;
 }
 
+void MetalRootRenderer::uploadBuffer(id<MTLBuffer>& buf, size_t& capBytes,
+                                     const void* data, size_t bytes) {
+    if (bytes == 0) bytes = 4;   // Metal rejects zero-length buffers
+    if (buf && capBytes >= bytes) {
+        if (data) memcpy(buf.contents, data, bytes);
+        return;
+    }
+    buf = makeBuffer(data, bytes);
+    capBytes = bytes;
+}
+
 void MetalRootRenderer::uploadSegments(const std::vector<float>& nodesXYZ,
                                        const std::vector<int>&   segs,
                                        const std::vector<float>& radii,
@@ -425,14 +436,19 @@ void MetalRootRenderer::uploadSegments(const std::vector<float>& nodesXYZ,
     }
     auxData.resize(segCap * 4, 0.f);
 
-    nodeBuf_  = makeBuffer(nodeData.data(),  nodeData.size()  * sizeof(float));
-    segBuf_   = makeBuffer(segData.data(),   segData.size()   * sizeof(int));
-    radBuf_   = makeBuffer(radData.data(),   radData.size()   * sizeof(float));
-    distBuf_  = makeBuffer(distData.data(),  distData.size()  * sizeof(float));
-    grpBuf_   = makeBuffer(grpData.data(),   grpData.size()   * sizeof(int));
-    primBuf_  = makeBuffer(primData.data(),  primData.size()  * sizeof(int));
-    frameBuf_ = makeBuffer(frameData.data(), frameData.size() * sizeof(float));
-    auxBuf_   = makeBuffer(auxData.data(),   auxData.size()   * sizeof(float));
+    // Reused in place when the existing buffer is already big enough --
+    // otherwise this reallocates all eight buffers every single frame for as
+    // long as the sim is growing (potentially tens of seconds, well past
+    // beat 3), which is what was driving RSS up continuously while sitting in
+    // the root scene.
+    uploadBuffer(nodeBuf_,  nodeCap_,  nodeData.data(),  nodeData.size()  * sizeof(float));
+    uploadBuffer(segBuf_,   segCap_,   segData.data(),   segData.size()   * sizeof(int));
+    uploadBuffer(radBuf_,   radCap_,   radData.data(),   radData.size()   * sizeof(float));
+    uploadBuffer(distBuf_,  distCap_,  distData.data(),  distData.size()  * sizeof(float));
+    uploadBuffer(grpBuf_,   grpCap_,   grpData.data(),   grpData.size()   * sizeof(int));
+    uploadBuffer(primBuf_,  primCap_,  primData.data(),  primData.size()  * sizeof(int));
+    uploadBuffer(frameBuf_, frameCap_, frameData.data(), frameData.size() * sizeof(float));
+    uploadBuffer(auxBuf_,   auxCap_,   auxData.data(),   auxData.size()   * sizeof(float));
 }
 
 void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {

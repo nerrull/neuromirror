@@ -97,7 +97,10 @@ public:
     // Read the planned layout, pick the anchor and framings, and lay out a
     // neighbour hood for beat 4.
     void begin(RootScene& roots, const RootBeatParams& bp) {
-        neighboursAdded_ = false;
+        // neighboursGen_ is deliberately NOT reset here -- it tracks whether
+        // the neighbour hood matches the plant's current generation, not
+        // whether this particular visit has built it yet; see its use in
+        // step()'s Meander branch.
         eyePrimed_       = false;
         waypoint_        = -1;   // forces a fresh camSpeed_ pick on waypoint 0
         beat_            = Beat::Face;
@@ -158,13 +161,7 @@ public:
         // watches -- it is the root coming out of the face they have been
         // looking at -- so it gets the whole of beat 2, and the remaining
         // hops share beat 3.
-        int simSteps = 0;
-        {
-            rootsim::SimParams probe = roots.simParams();
-            rootsim::RootSim sim;
-            if (sim.reset(probe))
-                while (!sim.done() && simSteps < 200000) { sim.step(); ++simSteps; }
-        }
+        const int simSteps = roots.growthStepEstimate();
         const int hops = std::max(1, (int)planned.size() - 1);
         const int firstHopSteps = std::max(1, simSteps / hops);
         const float b2s = std::max(1e-3f, bp.beat2_seconds);
@@ -274,12 +271,20 @@ public:
             roots.simPaused = false;
             roots.maskDeal = 1.f;
             roots.simStepsPerFrame = std::max(1, (int)std::lround(fastStepsPerSec_ * dt));
-            if (!neighboursAdded_) {
+            // addNeighbours() re-bakes nine full copies of the plant's current
+            // geometry into fresh GPU buffers -- expensive, and, since the
+            // plant itself does not change between visitors (regrow() is a
+            // manual operator action, not something a phase entry does), it
+            // would produce byte-for-byte the same nine instances every time.
+            // Gated on the plant's generation rather than "have I done this
+            // for this visitor yet" so it is only redone when the geometry it
+            // reads has actually changed.
+            if (neighboursGen_ != roots.growGeneration()) {
                 roots.addNeighbours((int)hood_.size(), structR_ * 0.85f, 99u, track_, az0_);
                 roots.renderer().instanceCullPx = 0.5f;
                 roots.renderer().lodBias = 0.5f;
                 roots.renderer().subpixelCull = false;
-                neighboursAdded_ = true;
+                neighboursGen_ = roots.growGeneration();
             }
 
             const auto& pm = roots.plannedMasks();
@@ -417,7 +422,7 @@ private:
     double slowStepsPerSec_ = 0.0, fastStepsPerSec_ = 0.0;
 
     std::vector<Neighbour> hood_;
-    bool neighboursAdded_ = false;
+    int neighboursGen_ = -1;   // plant generation the current instances were built for; see step()
 
     float track_[3]  = {0.f, 0.f, 0.f};
     float follow_[3] = {0.f, 0.f, 0.f};

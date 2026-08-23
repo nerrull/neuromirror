@@ -259,6 +259,20 @@ void RootScene::regrow() {
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
+    growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
+    ++growGeneration_;
+}
+
+int RootScene::growthStepEstimate() const {
+    if (growthStepEstimate_ >= 0) return growthStepEstimate_;
+    int simSteps = 0;
+    rootsim::SimParams probe = simParams_;
+    probe.paramDir = ROOTSIM_PARAM_DIR;
+    rootsim::RootSim sim;
+    if (sim.reset(probe))
+        while (!sim.done() && simSteps < 200000) { sim.step(); ++simSteps; }
+    growthStepEstimate_ = simSteps;
+    return simSteps;
 }
 
 bool RootScene::simDone() const { return sim_ && sim_->done(); }

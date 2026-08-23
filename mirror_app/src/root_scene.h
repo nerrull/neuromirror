@@ -142,6 +142,21 @@ public:
     // seed change go through the same door.
     rootsim::SimParams& simParams() { return simParams_; }
     const rootsim::SimParams& simParams() const { return simParams_; }
+    // How many sim steps a full growth run takes for the current simParams_,
+    // for pacing the live beat schedule against (see RootCameraSequence::
+    // begin()). Computed once by actually growing a throwaway sim to
+    // completion, then cached -- it used to be recomputed the same way on
+    // every entry into the Roots phase (i.e. every visitor), which meant
+    // paying for an entire extra full growth simulation, discarded, once per
+    // show loop. Invalidated by regrow(), the only thing that changes what
+    // this number should be.
+    int growthStepEstimate() const;
+    // Bumped by regrow(); the plant's geometry (and therefore anything
+    // derived from it, e.g. RootCameraSequence's neighbour hood) is only
+    // actually different after that. Callers that cache work keyed on the
+    // current growth can skip redoing it while this hasn't changed instead of
+    // redoing it on every visitor.
+    int growGeneration() const { return growGeneration_; }
     // Species available to the sim: display name and parameter file, mirroring
     // the reference GUI's list.
     static const std::vector<std::pair<std::string, std::string>>& species();
@@ -251,6 +266,8 @@ private:
     std::unique_ptr<MetalRootRenderer> rr_;
     std::unique_ptr<rootsim::RootSim>  sim_;
     rootsim::SimParams simParams_;
+    mutable int growthStepEstimate_ = -1;   // -1 = not computed yet; see growthStepEstimate()
+    int growGeneration_ = 0;                // see growGeneration()
     bool useSim_ = false;
     // Whether CPlantBox is usable at all. Distinct from useSim_, which also
     // goes false when a cached instance field takes over the renderer -- and
