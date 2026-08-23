@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <sys/stat.h>
 
@@ -48,6 +49,9 @@ struct Frame {
     // turned on in, so it is put back exactly where it was found.
     ImGuiWindow* skip_win = nullptr;
     bool skip_prev = false;
+    // Whether this frame pushed a real Dear ImGui ID scope, so PopSection
+    // pops exactly what PushSection/PushHeaderFrame pushed.
+    bool pushed_id = false;
 };
 
 struct State {
@@ -62,6 +66,12 @@ struct State {
     std::string learn;
     int declared_this_frame = 0;
     bool show_retired = false;
+
+    // --- collision diagnostics, for --uitest / --paneltest only ---
+    bool probe_ids = false;
+    std::multimap<ImGuiID, std::string> id_seen;         // cleared every frame
+    std::set<std::string> declared_this_frame_paths;     // cleared every frame
+    std::vector<std::string> duplicate_paths;            // cleared every frame
 };
 
 State& S() {
@@ -81,10 +91,21 @@ const BankRule kBankRules[] = {
     {"screen",        Bank::Machine},
     {"camera mask",   Bank::Machine},
     {"sensor",        Bank::Machine},
-    // Face tracking straddles the line -- acquisition is rig, the identity fit
-    // is artistic. The section declares Machine and calls SetBank(Look) around
-    // the part that travels.
+    // Rig facts: which physical source feeds the pipeline, how many frames to
+    // believe a face, how long to hold one, the tracker's working resolution.
+    // Everything about dialling in *this person's* fit lives in "fit" instead.
     {"face tracking", Bank::Machine},
+
+    // How the face fit is set up: crop, head mode, head smoothing, the
+    // identity capture -- what it crops to, how it holds a moving head, what
+    // happens outside the crop. Its own bank and its own tab because it is
+    // neither a rig fact nor part of any scene's look.
+    {"fit",           Bank::Fit},
+
+    // Preview/diagnostic overlays: not a rig fact, not part of dialling in the
+    // fit, not part of any scene's look -- just what lets you see what the
+    // camera and the network are doing.
+    {"debug",         Bank::Debug},
 
     {"show",          Bank::Show},
     // The piece's audio, not the room's: which key it is in and how loud it
@@ -167,7 +188,13 @@ bool DrawHere() {
 
 // Bookkeeping every declaration does, whether or not it draws: claim the entry,
 // stamp it with the bank and retirement of the section it is in, and count it.
-Entry& Declare(const std::string& path, Kind k, float lo, float hi) {
+//
+// `raw_label` is the literal label passed to the underlying ImGui call (before
+// CleanLabel strips any "##..." suffix for the registry path) -- passed only
+// by controls that actually draw something with a live ImGui ID; nullptr from
+// DeclareInt/Float/String, which draw nothing of their own to collide.
+Entry& Declare(const std::string& path, Kind k, float lo, float hi,
+               const char* raw_label = nullptr) {
     Entry& e = S().params[path];
     e.kind = k; e.lo = lo; e.hi = hi;
     e.live = true;
@@ -176,6 +203,10 @@ Entry& Declare(const std::string& path, Kind k, float lo, float hi) {
         e.retired = S().stack.back().retired;
     }
     if (e.bank == Bank::Unassigned) S().unassigned.push_back(path);
+    if (!S().declared_this_frame_paths.insert(path).second)
+        S().duplicate_paths.push_back(path);
+    if (S().probe_ids && raw_label)
+        S().id_seen.insert({ImGui::GetID(raw_label), path});
     ++S().declared_this_frame;
     return e;
 }
@@ -340,6 +371,7 @@ const char* BankName(Bank b) {
         case Bank::Look:       return "look";
         case Bank::Mirror:     return "mirror";
         case Bank::Roots:      return "roots";
+        case Bank::Debug:      return "debug";
         case Bank::Count:      return "all";
     }
     return "?";
@@ -353,6 +385,7 @@ const char* BankExt(Bank b) {
         case Bank::Look:    return ".look";
         case Bank::Mirror:  return ".mirror";
         case Bank::Roots:   return ".roots";
+        case Bank::Debug:   return ".debug";
         default:            return ".set";
     }
 }
@@ -390,10 +423,10 @@ bool SaveBank(Bank b, const std::string& path, std::string& err) {
     return WriteFile(path, b, err);
 }
 
-bool LoadBank(Bank, const std::string& path, std::string& err) {
+bool LoadBank(Bank, const std::string& path, std::string& err, bool merge) {
     // The bank a key belongs to is decided by the code that declares it, not by
     // the file it arrived in, so loading is the same operation either way.
-    return ReadFile(path, err);
+    return ReadFile(path, err, merge);
 }
 
 // --- defaults ---------------------------------------------------------------
@@ -500,6 +533,12 @@ void PushSection(const char* name) {
     if (!f.name.empty()) {
         const Bank rule = BankForSection(f.name);
         if (rule != Bank::Unassigned) f.bank = rule;
+        // A real ID scope, so two controls with the same literal label under
+        // different sections never collide on Dear ImGui's own widget ID --
+        // the registry path already tells them apart, but nothing used to
+        // tell ImGui the same thing.
+        ImGui::PushID(f.name.c_str());
+        f.pushed_id = true;
     }
     S().stack.push_back(std::move(f));
 }
@@ -532,6 +571,7 @@ void ReleaseSkip(Frame& f) {
 void PopSection() {
     if (S().stack.empty()) return;
     ReleaseSkip(S().stack.back());
+    if (S().stack.back().pushed_id) ImGui::PopID();
     S().stack.pop_back();
 }
 
@@ -558,6 +598,14 @@ void PushHeaderFrame(const char* label, const char* path_name,
             h.c_str(), default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
     }
     PushSection(path_name);
+    if (path_name[0] == '\0') {
+        // BeginHeader/BeginRetired: no section, so PushSection above pushed
+        // no ID. Push one keyed on the header's own label instead, so its
+        // body still gets a real ID scope (BeginGroup already got one from
+        // PushSection, since its path_name == name).
+        ImGui::PushID(label);
+        S().stack.back().pushed_id = true;
+    }
     S().stack.back().visible = shown && open;
     if (retired) S().stack.back().retired = true;
     ApplySkip(S().stack.back());
@@ -596,9 +644,12 @@ void EndTabBar() {
     PopSection();
 }
 
-void BeginTab(const char* label) {
+void BeginTab(const char* label, bool force_select) {
     const bool parent_draws = DrawHere();
-    const bool selected = parent_draws && ImGui::BeginTabItem(label);
+    const ImGuiTabItemFlags flags =
+        force_select ? ImGuiTabItemFlags_SetSelected : 0;
+    const bool selected = parent_draws &&
+        ImGui::BeginTabItem(label, nullptr, flags);
     PushSection("");
     S().stack.back().visible = selected;
     ApplySkip(S().stack.back());
@@ -628,8 +679,101 @@ const std::vector<std::string>& UnassignedParams() { return S().unassigned; }
 void BeginFrame() {
     S().declared_this_frame = 0;
     S().unassigned.clear();
+    S().id_seen.clear();
+    S().declared_this_frame_paths.clear();
+    S().duplicate_paths.clear();
     for (auto& kv : S().params) kv.second.live = false;
     while (!S().stack.empty()) PopSection();
+}
+
+// --- diagnostics for tests ---------------------------------------------------
+
+void SetIdCollisionProbe(bool on) { S().probe_ids = on; }
+
+std::vector<IdCollision> IdCollisions() {
+    std::vector<IdCollision> out;
+    auto it = S().id_seen.begin();
+    while (it != S().id_seen.end()) {
+        auto range_end = S().id_seen.upper_bound(it->first);
+        IdCollision c; c.id = it->first;
+        for (auto j = it; j != range_end; ++j) c.paths.push_back(j->second);
+        std::sort(c.paths.begin(), c.paths.end());
+        c.paths.erase(std::unique(c.paths.begin(), c.paths.end()), c.paths.end());
+        if (c.paths.size() > 1) out.push_back(std::move(c));
+        it = range_end;
+    }
+    return out;
+}
+
+const std::vector<std::string>& DuplicatePaths() { return S().duplicate_paths; }
+
+// --- testing ------------------------------------------------------------
+
+void StageValue(const std::string& path, const std::string& literal) {
+    S().loaded[path] = literal;
+}
+
+std::vector<ParamSnapshot> Snapshot() {
+    std::vector<ParamSnapshot> out;
+    for (const auto& kv : S().params) {
+        const Entry& e = kv.second;
+        if (!e.live || e.retired) continue;
+        std::ostringstream ss;
+        WriteValue(ss, e);
+        out.push_back({kv.first, e.bank, ss.str()});
+    }
+    return out;
+}
+
+std::string MutatedLiteral(const std::string& path) {
+    auto it = S().params.find(path);
+    if (it == S().params.end()) return "";
+    const Entry& e = it->second;
+    std::ostringstream ss;
+    switch (e.kind) {
+        case Kind::Float: {
+            const float mid = 0.5f * (e.lo + e.hi);
+            ss << (e.f[0] < mid ? e.hi : e.lo);
+            break;
+        }
+        case Kind::Int: {
+            const int lo = (int)e.lo, hi = (int)e.hi;
+            const int mid = (lo + hi) / 2;
+            ss << (e.i < mid ? hi : lo);
+            break;
+        }
+        case Kind::Bool:
+            ss << (e.b ? 0 : 1);
+            break;
+        case Kind::Color3:
+            // Rotate the channels rather than negate: every colour value is
+            // already a valid colour, so a real "different value" bug (e.g.
+            // channels swapped on load) still shows up as a mismatch.
+            ss << e.f[1] << ' ' << e.f[2] << ' ' << e.f[0];
+            break;
+        case Kind::Str:
+            ss << e.s << "_rt";
+            break;
+    }
+    return ss.str();
+}
+
+bool LiteralsMatch(const std::string& path, const std::string& want,
+                   const std::string& got) {
+    auto it = S().params.find(path);
+    const Kind k = (it != S().params.end()) ? it->second.kind : Kind::Str;
+    if (k == Kind::Float) {
+        return std::fabs(atof(want.c_str()) - atof(got.c_str())) < 1e-4;
+    }
+    if (k == Kind::Color3) {
+        std::istringstream sw(want), sg(got);
+        float w0 = 0, w1 = 0, w2 = 0, g0 = 0, g1 = 0, g2 = 0;
+        sw >> w0 >> w1 >> w2;
+        sg >> g0 >> g1 >> g2;
+        return std::fabs(w0 - g0) < 1e-4f && std::fabs(w1 - g1) < 1e-4f &&
+               std::fabs(w2 - g2) < 1e-4f;
+    }
+    return want == got;
 }
 
 // --- controls ---------------------------------------------------------------
@@ -637,7 +781,7 @@ void BeginFrame() {
 bool SliderFloat(const char* label, float* v, float lo, float hi,
                  const char* fmt, ImGuiSliderFlags flags) {
     const std::string path = PathFor(CleanLabel(label).c_str());
-    Entry& e = Declare(path, Kind::Float, lo, hi);
+    Entry& e = Declare(path, Kind::Float, lo, hi, label);
     bool changed = TakePending(path, [&](const std::string& s, bool norm) {
         const float x = (float)atof(s.c_str());
         *v = norm ? lo + (hi - lo) * x : x;
@@ -653,7 +797,7 @@ bool SliderFloat(const char* label, float* v, float lo, float hi,
 
 bool SliderInt(const char* label, int* v, int lo, int hi, const char* fmt) {
     const std::string path = PathFor(CleanLabel(label).c_str());
-    Entry& e = Declare(path, Kind::Int, (float)lo, (float)hi);
+    Entry& e = Declare(path, Kind::Int, (float)lo, (float)hi, label);
     bool changed = TakePending(path, [&](const std::string& s, bool norm) {
         if (norm) *v = lo + (int)((hi - lo) * (float)atof(s.c_str()) + 0.5f);
         else      *v = atoi(s.c_str());
@@ -669,7 +813,7 @@ bool SliderInt(const char* label, int* v, int lo, int hi, const char* fmt) {
 
 bool Checkbox(const char* label, bool* v) {
     const std::string path = PathFor(CleanLabel(label).c_str());
-    Entry& e = Declare(path, Kind::Bool, 0.f, 1.f);
+    Entry& e = Declare(path, Kind::Bool, 0.f, 1.f, label);
     bool changed = TakePending(path, [&](const std::string& s, bool norm) {
         // A knob past halfway is on. A button sending 0/127 works the same way,
         // which is what most controllers send for a toggle.
@@ -687,7 +831,7 @@ bool Checkbox(const char* label, bool* v) {
 bool DragFloat(const char* label, float* v, float speed, float lo, float hi,
                const char* fmt) {
     const std::string path = PathFor(CleanLabel(label).c_str());
-    Entry& e = Declare(path, Kind::Float, lo, hi);
+    Entry& e = Declare(path, Kind::Float, lo, hi, label);
     bool changed = TakePending(path, [&](const std::string& s, bool norm) {
         const float x = (float)atof(s.c_str());
         *v = norm ? lo + (hi - lo) * x : x;
@@ -703,7 +847,7 @@ bool DragFloat(const char* label, float* v, float speed, float lo, float hi,
 
 bool ColorEdit3(const char* label, float* rgb) {
     const std::string path = PathFor(CleanLabel(label).c_str());
-    Entry& e = Declare(path, Kind::Color3, 0.f, 1.f);
+    Entry& e = Declare(path, Kind::Color3, 0.f, 1.f, label);
     // Not MIDI-bindable: one CC cannot say three numbers, and quietly binding
     // it to the red channel would be worse than not offering it.
     auto lp = S().loaded.find(path);

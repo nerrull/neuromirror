@@ -74,7 +74,10 @@ namespace ui {
 //   Mirror    the ripple scene. Many presets; this is the one that gets dialled
 //             in per performance.
 //   Roots     the root scene.
-enum class Bank { Unassigned = 0, Machine, Fit, Show, Look, Mirror, Roots, Count };
+//   Debug     preview/diagnostic overlays: not a rig fact, not part of dialling
+//             in the fit, not part of any scene's look -- just what lets you
+//             see what the camera and the network are doing while you work.
+enum class Bank { Unassigned = 0, Machine, Fit, Show, Look, Mirror, Roots, Debug, Count };
 
 const char* BankName(Bank b);
 // Directory a bank's presets live in, and the extension they carry. Machine is
@@ -87,7 +90,12 @@ std::vector<std::string> ListBank(Bank b);
 // Save/load one bank. Load applies by name at the next declaration -- which,
 // given the above, is this frame for everything.
 bool SaveBank(Bank b, const std::string& path, std::string& err);
-bool LoadBank(Bank b, const std::string& path, std::string& err);
+// `merge` keeps whatever is already staged instead of replacing it -- needed
+// when loading several banks before either has had a frame to declare and
+// consume its values (LoadBankDefaults does this at startup; --roundtriptest
+// does the same thing on demand).
+bool LoadBank(Bank b, const std::string& path, std::string& err,
+             bool merge = false);
 
 // How many parameters a bank holds, and how many of those are retired.
 int BankCount(Bank b, int* retired_out = nullptr);
@@ -163,7 +171,9 @@ void EndGate();
 // the tabs inside it go on declaring exactly as they do when unselected.
 void BeginTabBar(const char* id);
 void EndTabBar();
-void BeginTab(const char* label);
+// `force_select` is for --paneltest only: forces this tab open regardless of
+// what the user last clicked, so a headless run can visit every tab in turn.
+void BeginTab(const char* label, bool force_select = false);
 void EndTab();
 
 // Everything declared until the matching EndRetired is kept working -- old
@@ -254,5 +264,48 @@ int DeclaredCount();
 const std::vector<std::string>& UnassignedParams();
 // Call once per frame, before the panel is built.
 void BeginFrame();
+
+// --- diagnostics for tests ---------------------------------------------------
+// Off by default; used only by --uitest and --paneltest. Turns on recording,
+// during Declare(), of every control's real, currently-in-scope Dear ImGui ID
+// against its registry path. Two different paths landing on the same live ID
+// -- two controls sharing drag/hover/focus state even though the registry
+// already tells them apart -- shows up as a size-2+ bucket here instead of
+// relying on a human to notice two widgets on top of each other.
+void SetIdCollisionProbe(bool on);
+struct IdCollision { ImGuiID id; std::vector<std::string> paths; };
+std::vector<IdCollision> IdCollisions();     // buckets with >1 distinct path
+
+// Two different call sites landing on the same registry *path* in one frame
+// -- a different bug class from the above: one saved key silently shared by
+// two controls, the second's Declare() overwriting the first's bank/retired
+// cache with no diagnostic. Cleared every BeginFrame().
+const std::vector<std::string>& DuplicatePaths();
+
+// --- testing ------------------------------------------------------------
+// Stage a raw literal value for `path`, exactly as a loaded preset line
+// would -- applied the next time that control declares itself. Used only by
+// --roundtriptest; the normal path into the pending table is a preset file.
+void StageValue(const std::string& path, const std::string& literal);
+
+// Every live, non-retired parameter's path/bank/current-value, as the literal
+// a preset file would carry. Used by --roundtriptest to snapshot the registry
+// before and after a save/load cycle without a hand-written visitor per bank.
+struct ParamSnapshot { std::string path; Bank bank; std::string literal; };
+std::vector<ParamSnapshot> Snapshot();
+
+// A literal for `path` guaranteed different from its current value, valid
+// for its kind and range (float/int move to whichever bound is farther,
+// bool negates, a colour's channels rotate, a string gets a marker
+// appended). What --roundtriptest stages before a save, so a load that
+// silently no-ops cannot pass by coincidence.
+std::string MutatedLiteral(const std::string& path);
+
+// Whether `want` and `got` are the same value for `path`'s kind -- exact for
+// int/bool/string, a small epsilon for float/colour, since a value staged as
+// text and re-read after a save/load round trip is not guaranteed to come
+// back as the identical string.
+bool LiteralsMatch(const std::string& path, const std::string& want,
+                   const std::string& got);
 
 }  // namespace ui

@@ -106,8 +106,32 @@ Most of the panel is `PushSection("z")` with a header reading `"z latent"` —
 the section is the name, the header is the presentation. Use `BeginHeader`, not
 `BeginGroup`, unless you actually want the extra level.
 
-`##id` suffixes are stripped from labels before naming, and `/` in a label is
-rewritten to `-`, so a cosmetic id change cannot invalidate a preset.
+`PushSection` and a header-without-a-section (`BeginHeader`/`BeginRetired`)
+also push a real Dear ImGui `PushID` scope, keyed on the section name or the
+header's label. This is a second, independent thing from the path table
+above: it decides which two *widgets* are the same widget for drag/hover/
+focus purposes, and it is why two controls with the same literal label —
+"size" under `fit` and "size" under `debug`, say — never collide on screen
+even though nothing about their registry paths would have told Dear ImGui
+that. `BeginGate` gets no such scope (it wraps pure visibility, often one
+widget), and a tab gets one for free from `ImGui::BeginTabItem` itself.
+
+`##id` suffixes are stripped from labels before naming, so a cosmetic id change
+cannot invalidate a preset. Two characters are rewritten to `-`, because the
+file format has already spent both:
+
+* `/` — the section separator. `"z rate /s"` would otherwise register as a
+  parameter `s` inside a section `z rate `.
+* `=` — the key/value separator. This one silently broke saving: a label like
+  `"sine layers (0 = tanh only)"` wrote a key the reader split at the `=`
+  *inside the name*, so it came back as `mirror/network/sine layers (0` with the
+  value `tanh only) = 1` and no control ever claimed it. Every label that
+  documented its zero case in parentheses was quietly unsaveable.
+
+Rewriting at declaration rather than escaping in the writer keeps the invariant
+on the side that can enforce it: a name can never contain a separator, so the
+reader's split-at-the-first-`=` is correct by construction. **Renaming a label
+renames the key**, so migrate existing preset files when you change one.
 
 ---
 
@@ -120,6 +144,8 @@ The mapping from a top-level section name to a bank is `kBankRules` in
 | bank | file | what belongs here |
 |---|---|---|
 | `machine` | `presets/machine.machine` | the room, not the piece: sensor, screen, camera mask, MIDI map. Auto-loaded at startup, never carried to another venue. |
+| `fit` | `presets/fit/*.fit` | how the face fit is set up: crop, head mode, head smoothing, identity capture, crop/feed grid-steps-lr, what happens outside the crop. |
+| `debug` | `presets/debug/*.debug` | preview/diagnostic overlays: the camera-preview picture-in-picture, the network-input preview. Not calibration, not part of dialling in the fit — just what lets you see the pipeline while you work. |
 | `show` | `presets/show/*.show` | the running order — what plays and when. |
 | `look` | `presets/look/*.look` | composition that outlives one scene: text overlay, transition. |
 | `mirror` | `presets/mirror/*.mirror` | the ripple scene. Many presets; dialled in per performance. |
@@ -129,8 +155,45 @@ The point of the split is that a mirror preset must be safe to load in any
 venue — which it only is if it *cannot* carry the camera calibration. Only the
 machine bank holds the MIDI map, for the same reason.
 
-A section matching no rule lands in `Unassigned`, and is reported loudly in the
-panel's **save** tab and at the top of `SETTINGS.md`. That is deliberate: the
+`fit` and `debug` each have their own tab, sitting right after `machine` in
+the tab order. Fit's controls used to be drawn across two other tabs' pages
+(the mirror tab, and a "face tracking" header on the machine tab) because
+that was where you stood while dialling them in — but they were therefore
+*saved* into `mirror` and `machine`, and loading a ripple preset to change
+the palette silently rewrote whether the fit was tracking the camera at all.
+Where a control is edited and where it is saved now line up at the tab
+level for every bank, without exception; `SetBank` remains for the rare case
+where a page is host to a handful of controls that belong to a different
+bank entirely (see `mirror/mirror image` and the `roots` render-scale
+controls, both Machine-bank facts drawn on the `machine` tab).
+
+## Defaults: what a bank comes up in
+
+`presets/defaults` names one preset per bank, and they are loaded at startup
+right after `machine`:
+
+```
+fit = mirror_bw
+mirror = mirror_bw
+debug = debug
+```
+
+Set it from **\<bank's own tab\> → make default**, at the bottom of the tab
+that edits that bank. The installation boots with nobody in front of it, so
+a bank with no default comes up on the values compiled into its struct
+however carefully it was dialled in the night before. A default naming a
+preset that is no longer on disk is reported at startup and in the
+**settings** tab, and skipped.
+
+Loading several banks in one go **merges** into the staging table rather than
+replacing it (`ReadFile(..., merge)` / `LoadBank(..., merge=true)`), since
+values are not applied until each control next declares itself — without
+that the last file read would discard every earlier one before a single
+control had seen it. `LoadBankDefaults` does this at startup; `--roundtriptest`
+does the same thing on demand.
+
+A section matching no rule lands in `Unassigned`, and is reported loudly in
+the **settings** tab and at the top of `SETTINGS.md`. That is deliberate: the
 failure to design against is not a setting in the wrong bank, it is a setting
 nobody ever decided about.
 
@@ -141,9 +204,37 @@ level without meaning to — and it must not decide classification.
 Where a section straddles the line, override for part of it:
 
 ```cpp
-ui::PushSection("identity");
-ui::SetBank(ui::Bank::Look);   // acquisition is rig; the fit's shape travels
+ui::PushSection("mirror");
+ui::SetBank(ui::Bank::Machine);   // which way round the sensor is mounted --
+                                   // drawn on the mirror tab once, but a rig
+                                   // fact, not part of the mirror's look
 ```
+
+---
+
+## Diagnostics
+
+Two overlays and a readout, all independent of the panel so they work with the
+UI hidden:
+
+| what | where | shows |
+|---|---|---|
+| camera overlay | debug tab | the raw frame, mirroring and all: *is a frame arriving* |
+| network input | debug tab | the exact buffer handed to the optimiser: *what became of it* |
+| readout (F2) | show tab, or F2 | phase, what it is waiting for, fit state |
+
+The two overlays answer consecutive questions and are worth reading in that
+order. The camera overlay is upstream of everything; the network input is
+downstream of the feed crop, the mirroring, the fit grid, the head placement and
+the mask — every one of which is a way for the input to be wrong while each
+stage looks fine on its own. It is drawn from `live_rgb` itself rather than
+rebuilt from the same inputs, because a preview reconstructed from the parts
+would agree with a broken pipeline.
+
+Bright pixels in the network input are the ones the mask supervises; the dimmed
+surround is what the network is free to invent. Under a face crop the surround
+is *last frame's* — the resample is bounded to the mask's bounding box, drawn as
+a blue rect — because nothing reads it. That emptiness is intended.
 
 ---
 
@@ -157,7 +248,13 @@ value must not cut the projection to the root scene — what plays comes from th
 phase navigator above the tabs, which goes through `show::Timeline` for
 everything.
 
-Order: `show · machine · look · mirror · roots · midi · save`.
+Order: `show · machine · fit · debug · look · mirror · roots · midi · settings`.
+
+`fit` and `debug` sit right after `machine` rather than after `look`/`mirror`:
+fitting a face is fundamentally a camera/face-tracking workflow, so it is one
+tab-click from the rig settings (acquire, hold-on-loss, source, tracker px)
+that stay on `machine`. `settings` (not `save`) is what is left once every
+bank has its own save/load block on its own tab — see "A tab" below.
 
 Tabs are siblings, never nested. `ui::BeginTab` must be matched by `ui::EndTab`
 before the next `BeginTab` — a tab bar opened inside a tab item draws its pages
@@ -179,9 +276,9 @@ ui::EndRetired();
 ```
 
 Retired controls still declare, still load and still save — they are only
-hidden, behind **show retired controls** in the save tab. Nothing in an existing
-preset breaks. To remove one for good, delete the declaration *and* the key from
-every preset file.
+hidden, behind **show retired controls** in the settings tab. Nothing in an
+existing preset breaks. To remove one for good, delete the declaration *and*
+the key from every preset file.
 
 ---
 
@@ -194,8 +291,11 @@ you are willing to keep. If it sits behind a condition, use `BeginGate`.
 `kBankRules`** — otherwise it lands in `Unassigned`. Regenerate `SETTINGS.md`
 and check the unassigned list is empty.
 
-**A tab.** `ui::BeginTab` / `EndTab` as a sibling of the others. Confirm
-`--paneltest` still passes: content height is how a stray tab is caught.
+**A tab.** `ui::BeginTab` / `EndTab` as a sibling of the others. Add
+`DrawBankSaveUI(ui::Bank::X)` at the bottom of the tab's body if it owns a
+bank — never in the `settings` tab, which stays cross-cutting only. Confirm
+`--paneltest` still passes: content height is how a stray tab is caught, now
+across every tab, not just whichever one is selected by default.
 
 **A field on a params struct that should be saved.** Declare it. For
 `rootsim::SimParams`, `visitSimParams` in `root_sim.h` is the canonical field
@@ -211,9 +311,10 @@ mistakes this document is about.
 
 | command | what it checks |
 |---|---|
-| `--uitest` | headless. Declaration, MIDI routing, preset round-trip, and specifically that a folded header and a shut gate still take a loaded value and still save under their own names. |
-| `--paneltest` | the real panel. That **only the visible tab drew** — measured as content height. One page is ~171px; all of them was 2341px. |
+| `--uitest` | headless. Declaration, MIDI routing, preset round-trip, that a folded header and a shut gate still take a loaded value and still save under their own names, and that two same-labelled controls in different sections never share a live Dear ImGui ID. |
+| `--paneltest` | the real panel, every tab in turn. That **only the visited tab drew** — measured as content height — and that it declared no live-ID or registry-path collision. |
 | `--presettest` | the real panel. Every `SimParams` field round-trips through the roots bank. |
+| `--roundtriptest` | the real panel. Every live parameter, in every bank — not one struct — is mutated, saved, corrupted, reloaded, and checked back against the mutated value, one failure line per parameter that did not. |
 | `--settings-doc` | writes `SETTINGS.md` and reports anything unassigned. |
 
 `--paneltest` exists because the counts cannot see this class of bug. When the
@@ -221,4 +322,14 @@ raw ImGui calls in hidden bodies were escaping, the panel declared **289
 parameters — exactly the right number** — and drew all seven pages on top of
 each other. Declaring correctly while drawing when it should not looks perfectly
 healthy from the inside, which is why the check is a measurement of the output
-rather than a count of the inputs.
+rather than a count of the inputs. Cycling every tab (not just whichever one
+is selected by default) is what catches an ID or registry-path collision that
+only exists once two particular controls share a tab — the reported bug (two
+sliders both labelled "size") was invisible to a single-tab check since the
+two were on different tabs before this reorganisation.
+
+`--roundtriptest` exists because `--presettest` only ever proved one struct,
+`rootsim::SimParams`, agrees with the roots bank — a real gap for the other
+~185 parameters outside it. It walks `ui::Snapshot()`/`ui::StageValue()`
+directly, so it covers whatever the panel currently declares without a
+hand-written visitor to keep in step.
