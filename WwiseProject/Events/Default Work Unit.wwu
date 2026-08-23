@@ -119,6 +119,20 @@
 						<Event Name="Play_Pad" ID="{2A6418A0-7228-4B93-9179-700C35ED56C0}">
 							<ChildrenList>
 								<Action Name="Play_Pad" ID="{A1C1F2C6-BE4B-4120-A64A-D75E8097A854}" ShortID="541553850">
+									<PropertyList>
+										<Property Name="Inclusion" Type="bool">
+											<ValueList>
+												<Value>False</Value>
+											</ValueList>
+										</Property>
+									</PropertyList>
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Mirror_Pad_01" ID="{D7A321AE-E850-461B-B276-A56ABFBAF300}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+								<Action Name="" ID="{3310AA29-0681-464E-A83F-4AC2F59937BF}" ShortID="1066767523">
 									<ReferenceList>
 										<Reference Name="Target">
 											<ObjectRef Name="Mirror_Pad" ID="{47742E5A-FD72-4752-A9A3-D503FD4AE589}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
