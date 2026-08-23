@@ -1,3 +1,4 @@
 # which preset each bank comes up in
-fit = mirror_bw
-mirror = colour_out
+fit = new_color
+mirror = mirror_bw
+debug = debug
