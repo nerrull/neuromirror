@@ -55,5 +55,5 @@ p mirror/ripple phase = 0
 p mirror/ripple speed = 1.2
 p mirror/soft centers (anti-alias) = 1
 p mirror/z/z amplitude = 1
-p mirror/z/z auto-rate -s = 0.019
+p mirror/z/z auto-rate -s = -0.108
 p mirror/z/z step size = 0.1

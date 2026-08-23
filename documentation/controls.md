@@ -346,7 +346,7 @@ something — during training they are signal the target does not contain.
 
 | control | what it does |
 |---|---|
-| `open sensor` | only one process can hold the Kinect |
+| `open sensor` | the sensor is opened at startup; this reopens it after a `close sensor` or a failed start. Only one process can hold the Kinect — run with `--no-sensor` to leave it for `kinect_v2_demo` |
 | `track live feed` | arm the camera feed. **Does not start training** — it turns on the frame pull, the tracker and the preview |
 | `fit` / `stop` | start (or restart) training. With the feed armed, on the frame the camera is showing right now, cropped the way the per-frame retarget will crop it |
 | `clear fit` | back to the generated field |
