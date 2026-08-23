@@ -568,6 +568,11 @@ bool TransitionScene::Impl::adoptFilm(const std::vector<unsigned char>& rgb, int
                                                           width:W height:H mipmapped:NO];
     td.usage = MTLTextureUsageShaderRead;
     td.storageMode = MTLStorageModeShared;
+    // This file is not ARC (see mirror_app/CMakeLists.txt), so `new...` hands
+    // back a texture this scope owns -- the previous lock's texture has to be
+    // released here or it is simply overwritten, one full-frame GPU texture
+    // leaked per visitor that gets far enough to lock.
+    if (savedPondTex) [savedPondTex release];
     savedPondTex = [ctx.device() newTextureWithDescriptor:td];
     if (!savedPondTex) return false;
     [savedPondTex replaceRegion:MTLRegionMake2D(0, 0, W, H)
@@ -599,6 +604,7 @@ void TransitionScene::unlockFit() {
     I.capturePending = false;
     I.lockedUV.clear();
     I.modelVertsAtLock.clear();
+    if (I.savedPondTex) [I.savedPondTex release];
     I.savedPondTex = nil;
     I.filmRGB8.clear();
     I.filmW = I.filmH = 0;

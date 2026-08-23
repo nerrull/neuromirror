@@ -2445,6 +2445,39 @@ int main(int argc, char** argv) {
                     g_show.go();
             }
 
+            // Leak-hunt harness: MIRROR_AUTOCYCLE=<seconds> forces a phase edge
+            // on a timer, so a per-visitor leak shows up in a soak test without
+            // a body in front of the Kinect. Round-robins Idle->Fitting->
+            // Transition->Roots by default; MIRROR_AUTOCYCLE_PAIR=<a>,<b> (phase
+            // indices, show::Phase order) bounces between just two phases
+            // instead, which is how the transition_scene.mm savedPondTex leak
+            // was isolated -- Idle<->Transition reproduced the growth alone
+            // while Idle<->Fitting and Roots<->Idle did not.
+            if (const char* e = getenv("MIRROR_AUTOCYCLE")) {
+                static const double period = std::max(0.05, atof(e));
+                static int pair_a = -1, pair_b = -1;
+                static bool pair_checked = false;
+                if (!pair_checked) {
+                    pair_checked = true;
+                    if (const char* p = getenv("MIRROR_AUTOCYCLE_PAIR"))
+                        sscanf(p, "%d,%d", &pair_a, &pair_b);
+                }
+                static double t_next = 0.0;
+                if (nowT >= t_next) {
+                    t_next = nowT + period;
+                    show::Phase next;
+                    if (pair_a >= 0) {
+                        next = (g_show.phase() == (show::Phase)pair_a)
+                            ? (show::Phase)pair_b : (show::Phase)pair_a;
+                    } else {
+                        next = (show::Phase)(((int)g_show.phase() + 1) %
+                                             (int)show::Phase::Count);
+                    }
+                    g_show.goTo(next);
+                    printf("autocycle: -> %s\n", show::PhaseName(next));
+                }
+            }
+
             // F1 takes the UI away and brings it back. Not guarded on the show
             // being on -- it is wanted most when someone is looking at the
             // piece -- but text input keeps the key, so a caption being typed
