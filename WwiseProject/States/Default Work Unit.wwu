@@ -12,6 +12,27 @@
 						<State Name="Roots" ID="{B91EF538-B3AC-4A69-A485-40A53E1E8169}"/>
 					</ChildrenList>
 				</StateGroup>
+				<StateGroup Name="ChordStage" ID="{5ECEE3AA-DA74-4350-9AF5-167A1F408160}">
+					<PropertyList>
+						<Property Name="DefaultTransitionTime" Type="Real64" Value="2"/>
+					</PropertyList>
+					<ChildrenList>
+						<State Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+						<State Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+						<State Name="Stage1" ID="{566D122D-F8E8-40B3-8C61-71541E9F8A8F}"/>
+						<State Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
+						<State Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
+						<State Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+					</ChildrenList>
+					<TransitionList>
+						<Transition>
+							<StartState Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+							<EndState Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+							<Time>2</Time>
+							<IsShared>false</IsShared>
+						</Transition>
+					</TransitionList>
+				</StateGroup>
 			</ChildrenList>
 		</WorkUnit>
 	</States>

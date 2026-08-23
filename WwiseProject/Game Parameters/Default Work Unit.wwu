@@ -96,6 +96,13 @@
 						<Property Name="Min" Type="Real64" Value="12"/>
 					</PropertyList>
 				</GameParameter>
+				<GameParameter Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="24"/>
+						<Property Name="Min" Type="Real64" Value="-24"/>
+					</PropertyList>
+				</GameParameter>
 			</ChildrenList>
 		</WorkUnit>
 	</GameParameters>

@@ -342,7 +342,7 @@
 									<PropertyList>
 										<Property Name="Volume" Type="Real64">
 											<ValueList>
-												<Value>-19</Value>
+												<Value>-1</Value>
 											</ValueList>
 										</Property>
 									</PropertyList>
@@ -386,41 +386,41 @@
 											<ChildrenList>
 												<SourcePlugin Name="Osc" ID="{20F4622C-215D-4938-B0DD-684C55E71FFB}" ShortID="461796737" PluginName="Macro Oscillator" CompanyID="64" PluginID="31225">
 													<PropertyList>
-														<Property Name="AuxMix" Type="Real32" Value="0.25"/>
-														<Property Name="Decay" Type="Real32" Value="0.95"/>
+														<Property Name="AuxMix" Type="Real32" Value="0.06"/>
+														<Property Name="Decay" Type="Real32" Value="0.86"/>
 														<Property Name="Duration" Type="Real32" Value="60"/>
-														<Property Name="Harmonics" Type="Real32" Value="0.45"/>
+														<Property Name="Engine" Type="int32" Value="8"/>
 														<Property Name="Level" Type="Real32" Value="-6"/>
-														<Property Name="LpgColour" Type="Real32" Value="0.75"/>
-														<Property Name="Morph" Type="Real32" Value="0.35"/>
+														<Property Name="LpgColour" Type="Real32" Value="0.71"/>
+														<Property Name="Morph" Type="Real32" Value="0.51"/>
 														<Property Name="Pitch" Type="Real32" Value="48"/>
 														<Property Name="Triggered" Type="bool" Value="False"/>
 													</PropertyList>
 													<ObjectLists>
 														<ObjectList Name="RTPC">
-															<RTPC Name="" ID="{0A2973EC-EAD5-4548-A0FD-C6122D3FA236}" ShortID="246243556">
+															<RTPC Name="" ID="{9AADA84C-F5CA-405C-980F-7E1E26462743}" ShortID="322306870">
 																<PropertyList>
 																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
 																</PropertyList>
 																<ReferenceList>
 																	<Reference Name="ControlInput">
-																		<ObjectRef Name="Pad_Note1" ID="{1BE0A14E-84DB-4397-B701-50E7918F984E}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
 																	</Reference>
 																	<Reference Name="Curve">
 																		<Custom>
-																			<Curve Name="" ID="{F20191AF-FFDB-43C4-820A-97FEFAD4396A}">
+																			<Curve Name="" ID="{B0BAD3A7-5190-4945-99C8-4702B566A2ED}">
 																				<PropertyList>
 																					<Property Name="Flags" Type="int32" Value="1"/>
 																				</PropertyList>
 																				<PointList>
 																					<Point>
-																						<XPos>12</XPos>
-																						<YPos>12</YPos>
+																						<XPos>24</XPos>
+																						<YPos>24</YPos>
 																						<Flags>5</Flags>
 																					</Point>
 																					<Point>
-																						<XPos>96</XPos>
-																						<YPos>96</YPos>
+																						<XPos>84</XPos>
+																						<YPos>84</YPos>
 																						<Flags>37</Flags>
 																					</Point>
 																				</PointList>
@@ -434,6 +434,75 @@
 													<Language>SFX</Language>
 												</SourcePlugin>
 											</ChildrenList>
+											<StateInfo>
+												<StateGroupList>
+													<StateGroupInfo>
+														<StateGroupRef Name="ChordStage" ID="{5ECEE3AA-DA74-4350-9AF5-167A1F408160}"/>
+														<StateGroupInfo Name="" ID="{6AFFD750-3796-4EB4-A2C3-F04392D20A7E}" ShortID="123828458"/>
+													</StateGroupInfo>
+												</StateGroupList>
+												<CustomStateList>
+													<CustomState>
+														<StateRef Name="Stage1" ID="{566D122D-F8E8-40B3-8C61-71541E9F8A8F}"/>
+														<CustomState Name="" ID="{059459DF-2A45-480C-ACE8-2AAB8F988107}" ShortID="518629737"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+														<CustomState Name="" ID="{25F0A087-24C1-4D56-A163-F663E2054B96}" ShortID="576237432"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
+														<CustomState Name="" ID="{7E89B3D9-A055-482A-836A-067E14B38F6B}" ShortID="735403947"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
+														<CustomState Name="" ID="{B764E90C-B2F9-40C8-8EEB-3A522135E142}" ShortID="526827000"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+														<CustomState Name="" ID="{7CC0CF1D-238F-4048-A89E-B4F8B4E0F28A}" ShortID="440022183"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+														<CustomState Name="" ID="{C6B6A067-88F8-4458-95A1-D9CC4DB8B292}" ShortID="134179035"/>
+													</CustomState>
+												</CustomStateList>
+											</StateInfo>
+											<ObjectLists>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{6D157A79-94D5-4C36-8F51-A4DCDA4DC7A9}" ShortID="839351551">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Pitch"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{BBB1D713-19B2-423A-B808-AAAD8EC8C057}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="65537"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>-24</XPos>
+																				<YPos>-2400</YPos>
+																				<Flags>5</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>24</XPos>
+																				<YPos>2400</YPos>
+																				<Flags>37</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
 											<ActiveSourceList>
 												<ActiveSource Name="Osc" ID="{20F4622C-215D-4938-B0DD-684C55E71FFB}" Platform="Linked"/>
 											</ActiveSourceList>
@@ -469,38 +538,39 @@
 														<Property Name="AuxMix" Type="Real32" Value="0.25"/>
 														<Property Name="Decay" Type="Real32" Value="0.95"/>
 														<Property Name="Duration" Type="Real32" Value="60"/>
-														<Property Name="Harmonics" Type="Real32" Value="0.45"/>
+														<Property Name="Engine" Type="int32" Value="8"/>
 														<Property Name="Level" Type="Real32" Value="-6"/>
 														<Property Name="LpgColour" Type="Real32" Value="0.75"/>
-														<Property Name="Morph" Type="Real32" Value="0.35"/>
+														<Property Name="Morph" Type="Real32" Value="0.52"/>
 														<Property Name="Pitch" Type="Real32" Value="48"/>
+														<Property Name="Timbre" Type="Real32" Value="0.49"/>
 														<Property Name="Triggered" Type="bool" Value="False"/>
 													</PropertyList>
 													<ObjectLists>
 														<ObjectList Name="RTPC">
-															<RTPC Name="" ID="{1759966E-B9CE-4B20-8DEB-E47F1F1E105F}" ShortID="228425691">
+															<RTPC Name="" ID="{360F34E7-868C-45F1-A35B-F0FD4D9E60FC}" ShortID="712406096">
 																<PropertyList>
 																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
 																</PropertyList>
 																<ReferenceList>
 																	<Reference Name="ControlInput">
-																		<ObjectRef Name="Pad_Note2" ID="{CF4398C5-0924-4635-9277-6B1F1E6DED40}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
 																	</Reference>
 																	<Reference Name="Curve">
 																		<Custom>
-																			<Curve Name="" ID="{B73F4829-771C-4D23-8B44-7388E3AB0802}">
+																			<Curve Name="" ID="{5AF5633A-CF2E-4E4D-A114-7799656BC0EA}">
 																				<PropertyList>
 																					<Property Name="Flags" Type="int32" Value="1"/>
 																				</PropertyList>
 																				<PointList>
 																					<Point>
-																						<XPos>12</XPos>
-																						<YPos>12</YPos>
+																						<XPos>24</XPos>
+																						<YPos>24</YPos>
 																						<Flags>5</Flags>
 																					</Point>
 																					<Point>
-																						<XPos>96</XPos>
-																						<YPos>96</YPos>
+																						<XPos>84</XPos>
+																						<YPos>84</YPos>
 																						<Flags>37</Flags>
 																					</Point>
 																				</PointList>
@@ -514,6 +584,95 @@
 													<Language>SFX</Language>
 												</SourcePlugin>
 											</ChildrenList>
+											<StateInfo>
+												<StateGroupList>
+													<StateGroupInfo>
+														<StateGroupRef Name="ChordStage" ID="{5ECEE3AA-DA74-4350-9AF5-167A1F408160}"/>
+														<StateGroupInfo Name="" ID="{2497D143-AFB0-4676-B81A-F4C22DC7E9BE}" ShortID="976963667"/>
+													</StateGroupInfo>
+												</StateGroupList>
+												<CustomStateList>
+													<CustomState>
+														<StateRef Name="Stage1" ID="{566D122D-F8E8-40B3-8C61-71541E9F8A8F}"/>
+														<CustomState Name="" ID="{8378C05C-B1C6-4994-BE2F-7B0D29024902}" ShortID="747597970">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1000"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+														<CustomState Name="" ID="{F7F8E9AF-12E9-46AC-966E-99D07FADE69D}" ShortID="115877871"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
+														<CustomState Name="" ID="{9AC51E9C-F516-4538-A50D-778190379CAF}" ShortID="702620109">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="700"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
+														<CustomState Name="" ID="{9BFBC76F-14F5-46DF-AFCF-33BFEA19109C}" ShortID="741949141">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="700"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+														<CustomState Name="" ID="{2250AFED-9AA1-4F80-AADB-3DD5ED0415BB}" ShortID="593919466">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="700"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+														<CustomState Name="" ID="{A33B1DA8-5FE2-4503-ABA6-450E5DE515B3}" ShortID="42424553">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1000"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+												</CustomStateList>
+											</StateInfo>
+											<ObjectLists>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{BC79EAAB-7896-4CB8-B2D1-61F618C33D3B}" ShortID="385886619">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Pitch"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{F9D06E88-0937-4010-850F-51554569E5C7}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="65537"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>-24</XPos>
+																				<YPos>-2400</YPos>
+																				<Flags>5</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>24</XPos>
+																				<YPos>2400</YPos>
+																				<Flags>37</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
 											<ActiveSourceList>
 												<ActiveSource Name="Osc" ID="{F692D39B-8C72-4A3C-90E3-80341E587CC5}" Platform="Linked"/>
 											</ActiveSourceList>
@@ -549,7 +708,7 @@
 														<Property Name="AuxMix" Type="Real32" Value="0.25"/>
 														<Property Name="Decay" Type="Real32" Value="0.95"/>
 														<Property Name="Duration" Type="Real32" Value="60"/>
-														<Property Name="Harmonics" Type="Real32" Value="0.45"/>
+														<Property Name="Engine" Type="int32" Value="8"/>
 														<Property Name="Level" Type="Real32" Value="-6"/>
 														<Property Name="LpgColour" Type="Real32" Value="0.75"/>
 														<Property Name="Morph" Type="Real32" Value="0.35"/>
@@ -558,29 +717,29 @@
 													</PropertyList>
 													<ObjectLists>
 														<ObjectList Name="RTPC">
-															<RTPC Name="" ID="{2979151A-B5C3-4A22-AD20-10940B62A55B}" ShortID="73516300">
+															<RTPC Name="" ID="{53FCA01B-E1D3-4316-B156-25196E974345}" ShortID="271535002">
 																<PropertyList>
 																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
 																</PropertyList>
 																<ReferenceList>
 																	<Reference Name="ControlInput">
-																		<ObjectRef Name="Pad_Note3" ID="{DD9EAEAA-AA22-405E-8ADA-D08DEC284DC6}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
 																	</Reference>
 																	<Reference Name="Curve">
 																		<Custom>
-																			<Curve Name="" ID="{21EC7167-689C-49FF-B20F-959947AED0D0}">
+																			<Curve Name="" ID="{C9774A6D-E33A-44E0-9683-BDD44A620A9E}">
 																				<PropertyList>
 																					<Property Name="Flags" Type="int32" Value="1"/>
 																				</PropertyList>
 																				<PointList>
 																					<Point>
-																						<XPos>12</XPos>
-																						<YPos>12</YPos>
+																						<XPos>24</XPos>
+																						<YPos>24</YPos>
 																						<Flags>5</Flags>
 																					</Point>
 																					<Point>
-																						<XPos>96</XPos>
-																						<YPos>96</YPos>
+																						<XPos>84</XPos>
+																						<YPos>84</YPos>
 																						<Flags>37</Flags>
 																					</Point>
 																				</PointList>
@@ -594,6 +753,95 @@
 													<Language>SFX</Language>
 												</SourcePlugin>
 											</ChildrenList>
+											<StateInfo>
+												<StateGroupList>
+													<StateGroupInfo>
+														<StateGroupRef Name="ChordStage" ID="{5ECEE3AA-DA74-4350-9AF5-167A1F408160}"/>
+														<StateGroupInfo Name="" ID="{5A6FF790-6A2A-4E5C-A877-0DBE6D18F12B}" ShortID="206256265"/>
+													</StateGroupInfo>
+												</StateGroupList>
+												<CustomStateList>
+													<CustomState>
+														<StateRef Name="Stage1" ID="{566D122D-F8E8-40B3-8C61-71541E9F8A8F}"/>
+														<CustomState Name="" ID="{3AAB0EFE-EA62-4D4B-84EB-7DF2F8E0FA5C}" ShortID="780425269">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1500"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+														<CustomState Name="" ID="{505CA8D8-F3EB-4E61-902C-7F8F912281F7}" ShortID="27503037"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
+														<CustomState Name="" ID="{E5C1B9C2-272C-453D-9A1E-6626909373EB}" ShortID="14178767">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1500"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
+														<CustomState Name="" ID="{AF746ACE-DAC7-46B7-82D0-BD6DFFEBDAB0}" ShortID="150678922">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+														<CustomState Name="" ID="{98E4D8F8-7BBE-4A5F-BAD7-172C15FE20D1}" ShortID="840286600">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+														<CustomState Name="" ID="{29017DAD-E17A-4270-A934-C53E356D40B8}" ShortID="832408480">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1500"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+												</CustomStateList>
+											</StateInfo>
+											<ObjectLists>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{17CDEE58-1CBF-4E8C-A8A3-4232B873D99F}" ShortID="394163651">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Pitch"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{518288FC-E233-402B-A5A4-138BF2F3FE13}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="65537"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>-24</XPos>
+																				<YPos>-2400</YPos>
+																				<Flags>5</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>24</XPos>
+																				<YPos>2400</YPos>
+																				<Flags>37</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
 											<ActiveSourceList>
 												<ActiveSource Name="Osc" ID="{867694FA-BC72-4654-975A-E218E7F78A11}" Platform="Linked"/>
 											</ActiveSourceList>
@@ -629,7 +877,7 @@
 														<Property Name="AuxMix" Type="Real32" Value="0.25"/>
 														<Property Name="Decay" Type="Real32" Value="0.95"/>
 														<Property Name="Duration" Type="Real32" Value="60"/>
-														<Property Name="Harmonics" Type="Real32" Value="0.45"/>
+														<Property Name="Engine" Type="int32" Value="8"/>
 														<Property Name="Level" Type="Real32" Value="-6"/>
 														<Property Name="LpgColour" Type="Real32" Value="0.75"/>
 														<Property Name="Morph" Type="Real32" Value="0.35"/>
@@ -638,29 +886,29 @@
 													</PropertyList>
 													<ObjectLists>
 														<ObjectList Name="RTPC">
-															<RTPC Name="" ID="{1426E5C2-19C4-4F73-952B-F0610A43A086}" ShortID="13206801">
+															<RTPC Name="" ID="{D55C9213-A9ED-485B-9598-C29AE01C813A}" ShortID="736931490">
 																<PropertyList>
 																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
 																</PropertyList>
 																<ReferenceList>
 																	<Reference Name="ControlInput">
-																		<ObjectRef Name="Pad_Note4" ID="{8616C173-0151-4612-9110-079EDE7B6110}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
 																	</Reference>
 																	<Reference Name="Curve">
 																		<Custom>
-																			<Curve Name="" ID="{26504E35-CE1A-4D86-BCCD-D6CE86E014A4}">
+																			<Curve Name="" ID="{7784A192-B5B0-426F-8044-D6EBE0AF3987}">
 																				<PropertyList>
 																					<Property Name="Flags" Type="int32" Value="1"/>
 																				</PropertyList>
 																				<PointList>
 																					<Point>
-																						<XPos>12</XPos>
-																						<YPos>12</YPos>
+																						<XPos>24</XPos>
+																						<YPos>24</YPos>
 																						<Flags>5</Flags>
 																					</Point>
 																					<Point>
-																						<XPos>96</XPos>
-																						<YPos>96</YPos>
+																						<XPos>84</XPos>
+																						<YPos>84</YPos>
 																						<Flags>37</Flags>
 																					</Point>
 																				</PointList>
@@ -674,6 +922,95 @@
 													<Language>SFX</Language>
 												</SourcePlugin>
 											</ChildrenList>
+											<StateInfo>
+												<StateGroupList>
+													<StateGroupInfo>
+														<StateGroupRef Name="ChordStage" ID="{5ECEE3AA-DA74-4350-9AF5-167A1F408160}"/>
+														<StateGroupInfo Name="" ID="{D402CE20-D243-4A14-A932-3A31F98C01F4}" ShortID="702233480"/>
+													</StateGroupInfo>
+												</StateGroupList>
+												<CustomStateList>
+													<CustomState>
+														<StateRef Name="Stage1" ID="{566D122D-F8E8-40B3-8C61-71541E9F8A8F}"/>
+														<CustomState Name="" ID="{0BD9F382-904E-4458-845F-31A6D00063A2}" ShortID="913661259">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="None" ID="{59D5E5F9-A4FF-41A5-A117-879A670D54F7}"/>
+														<CustomState Name="" ID="{E7F0FC32-6B27-4C4F-B283-991917567444}" ShortID="330860562"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
+														<CustomState Name="" ID="{097E1B7B-6E9F-415E-94AC-B1D89F3C663D}" ShortID="830948300">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
+														<CustomState Name="" ID="{EB65B947-2B94-4029-97F2-2CDD1619AE2D}" ShortID="324698255">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+														<CustomState Name="" ID="{8EFCEF88-2CFB-43D2-AB1B-DF68F0D7D550}" ShortID="105889300">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2800"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
+														<CustomState Name="" ID="{4E9B5D43-4A7C-4D2B-BBA9-B2E92360E01D}" ShortID="656317242">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2200"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+												</CustomStateList>
+											</StateInfo>
+											<ObjectLists>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{FE3FB403-242C-43BA-B0AF-D6B5C733A8EB}" ShortID="978573118">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Pitch"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{23FADE05-D07B-4ED5-94D1-B9119D5996E9}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="65537"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>-24</XPos>
+																				<YPos>-2400</YPos>
+																				<Flags>5</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>24</XPos>
+																				<YPos>2400</YPos>
+																				<Flags>37</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
 											<ActiveSourceList>
 												<ActiveSource Name="Osc" ID="{3AE27DD1-9651-495B-B075-EC843F04B291}" Platform="Linked"/>
 											</ActiveSourceList>
@@ -868,6 +1205,37 @@
 																	<Point>
 																		<XPos>1</XPos>
 																		<YPos>2.5</YPos>
+																		<Flags>37</Flags>
+																	</Point>
+																</PointList>
+															</Curve>
+														</Custom>
+													</Reference>
+												</ReferenceList>
+											</RTPC>
+											<RTPC Name="" ID="{3DEF9364-4DBD-4D62-B3A2-8E17106801C3}" ShortID="338271783">
+												<PropertyList>
+													<Property Name="PropertyName" Type="string" Value="Pitch"/>
+												</PropertyList>
+												<ReferenceList>
+													<Reference Name="ControlInput">
+														<ObjectRef Name="Transpose" ID="{D0FD2DC8-7139-47EF-AA29-213A3334697D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+													</Reference>
+													<Reference Name="Curve">
+														<Custom>
+															<Curve Name="" ID="{6FDDC53B-A855-4B72-978D-4C0CD2501730}">
+																<PropertyList>
+																	<Property Name="Flags" Type="int32" Value="65537"/>
+																</PropertyList>
+																<PointList>
+																	<Point>
+																		<XPos>-24</XPos>
+																		<YPos>-2400</YPos>
+																		<Flags>5</Flags>
+																	</Point>
+																	<Point>
+																		<XPos>24</XPos>
+																		<YPos>2400</YPos>
 																		<Flags>37</Flags>
 																	</Point>
 																</PointList>
