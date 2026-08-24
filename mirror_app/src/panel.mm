@@ -1807,16 +1807,27 @@ void DrawControlPanel(PanelFrameArgs& pf) {
             DrawBankSaveUI(ui::Bank::Debug);
             ui::EndTab();
             ui::BeginTab("look", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
-            ui::PushSection("transition");
+            // "cloth", not "transition", and the rename is load-bearing.
+            //
+            // These controls now drive RootScene's cloth rather than the
+            // retired TransitionScene, and the Look bank keys are built from
+            // the section name -- so keeping the old name would make every
+            // saved .set file quietly load TransitionScene-era numbers onto
+            // it. They are not interchangeable: that scene's settle was 0.3
+            // seconds against a sheet sized to its own small fixed frustum,
+            // where this one holds the drape over the face for 8. Renaming
+            // orphans those keys, which are then ignored on load, and
+            // RootScene keeps its own defaults until someone saves new ones.
+            ui::PushSection("cloth");
             // The transition page is a category of settings, not a cue to
             // play one: what is on screen is the phase navigator's business,
             // so these declare and draw whenever the look tab is open.
             {
                 ImGui::Text("%s   t=%.2fs   press %.0f%%   release %.0f%%",
-                            pf.trans.phaseName(), pf.trans.clock(), pf.trans.press() * 100.f,
-                            pf.trans.release() * 100.f);
+                            pf.roots.clothPhaseName(), pf.roots.clothClock(),
+                            pf.roots.clothPress() * 100.f, pf.roots.clothRelease() * 100.f);
                 ImGui::SameLine();
-                if (ImGui::Button("replay")) pf.trans.restart();
+                if (ImGui::Button("replay")) pf.roots.restartCloth();
 
                 // --- the locked fit ------------------------------------
                 //
@@ -1825,6 +1836,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 // here because it is the thing that goes wrong invisibly --
                 // an unlocked run looks almost right until the head moves, and
                 // then the face slides across the mask like a slide projection.
+                //
+                // Still TransitionScene's, and so no longer part of the live
+                // show: RootScene bakes the film onto the mask as vertex colour
+                // (setFaceColors) instead of locking a uv against a frozen
+                // film, so there is no lock instant to expose. The buttons
+                // remain because the capture *files* they produce are still
+                // what the piece replays.
                 ImGui::SameLine();
                 if (pf.trans.fitLocked()) {
                     ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "locked");
@@ -1947,20 +1965,25 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::TreePop();
                 }
 
-                if (!pf.trans.hasFace()) {
+                if (!pf.roots.usingFittedFace()) {
                     ImGui::TextDisabled("no mask -- load face_basis.bin");
                 } else if (!g_track_on || !g_face.valid) {
                     ImGui::TextDisabled("no tracked face -- showing the neutral mask");
                 }
                 ImGui::SeparatorText("timing (seconds)");
                 ImGui::PushItemWidth(110);
-                ui::SliderFloat("hold",    &pf.trans.timing.hold,    0.f, 3.f);
+                // Settle runs to 20 rather than TransitionScene's 2: how long
+                // the film stays draped over the face is the whole of how the
+                // press reads, it is the first thing anyone reaches for, and a
+                // slider that tops out below the default value cannot express
+                // the default, let alone anything longer.
+                ui::SliderFloat("hold",    &pf.roots.clothTiming.hold,    0.f, 3.f);
                 ImGui::SameLine();
-                ui::SliderFloat("press",   &pf.trans.timing.press,   0.2f, 6.f);
-                ui::SliderFloat("settle",  &pf.trans.timing.settle,  0.f, 2.f);
+                ui::SliderFloat("press",   &pf.roots.clothTiming.press,   0.2f, 6.f);
+                ui::SliderFloat("settle",  &pf.roots.clothTiming.settle,  0.f, 20.f);
                 ImGui::SameLine();
-                ui::SliderFloat("release", &pf.trans.timing.release, 0.05f, 3.f);
-                ui::SliderFloat("fall",    &pf.trans.timing.fall,    0.5f, 6.f);
+                ui::SliderFloat("release", &pf.roots.clothTiming.release, 0.05f, 3.f);
+                ui::SliderFloat("fall",    &pf.roots.clothTiming.fall,    0.5f, 6.f);
                 ImGui::PopItemWidth();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
@@ -1971,7 +1994,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "fall: draping off the face and away.");
                 }
                 ImGui::SeparatorText("clearance -- merges into the root scene once cleared");
-                ui::SliderFloat("clear distance (world units)", &pf.trans.clothClearDistance,
+                ui::SliderFloat("clear distance (world units)", &pf.roots.clothClearDistance,
                                 0.2f, 5.f, "%.2f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
@@ -1980,9 +2003,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "Transition/Roots handoff treats it as \"cleared\" --\n"
                         "see root scene beat 1's clear-tail control.");
                 }
-                ui::SliderFloat("side force delay (s into release)", &pf.trans.sideForceDelay,
+                ui::SliderFloat("side force delay (s into release)", &pf.roots.sideForceDelay,
                                 0.f, 30.f, "%.1f");
-                ui::SliderFloat("side force magnitude", &pf.trans.sideForceMag, 0.f, 15.f, "%.1f");
+                ui::SliderFloat("side force magnitude", &pf.roots.sideForceMag, 0.f, 15.f, "%.1f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "A visitor holding still could otherwise stall release\n"
@@ -1991,7 +2014,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "always slides clear on a bounded schedule.");
                 }
                 ImGui::SeparatorText("look");
-                ui::SliderFloat("refraction", &pf.trans.refract, 0.f, 0.25f);
+                ui::SliderFloat("refraction", &pf.roots.renderer().cloth.refract, 0.f, 0.25f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How much the film bends the image where the fabric\n"
@@ -1999,7 +2022,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "exactly zero on the flat sheet -- the opening frame\n"
                         "has to be the pond, not a displaced copy of it.");
                 }
-                ui::SliderFloat("film relief", &pf.trans.reliefSharp, 0.f, 3.f);
+                ui::SliderFloat("film relief", &pf.roots.renderer().cloth.reliefSharp, 0.f, 3.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How hard the film's own curvature is drawn.\n\n"
@@ -2013,7 +2036,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "the nose, concave in the sockets. This is that term,\n"
                         "and it is zero on a flat sheet.");
                 }
-                ui::SliderFloat("film sheen", &pf.trans.sheen, 0.f, 1.5f);
+                ui::SliderFloat("film sheen", &pf.roots.renderer().cloth.sheen, 0.f, 1.5f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "A raking specular on the fabric's bends. Wet film is\n"
@@ -2022,7 +2045,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "Gated to the pressed area like the relief, so the\n"
                         "untouched film stays exactly the pond.");
                 }
-                ui::SliderFloat("press depth", &pf.trans.pressProud, 0.f, 0.4f);
+                ui::SliderFloat("press depth", &pf.roots.clothPressProud, 0.f, 0.4f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How far proud of the film the mask ends up. More\n"
@@ -2060,7 +2083,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "proportions; the fit is solved from one view, so a\n"
                         "little more relief often reads better on screen.");
                 }
-                ImGui::SeparatorText("registration");
+                ImGui::SeparatorText("registration -- NOT driving the show");
+                // Everything from here down still edits the old TransitionScene,
+                // which nothing draws any more: the press lives in RootScene now
+                // and places the mask in the anchor's own cavity frame rather
+                // than by solving a per-frame projection, so there is no
+                // registration to set and no equivalent control to move these
+                // onto. Left reachable because --transhot still drives a
+                // TransitionScene of its own and these are how it is set up;
+                // labelled so nobody tunes them expecting the stage to change.
+                ImGui::TextDisabled("edits the retired TransitionScene (--transhot only)");
                 ui::Checkbox("align mask", &pf.trans.alignMask);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
@@ -2096,13 +2128,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 }
 
                 ImGui::SeparatorText("cloth");
-                ui::Checkbox("show cloth", &pf.trans.showCloth);
+                ui::Checkbox("show cloth", &pf.roots.showCloth);
                 ImGui::SameLine();
-                ui::Checkbox("show mask", &pf.trans.showFace);
+                ui::Checkbox("show mask", &pf.roots.showFace);
                 ImGui::SameLine();
                 ui::Checkbox("wireframe", &pf.trans.wireframe);
-                ui::SliderFloat("gravity back (-z)", &pf.trans.gravityBack, 0.f, 20.f);
-                ui::SliderFloat("gravity down (-y)", &pf.trans.gravityDown, 0.f, 8.f);
+                ui::SliderFloat("gravity back (-z)", &pf.roots.clothGravityBack, 0.f, 20.f);
+                ui::SliderFloat("gravity down (-y)", &pf.roots.clothGravityDown, 0.f, 8.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "Zero by default. A -y pull drags the whole film out of\n"
@@ -2112,14 +2144,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "a turned head makes the tangential forces stop\n"
                         "cancelling, and the fabric peels from the shallow side.");
                 }
-                ui::SliderFloat("friction", &pf.trans.friction, 0.f, 1.f);
+                ui::SliderFloat("friction", &pf.roots.clothFriction, 0.f, 1.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "Tangential grip where the sheet touches the mask.\n"
                         "This is what makes it drape over the brow and the\n"
                         "nose instead of sliding off them like glass.");
                 }
-                ui::SliderFloat("stretch", &pf.trans.stretch, 0.f, 0.98f);
+                ui::SliderFloat("stretch", &pf.roots.clothStretch, 0.f, 0.98f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How freely the film lengthens. At 0 it is\n"
@@ -2128,7 +2160,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "the way a dipped film does. Compression stays stiff\n"
                         "either way, which is what keeps the canvas taut.");
                 }
-                ui::SliderFloat("set (plasticity)", &pf.trans.plastic, 0.f, 8.f);
+                ui::SliderFloat("set (plasticity)", &pf.roots.clothPlastic, 0.f, 8.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How fast a held stretch becomes the sheet's own\n"
@@ -2136,8 +2168,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "press comes back at once when the pins let go, and\n"
                         "the sheet snaps off the face.");
                 }
-                ui::SliderFloat("damping", &pf.trans.damping, 0.9f, 1.f);
-                ui::SliderFloat("relief shading", &pf.trans.reliefShade, 0.f, 1.f);
+                ui::SliderFloat("damping", &pf.roots.clothDamping, 0.9f, 1.f);
+                ui::SliderFloat("relief shading", &pf.roots.renderer().cloth.reliefShade, 0.f, 1.f);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "How far shading swings either side of the flat\n"
@@ -2145,20 +2177,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "this changes how much the folds show without ever\n"
                         "changing the film's overall brightness.");
                 }
-                ui::SliderFloat("sheet oversize", &pf.trans.oversize, 1.f, 1.3f);
+                ui::SliderFloat("sheet oversize", &pf.roots.clothOversize, 1.f, 1.3f);
                 ImGui::PushItemWidth(110);
-                ui::SliderInt("substeps", &pf.trans.substeps, 1, 8);
+                ui::SliderInt("substeps", &pf.roots.clothSubsteps, 1, 8);
                 ImGui::SameLine();
-                ui::SliderInt("iterations", &pf.trans.iterations, 4, 64);
-                ui::SliderInt("sheet res", &pf.trans.sheetRes, 16, 128);
+                ui::SliderInt("iterations", &pf.roots.clothIterations, 4, 64);
+                ui::SliderInt("sheet res", &pf.roots.clothSheetRes, 16, 128);
                 ImGui::PopItemWidth();
                 ImGui::TextDisabled("%d verts, %zu tris, minZ %.2f",
-                                    (int)pf.trans.cloth().pos.size(),
-                                    pf.trans.cloth().tris.size() / 3, pf.trans.cloth().minZ());
+                                    (int)pf.roots.cloth().pos.size(),
+                                    pf.roots.cloth().tris.size() / 3, pf.roots.cloth().minZ());
             }
             // (the transition page is a category of settings, not a cue to
             //  play one: what is on screen is the navigator's business)
-            ui::PopSection();               // "transition"
+            ui::PopSection();               // "cloth"
 
             // --- text overlay -------------------------------------------
             // Outside the per-scene blocks: it composites in the present pass,

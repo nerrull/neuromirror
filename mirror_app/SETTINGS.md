@@ -21,6 +21,47 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
+## Unassigned (35)
+
+These belong to no bank, so they are saved only in a whole-registry
+dump and load into nothing banked. Add a rule for their section.
+
+- `cloth/lock when the press starts`
+- `cloth/save a capture on lock`
+- `cloth/hold`
+- `cloth/press`
+- `cloth/settle`
+- `cloth/release`
+- `cloth/fall`
+- `cloth/clear distance (world units)`
+- `cloth/side force delay (s into release)`
+- `cloth/side force magnitude`
+- `cloth/refraction`
+- `cloth/film relief`
+- `cloth/film sheen`
+- `cloth/press depth`
+- `cloth/mask relief`
+- `cloth/shading span`
+- `cloth/align mask`
+- `cloth/mask scale x`
+- `cloth/mask scale y`
+- `cloth/mask offset x`
+- `cloth/mask offset y`
+- `cloth/show cloth`
+- `cloth/show mask`
+- `cloth/wireframe`
+- `cloth/gravity back (-z)`
+- `cloth/gravity down (-y)`
+- `cloth/friction`
+- `cloth/stretch`
+- `cloth/set (plasticity)`
+- `cloth/damping`
+- `cloth/relief shading`
+- `cloth/sheet oversize`
+- `cloth/substeps`
+- `cloth/iterations`
+- `cloth/sheet res`
+
 ## machine (18 parameters)
 
 | parameter | type | range | value |
@@ -74,23 +115,23 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
 | `fit/ramp secs` | float | 0 .. 8 | 1.5 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
-| `fit/set face size` | bool | -- | 1 |
-| `fit/size` | float | 0.05 .. 0.5 | 0.36 |
+| `fit/set face size` | bool | -- | 0 |
+| `fit/size` | float | 0.05 .. 0.5 | 0.2 |
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (37 parameters)
+## show (40 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
 | `show/cue CC` | int | 0 .. 127 | 100 |
-| `show/fit score to convert` | float | 0 .. 1 | 0.85 |
+| `show/fit score to convert` | float | 0 .. 1 | 0.83 |
 | `show/fit_level half scale (loss)` | float | 0.0005 .. 0.05 | 0.005 |
 | `show/fitting` | int | 0 .. 4 | 0 |
 | `show/fitting/absent_hold` | float | 0 .. 30 | 2.5 |
 | `show/fitting/fit_hold` | float | 0 .. 30 | 1.5 |
 | `show/fitting/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
-| `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
+| `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 61.2 |
 | `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
 | `show/idle/face_hold` | float | 0 .. 30 | 1.5 |
@@ -103,7 +144,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/phase CC` | int | 0 .. 127 | 101 |
 | `show/readout (F2)` | bool | -- | 0 |
 | `show/roots` | int | 0 .. 4 | 1 |
-| `show/run the show` | bool | -- | 0 |
+| `show/run the show` | bool | -- | 1 |
 | `show/transition` | int | 0 .. 4 | 2 |
 | `sound/checkpoint hysteresis` | float | 0 .. 0.15 | 0.03 |
 | `sound/detune (cents)` | float | 0 .. 25 | 4 |
@@ -118,16 +159,19 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/pluck base` | float | -12 .. 36 | 34 |
 | `sound/pluck intensity range` | float | 0 .. 24 | 12 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
+| `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
+| `sound/shepherd rate min (st-s)` | float | 0 .. 3 | 0.15 |
+| `sound/shepherd rise` | bool | -- | 1 |
 | `sound/sound on` | bool | -- | 1 |
 | `sound/transpose (semitones)` | float | -24 .. 24 | 0 |
 
-## look (50 parameters)
+## look (18 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
 | `show/transition/done_hold` | float | 0 .. 30 | 0 |
 | `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
-| `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 12 |
+| `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
 | `show/transition/min` | float | 0 .. 120 | 0 |
 | `text/edge softness` | float | 0.2 .. 3 | 1 |
 | `text/inversion` | float | 0 .. 1 | 1 |
@@ -143,38 +187,6 @@ land in `unassigned` and are listed below until somebody decides.
 | `text/turbulence` | float | 0 .. 1 | 0.8 |
 | `text/x` | float | -2 .. 2 | 0 |
 | `text/y` | float | -1 .. 1 | 0 |
-| `transition/align mask` | bool | -- | 0 |
-| `transition/damping` | float | 0.9 .. 1 | 0.985 |
-| `transition/fall` | float | 0.5 .. 6 | 1.8 |
-| `transition/film relief` | float | 0 .. 3 | 0.8 |
-| `transition/film sheen` | float | 0 .. 1.5 | 0.35 |
-| `transition/friction` | float | 0 .. 1 | 0.07 |
-| `transition/gravity back (-z)` | float | 0 .. 20 | 6 |
-| `transition/gravity down (-y)` | float | 0 .. 8 | 0 |
-| `transition/hold` | float | 0 .. 3 | 0.5 |
-| `transition/iterations` | int | 4 .. 64 | 24 |
-| `transition/lock when the press starts` | bool | -- | 1 |
-| `transition/mask offset x` | float | -0.2 .. 0.2 | 0 |
-| `transition/mask offset y` | float | -0.2 .. 0.2 | 0 |
-| `transition/mask relief` | float | 0.2 .. 4 | 2.2 |
-| `transition/mask scale x` | float | 0.6 .. 1.4 | 1 |
-| `transition/mask scale y` | float | 0.6 .. 1.4 | 1 |
-| `transition/press` | float | 0.2 .. 6 | 1.6 |
-| `transition/press depth` | float | 0 .. 0.4 | 0.35 |
-| `transition/refraction` | float | 0 .. 0.25 | 0.05 |
-| `transition/release` | float | 0.05 .. 3 | 0.7 |
-| `transition/relief shading` | float | 0 .. 1 | 0.55 |
-| `transition/save a capture on lock` | bool | -- | 1 |
-| `transition/set (plasticity)` | float | 0 .. 8 | 2 |
-| `transition/settle` | float | 0 .. 2 | 8 |
-| `transition/shading span` | float | 1 .. 10 | 4 |
-| `transition/sheet oversize` | float | 1 .. 1.3 | 1.08 |
-| `transition/sheet res` | int | 16 .. 128 | 72 |
-| `transition/show cloth` | bool | -- | 1 |
-| `transition/show mask` | bool | -- | 1 |
-| `transition/stretch` | float | 0 .. 0.98 | 0.8 |
-| `transition/substeps` | int | 1 .. 8 | 2 |
-| `transition/wireframe` | bool | -- | 0 |
 
 ## mirror (58 parameters)
 
@@ -239,27 +251,27 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | -2 .. 2 | 0.019 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
 
-## roots (185 parameters)
+## roots (186 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
-| `roots/cached field: LOD & culling/LOD bias (>1 coarser)` | float | 0.1 .. 4 | 1 |
-| `roots/cached field: LOD & culling/cull below px` | float | 0.5 .. 20 | 2 |
+| `roots/cached field: LOD & culling/LOD bias (>1 coarser)` | float | 0.1 .. 4 | 0.5 |
+| `roots/cached field: LOD & culling/cull below px` | float | 0.5 .. 20 | 0.5 |
 | `roots/cached field: LOD & culling/frustum cull` | bool | -- | 1 |
 | `roots/cached field: LOD & culling/grid NxN` | int | 2 .. 20 | 6 |
-| `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 1 |
-| `roots/camera/authored camera (rootmovie beats)` | bool | -- | 0 |
-| `roots/camera/auto-orbit` | bool | -- | 1 |
-| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 0.6 |
-| `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.35 |
+| `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 0 |
+| `roots/camera/authored camera (rootmovie beats)` | bool | -- | 1 |
+| `roots/camera/auto-orbit` | bool | -- | 0 |
+| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | -4.28051 |
+| `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.285325 |
 | `roots/camera/focus group` | int | -1 .. 7 | -1 |
 | `roots/camera/fov` | float | 0.2 .. 1.2 | 0.6 |
-| `roots/camera/frame automatically` | bool | -- | 1 |
+| `roots/camera/frame automatically` | bool | -- | 0 |
 | `roots/camera/frame on masks` | bool | -- | 1 |
 | `roots/camera/group of` | int | 1 .. 9 | 3 |
 | `roots/camera/margin` | float | 0 .. 1.5 | 0.35 |
 | `roots/camera/orbit rate` | float | -1 .. 1 | 0.15 |
-| `roots/camera/radius` | float | 5 .. 120 | 42 |
+| `roots/camera/radius` | float | 5 .. 120 | 34.9264 |
 | `roots/camera/zoom` | float | 0.15 .. 5 | 1 |
 | `roots/environment & material/AO downscale` | int | 1 .. 4 | 2 |
 | `roots/environment & material/AO intensity` | float | 0 .. 4 | 2 |
@@ -300,7 +312,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/face masks/spot outer angle` | float | 5 .. 90 | 46 |
 | `roots/face masks/vein color` | rgb | -- | 0.55 0.53 0.5 |
 | `roots/face masks/vein scale` | float | 0.1 .. 2 | 0.6 |
-| `roots/face masks/vein strength` | float | 0 .. 1 | 0.5 |
+| `roots/face masks/vein strength` | float | 0 .. 1 | 0 |
 | `roots/fog & atmosphere/anisotropy (fwd <-> back)` | float | -0.9 .. 0.9 | 0.55 |
 | `roots/fog & atmosphere/clear radius follows camera` | bool | -- | 1 |
 | `roots/fog & atmosphere/clear radius x orbit` | float | 0 .. 1.5 | 0.12 |
@@ -344,7 +356,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/species` | string | -- | Zea_mays_6_Leitner_2014.xml |
 | `roots/growth/spiral drift` | float | -0.5 .. 0.5 | 0 |
 | `roots/growth/spiral x golden` | float | 0.2 .. 2 | 1 |
-| `roots/growth/steps-frame` | int | 1 .. 30 | 2 |
+| `roots/growth/steps-frame` | int | 1 .. 30 | 1 |
 | `roots/growth/taper` | float | 0.4 .. 2.5 | 1 |
 | `roots/growth/target lift` | float | -10 .. 10 | 0 |
 | `roots/growth/travel pull` | float | 0 .. 1 | 0.9 |
@@ -412,6 +424,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/travelling pulses/pulse width` | float | 0.5 .. 12 | 3.5 |
 | `roots/travelling pulses/pulses on` | bool | -- | 1 |
 | `show/roots/absent_hold` | float | 0 .. 30 | 8 |
+| `show/roots/beat 1  clearance/clear-tail (s)` | float | 0 .. 30 | 10 |
 | `show/roots/beat 1  face alone/duration` | float | 0.2 .. 20 | 2.3 |
 | `show/roots/beat 2  masks deal/duration` | float | 0.2 .. 20 | 3.1 |
 | `show/roots/beat 2  masks deal/growth rate max (steps-s)` | float | 1 .. 2000 | 400 |
