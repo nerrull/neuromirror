@@ -83,7 +83,13 @@ bool  g_mask_fit     = true;    // crop the live fit to the face when there is o
 bool  g_drive_roots  = true;    // fitted mesh -> the root scene's face masks
 // The --rootmovie beat sequence, played live instead of the manual/auto-frame
 // camera whenever the show is in Phase::Roots.
-bool  g_root_authored_camera = false;
+//
+// On by default. Off, the show ran on auto-framing, which eases toward the
+// whole layout every frame -- so the press happened on a camera in mid-flight,
+// and beat 1's "hold on the face while the world grows around it" never
+// happened live at all. The authored sequence is the one the piece was cut to;
+// auto-framing is the fallback for looking at a scene, not for playing one.
+bool  g_root_authored_camera = true;
 // The tracker's input frame.
 //
 // Its *aspect must be the composition's*, and the size is derived per frame to

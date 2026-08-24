@@ -320,6 +320,23 @@ public:
     // way to express "there is no film here", rather than leaving a sheet
     // active and relying on nothing ever drawing it.
     void skipCloth();
+    // The window in which the film is a flat, fully-pinned rectangle covering
+    // the frame. Two things must hold for the whole of it, and both are
+    // properties of the film rather than of any one caller, so they are decided
+    // here rather than by whoever happens to be driving the phase:
+    //
+    //   - the camera does not move. A flat film pinned across the frame stays
+    //     registered to that frame only while the camera that framed it stays
+    //     put; any motion either magnifies the pond (a sheet sized for the
+    //     entry pose seen from closer in) or uncovers the edges. TransitionScene
+    //     had a literally fixed camera and that was not incidental -- it is
+    //     what "the opening frame is the pond" costs.
+    //   - the roots are not on screen. The pond is up; nothing behind it has
+    //     been revealed yet.
+    //
+    // Ends at the release, which is exactly when the film stops covering the
+    // frame and starts being an object in a moving world.
+    bool  clothPinned() const { return clothActive_ && clothRelease() <= 0.f; }
     double clothClock() const { return clothT_; }
     float clothPress() const;      // 0..1, how far the mask has come through
     float clothRelease() const;    // 0..1, how far the release front has run

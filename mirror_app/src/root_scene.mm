@@ -279,6 +279,18 @@ void RootScene::replant() {
     simAvailable_ = simAvailable_ || useSim_;
     // growthStepEstimate_ deliberately kept -- see the header.
     ++growGeneration_;
+    // The renderer is still holding the *last* visitor's geometry, and nothing
+    // else would drop it: the segment buffers are only rewritten by a growth
+    // step, and the beat that follows this call holds the growth paused. So a
+    // second sitting opened on a full-grown plant from the first one, visible
+    // through the film during the press -- which is the one thing that must not
+    // be on screen while the pond is still up. Resetting the sim is not enough;
+    // the upload has to be undone too.
+    if (rr_) rr_->uploadSegments({}, {}, {});
+    // ...and the framing bounds it left behind, which are a min/max over that
+    // same vanished geometry.
+    idleCentre_[0] = idleCentre_[1] = idleCentre_[2] = 0.f;
+    idleExtent_ = 10.f;
 }
 
 int RootScene::growthStepEstimate() const {
@@ -1235,6 +1247,14 @@ bool RootScene::maskBound(const std::vector<int>& idx, float centre[3], float& r
 }
 
 void RootScene::applyFraming(double dt) {
+    // Held still for the whole pinned phase -- see clothPinned(). Deliberately
+    // here rather than left to the caller's camera mode: the authored sequence
+    // already holds beat 1 still, but auto-framing eases toward the layout
+    // every frame, and easing during the press is what magnified the pond into
+    // an unreadable close-up. A flat film's registration cannot survive a
+    // moving camera by any amount of sizing, so the camera is what gives way.
+    // camDesValid_ is cleared with it: there is no ease in flight to anticipate.
+    if (clothPinned()) { camDesValid_ = false; return; }
     // The authored sequence assigns the camera outright, so there is no ease
     // in flight and no future pose to anticipate -- see camDesValid_.
     if (!autoFrame) { camDesValid_ = false; return; }
@@ -1459,7 +1479,11 @@ void RootScene::buildSyntheticRoots(uint32_t seed) {
 
 void RootScene::advance(double dt) {
     t_ += dt;
-    if (autoOrbit) azimuth += orbitRate * (float)dt;
+    // The orbit is the other thing that moves the camera, and it moves it
+    // whether or not anything is framing -- so freezing applyFraming alone
+    // still left the azimuth drifting a radian through the press, which
+    // uncovers the film's edges just as surely. See clothPinned().
+    if (autoOrbit && !clothPinned()) azimuth += orbitRate * (float)dt;
     rr_->fog.driftTime += (float)dt * rr_->fog.driftSpeed;
     rr_->pulse.time    += (float)dt;
     rr_->wispTime      += (float)dt;
@@ -1473,7 +1497,11 @@ void RootScene::advance(double dt) {
     advanceCloth(dt);
 
     // Live growth: advance a few steps, then re-upload geometry + revealed masks.
-    if (useSim_ && sim_ && !sim_->done() && !simPaused) {
+    // Held outright while the film is still up -- the roots must not exist at
+    // the same time as the cloth, and relying on the caller's beat to have
+    // paused the sim is a weaker guarantee than saying so here (auto-framing
+    // runs no beats at all, so nothing would have paused it).
+    if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothPinned()) {
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
             sim_->step();
         std::vector<float> nodes, radii; std::vector<int> segs;
@@ -1487,7 +1515,7 @@ void RootScene::advance(double dt) {
     // moves masks without growing anything) never updates. Rebuilt every frame
     // rather than once: it is a handful of masks, and the alternative is a
     // one-shot flag that has to know about every reason a mask might move.
-    if (useSim_ && sim_ && simPaused) uploadFaceFromMasks();
+    if (useSim_ && sim_ && (simPaused || clothPinned())) uploadFaceFromMasks();
     applyFraming(dt);
 
     // The sheet is solved and packed *after* the framing, not before it.
