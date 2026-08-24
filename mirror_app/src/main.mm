@@ -1916,7 +1916,14 @@ int main(int argc, char** argv) {
                             // timeline and its authored camera sequence both
                             // start here rather than waiting for the literal
                             // Roots entry.
-                            if (roots.valid()) roots.restartCloth();
+                            // A fresh plant for a fresh visitor, before the
+                            // camera sequence reads the layout off it. Nothing
+                            // used to do this: the growth simply carried on
+                            // from wherever the last sitting left it, so the
+                            // second visitor of the day walked up to a root
+                            // system that was already fully grown before their
+                            // press had even started.
+                            if (roots.valid()) { roots.replant(); roots.restartCloth(); }
                             rootCamSeq.begin(roots, g_root_beats);
                             rootCamSeqBegunForSitting = true;
                             faceTrackRec.begin();
@@ -1949,7 +1956,20 @@ int main(int argc, char** argv) {
                     // having gone through Transition first (a manual phase
                     // jump from the operator's navigator).
                     if (p == show::Phase::Roots) {
-                        if (!rootCamSeqBegunForSitting) rootCamSeq.begin(roots, g_root_beats);
+                        if (!rootCamSeqBegunForSitting) {
+                            // Reached without going through Transition -- the
+                            // operator's phase navigator. Since the press now
+                            // lives in this same scene, "Roots" has to mean
+                            // the state the press *ends* in: a fresh plant, no
+                            // film, the mask already uncovered and wearing its
+                            // face. Replaying the press here would make the
+                            // two buttons do the same thing a second apart.
+                            if (roots.valid()) { roots.replant(); roots.skipCloth(); }
+                            rootsClock = 0.0;
+                            clothClearAtPreWarm = 0.0;
+                            clothClearHoldElapsed = true;
+                            rootCamSeq.begin(roots, g_root_beats);
+                        }
                         rootCamSeqBegunForSitting = false;
                     }
                     // The face sequence reseeds on every entry too, off

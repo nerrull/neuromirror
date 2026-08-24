@@ -142,6 +142,14 @@ public:
 
     // Restart the live CPlantBox growth (no-op if the sim failed to load).
     void regrow();
+    // A fresh plant for a fresh visitor: the same structure, back to ungrown.
+    //
+    // Distinct from regrow() only in that it keeps the cached growth-step
+    // estimate, because the parameters have not changed -- and recomputing
+    // that estimate means running a whole throwaway growth to completion,
+    // which is the per-visitor cost 9bc816a cached away in the first place.
+    // regrow() stays the one to call when the parameters really did change.
+    void replant();
     // The growth parameters, editable in place; call regrow() to apply. Held
     // here rather than rebuilt at each call site so a species change and a
     // seed change go through the same door.
@@ -305,6 +313,13 @@ public:
     // TransitionScene::restart(). Call once, on the phase edge that used to
     // call trans.restart().
     void restartCloth();
+    // Retire the cloth without playing it: the mask is simply already
+    // uncovered. This is what entering Roots directly has to do -- the
+    // operator jumping straight to the root scene is asking for the state
+    // *after* the press, not for the press again -- and it is also the honest
+    // way to express "there is no film here", rather than leaving a sheet
+    // active and relying on nothing ever drawing it.
+    void skipCloth();
     double clothClock() const { return clothT_; }
     float clothPress() const;      // 0..1, how far the mask has come through
     float clothRelease() const;    // 0..1, how far the release front has run

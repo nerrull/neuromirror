@@ -272,6 +272,15 @@ void RootScene::regrow() {
     ++growGeneration_;
 }
 
+void RootScene::replant() {
+    if (!sim_) return;
+    simParams_.paramDir = ROOTSIM_PARAM_DIR;
+    useSim_ = sim_->reset(simParams_);
+    simAvailable_ = simAvailable_ || useSim_;
+    // growthStepEstimate_ deliberately kept -- see the header.
+    ++growGeneration_;
+}
+
 int RootScene::growthStepEstimate() const {
     if (growthStepEstimate_ >= 0) return growthStepEstimate_;
     int simSteps = 0;
@@ -489,6 +498,23 @@ void RootScene::uploadFaceFromMasks() {
 // local frame the cloth already lives in, so collision needs no transform
 // either.
 // ---------------------------------------------------------------------------
+
+void RootScene::skipCloth() {
+    // Parked past the end of the timeline rather than at zero, so clothDone()
+    // agrees with clothActive_ -- the phase gate in main.mm reads clothDone(),
+    // and a scene that never had a film has certainly finished playing one.
+    clothT_ = double(clothTiming.hold + clothTiming.press + clothTiming.settle +
+                     clothTiming.release + clothTiming.fall) + 1.0;
+    clothActive_ = false;
+    clothPressOffset_ = 0.f;
+    clothExtentFrozen_ = false;
+    // Cleared past the threshold rather than left at its "never measured"
+    // floor: callers gate the hand-off on clothCleared(), and a scene with no
+    // film in it has by definition nothing left to get out of the way.
+    clothClearanceVal_ = clothClearDistance;
+    if (rr_) rr_->uploadClothMesh({});
+    uploadFaceFromMasks();
+}
 
 void RootScene::restartCloth() {
     clothT_ = 0.0;
