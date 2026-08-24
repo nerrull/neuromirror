@@ -122,7 +122,15 @@ public:
         float specStrength   = 1.2f;
         float veinColor[3]   = {0.55f, 0.53f, 0.50f};
         float veinScale      = 0.6f;
-        float veinStrength   = 0.5f;
+        // Off. The mask's albedo is a photograph of the visitor now -- the
+        // mirror's own output, baked per vertex -- and mixing a grey stone
+        // vein into it at half strength does not read as a veined face, it
+        // reads as the face not having arrived. The whole vein/turbulence path
+        // in face_shade.metal is left intact and still driven from the panel,
+        // because it is the mask's material for every use that is *not*
+        // carrying a sitting (the neighbour copies, the test identities); this
+        // is only its default.
+        float veinStrength   = 0.0f;
         float roughness      = 0.42f;   // polished stone, not a mirror
         float metallic       = 0.0f;
         // Off. A per-pixel normal perturbation at stone-grain frequency reads as

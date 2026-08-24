@@ -2361,6 +2361,28 @@ int main(int argc, char** argv) {
                     kFogClearVisibility + (target - kFogClearVisibility) * ft;
             };
 
+            // Hand the captured neural texture over. The mirror is not running
+            // by the time the mask is on screen -- only one sim runs at a time
+            // -- so there is no live texture left to sample; what the mask
+            // wears is whatever was captured while the mirror still had the
+            // person. Uploaded once, on the frame after capture, because it
+            // does not change again until the mirror runs again.
+            //
+            // Shared by the Transition and Roots branches rather than living
+            // in Roots alone, which is where it used to be. That was wrong the
+            // moment the press moved into RootScene: the mask the cloth
+            // uncovers is drawn by the Transition branch, and with no colours
+            // uploaded yet it wore the flat fallback material for the whole
+            // reveal, then changed appearance at the cut to Roots -- the face
+            // arriving one phase after the face was revealed.
+            auto uploadFaceColorsIfFresh = [&]() {
+                if (g_capture_loaded.empty() && g_face_colors_fresh &&
+                    !g_face_colors.empty()) {
+                    roots.setFaceColors(g_face_colors);
+                    g_face_colors_fresh = false;
+                }
+            };
+
             if (scene == (int)Scene::Mirror && mirror.valid()) {
                 sceneTex = renderMirror();
             } else if (scene == (int)Scene::FitView && fitview.valid()) {
@@ -2442,6 +2464,9 @@ int main(int argc, char** argv) {
                     faceTrackRec.record(g_show.phaseTime(), g_fitter);
                     transitionExitPhaseTime = g_show.phaseTime();
                 }
+                // The mask the cloth is about to uncover has to already be
+                // wearing the face -- see the lambda's own comment.
+                uploadFaceColorsIfFresh();
                 // Deferred: TransitionScene's lock/capture mechanism (freezing
                 // the film + mesh into a mirror::FaceCapture the instant the
                 // press begins, for g_capture_auto to save) has not been
@@ -2509,17 +2534,7 @@ int main(int argc, char** argv) {
                     roots.clearFittedFace();
                 }
 
-                // Hand the captured neural texture over. The mirror is not
-                // running now -- only one sim runs at a time -- so there is no
-                // live texture left to sample; what the mask wears is whatever
-                // was captured while the mirror still had the person. Uploaded
-                // once, on the frame after capture, because it does not change
-                // again until the mirror runs again.
-                if (g_capture_loaded.empty() && g_face_colors_fresh &&
-                    !g_face_colors.empty()) {
-                    roots.setFaceColors(g_face_colors);
-                    g_face_colors_fresh = false;
-                }
+                uploadFaceColorsIfFresh();
                 roots.ensureSize(compW / effDs, compH / effDs);
                 // rootsClock keeps counting seconds since Transition entry,
                 // continuous across the pre-warm -> literal-Roots cut -- the
