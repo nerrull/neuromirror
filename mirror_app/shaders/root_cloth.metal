@@ -12,11 +12,23 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct ClothVertex {            // matches RootScene::packClothMesh's interleave
-    float3 pos;
-    float3 nrm;
-    float2 uv;
-    float2 aux;                 // x = curvature along the normal, y = z off rest
+// Matches RootScene::packClothMesh's interleave: ten tightly packed floats per
+// vertex, the same convention root_face.metal and root_leaf.metal use.
+//
+// `packed_` is load-bearing, not decoration. MSL's `float3` is sixteen bytes
+// with sixteen-byte alignment, so the obvious spelling of this struct is
+// forty-eight bytes against the forty the CPU actually writes -- every vertex
+// after the first reads eight bytes further into the buffer than the last, and
+// the sheet arrives as a skewed fan of enormous triangles with the film sliding
+// across it. transition.metal spells the same struct with plain `float3`
+// because its C++ side is simd_float3/simd_float2, which really is that
+// layout; this pass is fed a std::vector<float> instead, and porting the
+// declaration across unchanged is what produced the spike burst this fixes.
+struct ClothVertex {
+    packed_float3 pos;
+    packed_float3 nrm;
+    packed_float2 uv;
+    packed_float2 aux;          // x = curvature along the normal, y = z off rest
 };
 
 struct ClothVOut {

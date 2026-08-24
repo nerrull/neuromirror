@@ -253,11 +253,36 @@ public:
     float clothClearance() const { return clothClearanceVal_; }
 
     bool  showCloth     = true;
-    // The sheet, as a multiple of the anchor mask's own placed size -- there is
-    // no camera frustum to size it against here (unlike TransitionScene), so
-    // this is a look decision: big enough that the mask's silhouette is well
-    // inside it with room for the drape to hang past the edge.
-    float clothOversize = 1.7f;
+    // The sheet, as a multiple of the frustum cross-section it has to cover.
+    //
+    // The sheet *is* the pond: the opening frame of the press has to be the
+    // mirror's own image, edge to edge, which means the sheet is sized by the
+    // camera looking at it and not by the mask in the middle of it. Sizing it
+    // off the mask instead (an earlier version of this port did) is what makes
+    // it fail to reach the corners and, because a face then spans half the
+    // sheet's width against a pinned border a face-width away, what turns the
+    // press into a radial spike burst rather than a drape.
+    //
+    // So: exactly TransitionScene's own sizing, against RootScene's camera
+    // rather than a fixed one -- see ensureClothSheet. 1.08 is its oversize
+    // too, and the margin has to stay small for a second reason: the uv runs
+    // the film across the sheet's *whole* extent, so everything past 0..1
+    // clamps to the film's edge pixels, and a large overhang is a wide smeared
+    // border rather than more pond.
+    float clothOversize = 1.08f;
+    // How far the anchor mask comes *proud* of the sheet's rest plane at the
+    // end of the press, in the anchor's local units, as a fraction of its own
+    // placed half-width.
+    //
+    // The mask's resting cavity placement leaves its frontmost point barely
+    // through that plane (a tenth of a unit on a face nearly four across), so
+    // pressing only as far as "where it already belongs" tents the film by
+    // almost nothing and the face never reads through it. This is a transient
+    // offset on the same single resting placement -- not a second resting
+    // depth -- so it costs nothing to keep in sync: it ramps in over the press,
+    // holds through the settle, and unwinds over the release as the mask
+    // retreats to exactly its cavity placement and the film slides off.
+    float clothPressProud = 0.22f;
     float clothGravityBack = 6.0f;   // along -normal, behind the mask
     float clothGravityDown = 0.0f;   // along -bitangent (world down, for the anchor pose)
     float clothFriction = 0.07f;
@@ -333,6 +358,8 @@ private:
     // --- cloth internals (see the public section above) --------------------
     void refreshClothAnchor();       // cache the anchor mask's frame for this frame
     void ensureClothSheet();         // (re)build cloth_/clothField_ on a size change
+    void measureClothFaceDepth();    // faceVerts_' own local z extent, per press
+    float anchorFrontLocalZ() const; // the mask's frontmost point, anchor-local
     void rasteriseClothField();      // the anchor's placed face -> the collider depth map
     void updateClothClearance();
     void packClothMesh();            // cloth_ -> interleaved buffer -> rr_->uploadClothMesh
@@ -347,7 +374,20 @@ private:
     float  clothClearanceVal_ = -1e9f;
     int    clothBuiltRes_ = 0;
     float  clothBuiltOversize_ = 0.f;
-    float  clothHalfExtent_ = 1.f;
+    // The sheet's half-extents, in the anchor's local frame. Rectangular, and
+    // aspect-correct: the film is a screen-shaped image and a square sheet
+    // would stretch it. Frozen for the whole run of one press (see
+    // ensureClothSheet) so a camera move cannot rebuild -- and so reset -- a
+    // sheet that is mid-fall.
+    float  clothHalfX_ = 1.f, clothHalfY_ = 1.f;
+    bool   clothExtentFrozen_ = false;
+    // The face model's own local z extent, measured from the mesh actually
+    // uploaded rather than estimated. Feeds both the press retraction (how far
+    // behind the sheet the mask starts) and the clearance signal (where the
+    // mask's front surface is), which the first version of this port
+    // approximated with two constants -- one of which put the clearance out by
+    // enough that clothCleared() never fired at all.
+    float  clothFaceZMin_ = 0.f, clothFaceZMax_ = 0.f;
     // The anchor mask's frame, refreshed once per advance() -- fixed by
     // construction (root_sim.cpp's anchor-first reset()) but read from the sim
     // rather than hardcoded, so a future change to the anchor pose does not

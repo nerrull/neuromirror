@@ -56,3 +56,11 @@ int  taptest(uint32_t tapId, double seconds);
 int  audiotest(double seconds, const char* wav_out);
 int  textshot(const char* path, const char* str, float warp,
               float reveal, float softness);
+// The cloth press, offscreen, in RootScene's own camera. The eyes-on pass the
+// cloth port never got: the live path needs a Kinect, a visitor and a show
+// clock, and none of those can be put in front of a compiler. `photo` fits a
+// real MirrorScene as the film when given; otherwise the film is a labelled
+// grid, which is what actually answers "does the sheet still cover the frame
+// and is it still flat" -- a photograph hides both.
+int  clothshot(const char* prefix, int frames, int W, int H, float fps,
+               const char* photo);

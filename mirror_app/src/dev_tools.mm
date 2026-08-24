@@ -1767,3 +1767,124 @@ int textshot(const char* path, const char* str, float warp,
     printf("textshot: wrote %s (%dx%d)\n", path, W, H);
     return 0;
 }
+
+// --clothshot <prefix> <frames> [W H fps photo]
+//
+// The pond -> face press as RootScene now draws it, straight to PPM. The live
+// path (main.mm's Scene::Transition branch) needs a sensor, a visitor and the
+// show clock; this reproduces the same four calls -- restartCloth, the camera
+// sequence, setPondTexture, advance/render -- against the canonical mask and
+// either a fitted MirrorScene or a synthetic film.
+//
+// The synthetic film is the default on purpose. Two of the three things that
+// can be wrong with the sheet are invisible against a photograph: whether it
+// still reaches the edges of the frame, and whether it is flat where it is
+// supposed to be flat. A ruled grid shows both at a glance.
+static id<MTLTexture> makeGridFilm(const MetalContext& ctx, int W, int H) {
+    MTLTextureDescriptor* d =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                           width:W height:H mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> tex = [ctx.device() newTextureWithDescriptor:d];
+    std::vector<uint8_t> px((size_t)W * H * 4);
+    const int cells = 16;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const int gx = x * cells / W, gy = y * cells / H;
+            const bool odd = ((gx + gy) & 1) != 0;
+            // The border ring is red: if the sheet covers the frame, red is
+            // visible on all four edges of every rendered frame, and if it has
+            // shrunk off the frustum the scene behind it shows instead.
+            const bool edge = x < W / 64 || y < H / 64 || x >= W - W / 64 || y >= H - H / 64;
+            uint8_t r = odd ? 210 : 40, g = odd ? 200 : 45, b = odd ? 180 : 60;
+            if (edge) { r = 230; g = 30; b = 30; }
+            uint8_t* p = &px[((size_t)y * W + x) * 4];
+            p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+        }
+    [tex replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0
+             withBytes:px.data() bytesPerRow:W * 4];
+    return tex;
+}
+
+int clothshot(const char* prefix, int frames, int W, int H, float fps,
+              const char* photo) {
+    MetalContext ctx;
+    if (!ctx.device()) { fprintf(stderr, "clothshot: no Metal device\n"); return 1; }
+    RootScene roots(ctx, W, H);
+    if (!roots.valid()) { fprintf(stderr, "clothshot: root scene invalid\n"); return 1; }
+
+    // The mask the cloth drapes over. The canonical model RootScene loads on
+    // its own is the right stand-in: the live path re-sends a fitted mesh every
+    // frame, but the *placement* -- which is what the collider is built from --
+    // is RootScene's own either way.
+    MirrorScene mirror(ctx, 11, W / 2, H / 2);
+    id<MTLTexture> film = nil;
+    if (photo && *photo) {
+        std::string err;
+        std::vector<float> src;
+        if (!LoadImageRGB(photo, W, H, src, err)) {
+            fprintf(stderr, "clothshot: %s: %s\n", photo, err.c_str()); return 1;
+        }
+        std::vector<unsigned char> rgb8(src.size());
+        for (size_t i = 0; i < src.size(); ++i)
+            rgb8[i] = (unsigned char)std::min(255.f, std::max(0.f, src[i] * 255.f + 0.5f));
+        const int fw = W / 2, fh = H / 2;
+        std::vector<float> target;
+        mirror::DownsampleRGB8(rgb8.data(), W, H, 3, 0, 2, fw, fh, target);
+        mirror.pond().beginFit(target, fh, fw, mirror.params(), {});
+        for (int i = 0; i < 1200; ++i) mirror.fitSteps(1, 3e-3f);
+        printf("clothshot: mirror fitted, loss %.5f\n", mirror.lastLoss());
+    } else {
+        film = makeGridFilm(ctx, W, H);
+    }
+
+    // CLOTHSHOT_NOCLOTH=1 renders the same frames with the sheet suppressed --
+    // the A/B that says whether something on screen is the cloth or the scene
+    // behind it, which by eye alone is genuinely ambiguous once the post chain
+    // (bloom, DOF, fog, tonemap) has been over both.
+    if (const char* nc = getenv("CLOTHSHOT_NOCLOTH")) roots.showCloth = atoi(nc) == 0;
+    // CLOTHSHOT_RAW=1 drops the scene's post-processing, so what lands in the
+    // PPM is the geometry pass and not a graded version of it.
+    if (const char* raw = getenv("CLOTHSHOT_RAW")) {
+        if (atoi(raw)) {
+            auto& P = roots.renderer().post;
+            P.bloom = false; P.dof = false; P.vignette = 0.f; P.grain = 0.f;
+            P.halation = 0.f; P.exposure = 1.f;
+            roots.renderer().fog.enabled = false;
+            roots.renderer().ao.enabled = false;
+        }
+    }
+
+    RootBeatParams bp;
+    RootCameraSequence seq;
+    seq.begin(roots, bp);
+    if (!seq.valid()) { fprintf(stderr, "clothshot: no masks\n"); return 1; }
+    roots.restartCloth();
+
+    const double dt = 1.0 / double(fps);
+    double clock = 0.0;
+    for (int f = 0; f < frames; ++f) {
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            if (!film) { mirror.advance(dt); roots.setPondTexture(mirror.render()); }
+            else roots.setPondTexture(film);
+            clock += dt;
+            seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared());
+            roots.advance(dt);
+            id<MTLTexture> tex = roots.render(cb);
+            [cb commit]; [cb waitUntilCompleted];
+            if (!tex) { fprintf(stderr, "clothshot: no texture\n"); return 1; }
+            char path[512];
+            snprintf(path, sizeof(path), "%s%04d.ppm", prefix, f);
+            if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
+                return 1;
+            if ((f % 20) == 0)
+                printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f\n",
+                       f, frames, roots.clothPhaseName(), roots.clothPress(),
+                       roots.clothRelease(), roots.clothClearance());
+        }
+    }
+    printf("clothshot: wrote %d frames %s0000.ppm.. (%dx%d @ %.0f fps)\n",
+           frames, prefix, W, H, fps);
+    return 0;
+}

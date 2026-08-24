@@ -495,7 +495,9 @@ void RootScene::restartCloth() {
     clothActive_ = true;
     clothClearanceVal_ = -1e9f;
     clothPressOffset_ = 0.f;
-    clothBuiltRes_ = 0;   // force ensureClothSheet to rebuild flat & fully pinned
+    clothBuiltRes_ = 0;          // force ensureClothSheet to rebuild flat & fully pinned
+    clothExtentFrozen_ = false;  // and to re-measure the frustum it has to cover
+    measureClothFaceDepth();
 }
 
 float RootScene::clothPress() const {
@@ -543,26 +545,70 @@ void RootScene::refreshClothAnchor() {
     }
 }
 
-// The sheet has to cover the anchor's own placed size, which tracks
-// faceScale and the mask's own rWidth/rHeight rather than a magic constant --
-// see clothOversize's doc comment for why this differs from TransitionScene's
-// frustum-derived halfX/halfY.
+// The sheet is sized to the frustum cross-section at its own plane, exactly as
+// TransitionScene sized it -- the difference is only that the camera it asks is
+// RootScene's live one rather than a fixed rig.
+//
+// The distance is measured to the sheet's plane along the anchor's normal
+// rather than taken as `radius` directly, so it stays correct if the camera is
+// ever off the anchor's axis; through beat 1 (which is the whole of the press)
+// RootCameraSequence puts it straight down that normal and the two agree.
+//
+// Note `radius` here is a *half*-angle: MetalRootRenderer::render builds its
+// projection as 1/tan(fov), not 1/tan(fov/2). Halving it -- the more familiar
+// convention -- builds a sheet a little over a third the width it needs, which
+// is precisely the bug this replaces.
+//
+// Built once per press and then frozen: the extents are a property of the
+// sheet, not of where the camera happens to be this frame, and rebuilding
+// resets every vertex to the flat rest pose, which mid-fall is a visible snap.
 void RootScene::ensureClothSheet() {
     const int res = std::clamp(clothSheetRes, 16, 192);
     const float over = std::max(1.0f, clothOversize);
-    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
-    const float half = std::max(0.05f, scale * over);
-    if (res == clothBuiltRes_ && std::fabs(over - clothBuiltOversize_) < 1e-4f &&
-        std::fabs(half - clothHalfExtent_) < 1e-4f)
-        return;
+
+    if (!clothExtentFrozen_) {
+        const float aspect = float(std::max(1, width())) / float(std::max(1, height()));
+        // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz) -- the same
+        // spherical convention applyFraming and the renderer use.
+        const float ce = std::cos(elevation), se = std::sin(elevation);
+        const simd_float3 eye = simd_make_float3(target[0] + radius * ce * std::sin(azimuth),
+                                                 target[1] + radius * se,
+                                                 target[2] + radius * ce * std::cos(azimuth));
+        const float dist = std::max(0.5f, std::fabs(simd_dot(eye - clothAnchorPos_, clothAnchorN_)));
+        const float halfY = dist * std::tan(std::clamp(effectiveFov(), 0.05f, 1.4f));
+        clothHalfY_ = std::max(0.05f, halfY * over);
+        clothHalfX_ = std::max(0.05f, halfY * aspect * over);
+        clothExtentFrozen_ = true;
+        clothBuiltRes_ = 0;          // force the build below
+    }
+
+    if (res == clothBuiltRes_ && std::fabs(over - clothBuiltOversize_) < 1e-4f) return;
     clothBuiltRes_ = res;
     clothBuiltOversize_ = over;
-    clothHalfExtent_ = half;
-    cloth_.buildSheet(res, res, 2.f * half, 2.f * half, /*borderCells=*/1);
+    // Cells square-ish in world terms rather than square in grid terms: a 16:9
+    // sheet on a square grid stretches every cell, and the stretch/plastic
+    // limits are per-edge, so it would drape differently across than down.
+    const int nx = res;
+    const int ny = std::max(8, int(std::lround(float(res) * clothHalfY_ / std::max(1e-4f, clothHalfX_))));
+    cloth_.buildSheet(nx, ny, 2.f * clothHalfX_, 2.f * clothHalfY_, /*borderCells=*/1);
     // Normals before the first render -- buildSheet leaves them zeroed, and a
     // zero normal normalises to garbage.
     cloth_.computeNormals();
-    clothField_.resize(kClothFieldRes, kClothFieldRes, half, half);
+    clothField_.resize(kClothFieldRes, kClothFieldRes, clothHalfX_, clothHalfY_);
+}
+
+// The face model's own local z extent, off the mesh that is actually going to
+// be drawn. Cheap (one pass over a few thousand verts, once per press) and it
+// removes the two constants the first version of this port guessed at.
+void RootScene::measureClothFaceDepth() {
+    clothFaceZMin_ = 0.f; clothFaceZMax_ = 0.f;
+    if (faceVerts_.size() < 3) return;
+    float lo = 1e9f, hi = -1e9f;
+    for (size_t i = 2; i < faceVerts_.size(); i += 3) {
+        lo = std::min(lo, faceVerts_[i]);
+        hi = std::max(hi, faceVerts_[i]);
+    }
+    if (lo <= hi) { clothFaceZMin_ = lo; clothFaceZMax_ = hi; }
 }
 
 // The collider: the anchor's own placed face mesh (at the current press
@@ -590,8 +636,8 @@ void RootScene::rasteriseClothField() {
         const float lx = simd_dot(d, clothAnchorT_);
         const float ly = simd_dot(d, clothAnchorB_);
         z = simd_dot(d, clothAnchorN_);
-        fx = (lx + clothHalfExtent_) / (2.f * clothHalfExtent_) * float(fw - 1);
-        fy = (clothHalfExtent_ - ly) / (2.f * clothHalfExtent_) * float(fh - 1);
+        fx = (lx + clothHalfX_) / (2.f * clothHalfX_) * float(fw - 1);
+        fy = (clothHalfY_ - ly) / (2.f * clothHalfY_) * float(fh - 1);
     };
 
     const size_t nv = faceVerts_.size() / 3;
@@ -638,8 +684,8 @@ void RootScene::rasteriseClothField() {
         }
     }
 
-    const float texel = 2.f * clothHalfExtent_ / float(std::max(1, fw - 1));
-    const float cell  = 2.f * clothHalfExtent_ / float(std::max(1, cloth_.nx - 1));
+    const float texel = 2.f * clothHalfX_ / float(std::max(1, fw - 1));
+    const float cell  = 2.f * clothHalfX_ / float(std::max(1, cloth_.nx - 1));
     clothField_.dilate(int(std::ceil(cell / std::max(texel, 1e-6f))));
     clothField_.buildNormals();
 }
@@ -648,12 +694,12 @@ void RootScene::rasteriseClothField() {
 // positive and growing as the sheet recedes behind the face. See
 // TransitionScene::Impl::updateClothClearance, same intent.
 //
-// faceHalfDepthLocal is an approximation of the canonical face model's own
-// depth extent (it measures well under half its width -- see
-// appendFaceVertexData's neighbouring comments) rather than the exact
-// per-vertex extent TransitionScene computed each frame; clothClearDistance
-// is a tunable threshold, not a hard geometric fact, so this does not need to
-// be exact -- flagged here as a simplification against the original port.
+// The mask's front comes from the mesh's measured z extent (see
+// measureClothFaceDepth), not from an estimate: an earlier version of this port
+// guessed the canonical model's half-depth at 0.2 where it is in fact 0.383,
+// which on a live layout put the reported clearance about 0.4 low -- enough
+// that clothCleared() never once returned true, so beat 1 sat on its
+// ten-second clear tail every time instead of moving on when the film left.
 void RootScene::updateClothClearance() {
     if (cloth_.pos.empty()) return;
     double zsum = 0; size_t n = 0;
@@ -663,11 +709,16 @@ void RootScene::updateClothClearance() {
         ++n;
     }
     if (!n) return;
-    const float faceHalfDepthLocal = 0.2f;
+    clothClearanceVal_ = anchorFrontLocalZ() - float(zsum / double(n));
+}
+
+// Where the anchor mask's frontmost point sits, in the anchor's local frame, at
+// the current press offset. The single place the press geometry is spelled out:
+// the collider, the clearance signal and the press schedule all read it, so the
+// visible mask and the thing the cloth collides with cannot drift apart.
+float RootScene::anchorFrontLocalZ() const {
     const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
-    const float maskFrontLocalZ =
-        -(clothAnchorRD_ * faceRecess) - clothPressOffset_ + faceHalfDepthLocal * scale;
-    clothClearanceVal_ = maskFrontLocalZ - float(zsum / double(n));
+    return -(clothAnchorRD_ * faceRecess) - clothPressOffset_ + clothFaceZMax_ * scale;
 }
 
 // cloth_'s local-frame triangles -> world-space interleaved vertices (10
@@ -682,7 +733,7 @@ void RootScene::packClothMesh() {
     if (!showCloth || !clothActive_ || cloth_.tris.empty()) { rr_->uploadClothMesh({}); return; }
 
     const float o = clothBuiltOversize_ > 0.f ? clothBuiltOversize_ : 1.f;
-    const float cellW = 2.f * clothHalfExtent_ / float(std::max(1, cloth_.nx - 1));
+    const float cellW = 2.f * clothHalfX_ / float(std::max(1, cloth_.nx - 1));
     const int di[4] = {-1, 1, 0, 0}, dj[4] = {0, 0, -1, 1};
 
     std::vector<float> data;
@@ -731,6 +782,20 @@ void RootScene::packClothMesh() {
 // Transition entry onward instead of handing off to a separate scene.
 void RootScene::advanceCloth(double dt) {
     if (!clothActive_) return;
+    // The film is gone once the fall is over, and "gone" has to mean not drawn.
+    // Nothing else retires it: RootScene keeps rendering straight through into
+    // the Roots phase now (main.mm no longer swaps scenes here), so a sheet
+    // left active stays on screen -- as the crumpled bundle the fall ends in,
+    // parked in front of the mask -- for the whole rest of the visit. Dropping
+    // clothActive_ also freezes clothT_, so clothDone() stays true for the
+    // phase gate that reads it.
+    if (clothDone()) {
+        clothActive_ = false;
+        clothPressOffset_ = 0.f;   // the mask at exactly its cavity placement
+        if (rr_) rr_->uploadClothMesh({});
+        uploadFaceFromMasks();
+        return;
+    }
     refreshClothAnchor();
     ensureClothSheet();
     clothT_ += dt;
@@ -745,8 +810,21 @@ void RootScene::advanceCloth(double dt) {
     // there is no second resting depth to keep in sync with it. Flagged here
     // as a deliberate simplification against the original port.
     const float pe = smoothstep01(clothPress());
-    const float pressRetract = std::max(clothAnchorRD_, 1.0f) * 2.0f + 0.5f;
-    clothPressOffset_ = pressRetract * (1.f - pe);
+    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    // Where the press starts: far enough back that the mask's own frontmost
+    // point is clear behind the sheet's rest plane, and no further. Measured
+    // (clothFaceZMax_) rather than the constant the first version of this port
+    // used, which retracted by a couple of mask depths regardless and so spent
+    // most of the press travelling through empty space before touching
+    // anything.
+    const float restFront = -(clothAnchorRD_ * faceRecess) + clothFaceZMax_ * scale;
+    const float retract = restFront + 0.05f * scale;
+    // ...and where it ends: proud of the plane, so the film is actually tented
+    // over a face rather than grazed by one. Held through the settle, unwound
+    // over the release, so the mask is back at exactly its cavity placement --
+    // offset 0, the one resting depth -- by the time the film has left it.
+    const float proud = clothPressProud * scale;
+    clothPressOffset_ = retract * (1.f - pe) - proud * pe * (1.f - smoothstep01(clothRelease()));
 
     rasteriseClothField();
     cloth_.collider = &clothField_;

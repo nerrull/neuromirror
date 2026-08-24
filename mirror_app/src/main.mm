@@ -1149,6 +1149,15 @@ int main(int argc, char** argv) {
             bool  ov  = (i + 6 < argc) ? atoi(argv[i + 6]) != 0 : false;
             return rootshot(path, az, el, rad, md, ov);
         }
+        if (a == "--clothshot") {
+            const char* prefix = (i + 1 < argc) ? argv[i + 1] : "cloth_";
+            int   n  = (i + 2 < argc) ? atoi(argv[i + 2]) : 180;
+            int   cw = (i + 3 < argc) ? atoi(argv[i + 3]) : 960;
+            int   ch = (i + 4 < argc) ? atoi(argv[i + 4]) : 540;
+            float fp = (i + 5 < argc) ? (float)atof(argv[i + 5]) : 30.f;
+            const char* photo = (i + 6 < argc) ? argv[i + 6] : "";
+            return clothshot(prefix, n, cw, ch, fp, photo);
+        }
         if (a == "--bench") {
             int ds = (i + 1 < argc) ? atoi(argv[i + 1]) : 4;
             int fr = (i + 2 < argc) ? atoi(argv[i + 2]) : 200;
