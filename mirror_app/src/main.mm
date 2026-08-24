@@ -1971,6 +1971,11 @@ int main(int argc, char** argv) {
                             rootCamSeq.begin(roots, g_root_beats);
                         }
                         rootCamSeqBegunForSitting = false;
+                        // The press's tight framing (set in the Transition
+                        // branch when the authored sequence is not driving)
+                        // ends with the press: from here the shot is the
+                        // whole piece opening out, not one face.
+                        roots.focusMask = -1;
                     }
                     // The face sequence reseeds on every entry too, off
                     // whatever track the most recent Transition lock
@@ -2496,6 +2501,22 @@ int main(int argc, char** argv) {
                 // (RootScene::clothPress() reaching 1.0 is the equivalent
                 // instant). Manual capture (the panel's own button, off
                 // TransitionScene's still-live devtools path) is unaffected.
+
+                // Frame the press on the face it is happening to.
+                //
+                // The press is choreographed against beat 1 of the authored
+                // camera sequence, which sits at 2.6x the anchor's own extent
+                // -- close enough that the film tents visibly over a brow and
+                // a nose. But g_root_authored_camera is off unless an operator
+                // turns it on, and with it off applyFraming frames the *whole
+                // planned layout* instead: the same drape then happens on a
+                // face a fifth of the frame wide, where the tenting is a few
+                // pixels and the press reads as nothing happening to a flat
+                // pond. focusMask gives applyFraming the same single-mask
+                // framing the sequence would have used, so the gesture is the
+                // same shot either way; when the sequence *is* driving it sets
+                // autoFrame false and this is simply ignored.
+                if (!g_root_authored_camera) roots.focusMask = roots.anchorMask;
 
                 rootsClock += dt;
                 const bool cleared = roots.clothCleared();

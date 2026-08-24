@@ -1946,6 +1946,9 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                            atoi(getenv("CLOTHSHOT_AUTOFRAME")) != 0;
     if (autoframe) {
         roots.autoFrame = true;
+        // What main.mm's Transition branch does when the authored sequence is
+        // not driving: frame the press on the face it is happening to.
+        roots.focusMask = roots.anchorMask;
         roots.camEase = 0.6f;        // a move, not a cut -- see RootScene::camEase
         // Where the previous phase leaves the camera: RootScene's own default
         // framing, well below and away from the anchor.
