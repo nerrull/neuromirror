@@ -64,20 +64,25 @@ static constant float2 kDisk[DOF_TAPS] = {
 
 // The supersample box, factored out so chromatic aberration can run it once per
 // channel at three slightly different magnifications.
-static float3 resolveScene(texture2d<float> tex, sampler smp, float2 uv,
-                           constant RootPostU& U) {
-    if (U.ssaa <= 1) return tex.sample(smp, uv).rgb;
+static float4 resolveScene4(texture2d<float> tex, sampler smp, float2 uv,
+                            constant RootPostU& U) {
+    if (U.ssaa <= 1) return tex.sample(smp, uv);
     const float inv = 1.0 / float(U.ssaa);
-    float3 acc = float3(0.0);
+    float4 acc = float4(0.0);
     for (int y = 0; y < 4; ++y) {
         if (y >= U.ssaa) break;
         for (int x = 0; x < 4; ++x) {
             if (x >= U.ssaa) break;
             const float2 o = (float2(x, y) + 0.5) * inv - 0.5;
-            acc += tex.sample(smp, uv + o * U.srcTexel).rgb;
+            acc += tex.sample(smp, uv + o * U.srcTexel);
         }
     }
     return acc / float(U.ssaa * U.ssaa);
+}
+
+static float3 resolveScene(texture2d<float> tex, sampler smp, float2 uv,
+                           constant RootPostU& U) {
+    return resolveScene4(tex, smp, uv, U).rgb;
 }
 
 // ASC-CDL-style grade: gain scales, lift offsets, gamma bends the middle. The
@@ -139,6 +144,14 @@ fragment float4 root_post_fs(PostVOut in [[stage_in]],
     } else {
         scene = resolveScene(sceneTex, linSmp, uv, U);
     }
+    // The film the cloth carries, and how much of this pixel is it. Negative
+    // alpha out of the fog pass means "already a finished picture" -- see
+    // root_cloth.metal. Kept here, before depth of field and the grade, because
+    // what has to survive is the image as the mirror made it: this is the frame
+    // the piece cuts from, and any difference between the two is a visible cut.
+    const float4 srcSample = resolveScene4(sceneTex, linSmp, uv, U);
+    const float  filmWeight = clamp(-srcSample.a, 0.0, 1.0);
+    const float3 filmColor  = srcSample.rgb;
 
     // --- depth of field ------------------------------------------------------
     // Deliberately a gather on the resolved image rather than a scatter or a
@@ -257,6 +270,13 @@ fragment float4 root_post_fs(PostVOut in [[stage_in]],
     }
 
     col = srgbEncode(col);
+
+    // The pass-through. After the encode, because the film is already
+    // display-referred sRGB -- it is the mirror's own output, which the Mirror
+    // phase puts on screen untouched -- so anything done to it here is a
+    // difference the audience sees at the cut. Before the grain, which is the
+    // last thing that would otherwise land on it.
+    col = mix(col, filmColor, filmWeight);
 
     // --- grain ---------------------------------------------------------------
     // Weighted towards the midtones by 1 - |2L-1|: grain in the deep shadows

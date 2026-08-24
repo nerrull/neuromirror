@@ -79,5 +79,12 @@ fragment float4 root_cloth_fs(ClothVOut in [[stage_in]],
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = in.uv + N.xy * u.refract * bulge;
     float3 base = pond.sample(smp, uv).rgb;
-    return float4(base * max(0.0, shade), 1.0);
+    // Alpha carries two things, by sign. The geometry passes write the AO
+    // weight in [0,1] (see root_geom.metal, read by root_fog.metal); the film
+    // writes *negative* alpha to say "this pixel is already a finished picture,
+    // hand it back to the display untouched", with the magnitude as the
+    // pass-through weight. Negative also disables AO for free, since the fog
+    // pass clamps the weight it multiplies by -- which is what the film wants
+    // anyway: ambient occlusion on a photograph is a category error.
+    return float4(base * max(0.0, shade), -u.passThrough);
 }

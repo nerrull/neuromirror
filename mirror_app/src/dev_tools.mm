@@ -1806,6 +1806,39 @@ static id<MTLTexture> makeGridFilm(const MetalContext& ctx, int W, int H) {
     return tex;
 }
 
+// Reads any of the RGBA16Float targets in this app into linear floats. Shared
+// by the pond dump and the cloth dump below so the seam number compares two
+// images that have had exactly the same thing done to them -- a diff between
+// one image that was gamma-encoded on the way out and one that was not measures
+// the writer, not the seam.
+static std::vector<float> readTexRGB(id<MTLTexture> tex, int W, int H) {
+    std::vector<uint16_t> px((size_t)W * H * 4);
+    [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
+       fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    auto h2f = [](uint16_t h) {
+        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, bits;
+        if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
+        float f; __builtin_memcpy(&f, &bits, 4); return f;
+    };
+    std::vector<float> out((size_t)W * H * 3);
+    for (size_t i = 0; i < (size_t)W * H; ++i)
+        for (int c = 0; c < 3; ++c) out[i * 3 + c] = h2f(px[i * 4 + c]);
+    return out;
+}
+
+static void writeRGBPPM(const char* path, const std::vector<float>& rgb, int W, int H,
+                        bool encoded) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+    fprintf(fp, "P6\n%d %d\n255\n", W, H);
+    for (size_t i = 0; i < (size_t)W * H * 3; ++i) {
+        float v = std::min(1.f, std::max(0.f, rgb[i]));
+        if (!encoded) v = std::pow(v, 1.f / 2.2f);
+        fputc((unsigned char)(v * 255.f + 0.5f), fp);
+    }
+    fclose(fp);
+}
+
 int clothshot(const char* prefix, int frames, int W, int H, float fps,
               const char* photo) {
     MetalContext ctx;
@@ -1831,9 +1864,51 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
         const int fw = W / 2, fh = H / 2;
         std::vector<float> target;
         mirror::DownsampleRGB8(rgb8.data(), W, H, 3, 0, 2, fw, fh, target);
-        mirror.pond().beginFit(target, fh, fw, mirror.params(), {});
+        // The whole live chain, in the order main.mm runs it: track the face,
+        // fit the identity, hand RootScene the mesh, then bake the mirror's own
+        // output onto that mesh as per-vertex colour. The last step is the one
+        // that matters for "does the mask wear the face" -- RootScene has no
+        // live texture to sample by the time it draws (the mirror has stopped),
+        // so setFaceColors is the only path the face has onto the mask.
+        std::string terr;
+        mirror::FaceTracker tracker;
+        mirror::FaceResult face;
+        bool tracked = false;
+        if (mirror::FaceTracker::available() &&
+            tracker.open(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_landmarker.task", terr) &&
+            tracker.detect(rgb8.data(), W, H, 1000, face)) {
+            tracked = true;
+            std::vector<unsigned char> fmask;
+            mirror::RasteriseFaceMask(face.landmarks, mirror::FaceOvalIndices(), fw, fh, 8, fmask);
+            mirror.pond().beginFit(target, fh, fw, mirror.params(), fmask);
+        } else {
+            printf("clothshot: no face tracked (%s)\n", terr.c_str());
+            mirror.pond().beginFit(target, fh, fw, mirror.params(), {});
+        }
         for (int i = 0; i < 1200; ++i) mirror.fitSteps(1, 3e-3f);
+        mirror.advance(1.0 / double(fps));
+        mirror.render();               // populates lastImageRGB for the bake
         printf("clothshot: mirror fitted, loss %.5f\n", mirror.lastLoss());
+
+        if (tracked) {
+            mirror::FaceFitter fitter;
+            if (fitter.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", terr)) {
+                fitter.config().min_frontality = 0.f;
+                fitter.offerIdentityFrame(face, W, H);
+                float res = -1.f;
+                fitter.fitIdentity(&res);
+                fitter.update(face, W, H);
+                roots.setFittedFace(fitter.vertices(), fitter.basis().triangles());
+                std::vector<float> colors;
+                fitter.sampleTexture(mirror.lastImageRGB(), mirror.lowW(), mirror.lowH(),
+                                     W, H, colors);
+                roots.setFaceColors(colors);
+                printf("clothshot: face fitted (residual %.2f px), %d verts, %zu colours\n",
+                       res, fitter.basis().vertexCount(), colors.size() / 3);
+            } else {
+                printf("clothshot: no face basis (%s)\n", terr.c_str());
+            }
+        }
     } else {
         film = makeGridFilm(ctx, W, H);
     }
@@ -1863,11 +1938,49 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 
     const double dt = 1.0 / double(fps);
     double clock = 0.0;
+    std::vector<float> seamPond;
     for (int f = 0; f < frames; ++f) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
-            if (!film) { mirror.advance(dt); roots.setPondTexture(mirror.render()); }
-            else roots.setPondTexture(film);
+            id<MTLTexture> pond = film;
+            if (!film) { mirror.advance(dt); pond = mirror.render(); }
+            roots.setPondTexture(pond);
+            // The seam: on the first frame, keep the film exactly as the Mirror
+            // phase hands it to the presenter. The Transition phase's opening
+            // frame has to be that image and not a graded version of it -- the
+            // sheet is flat, fully pinned and covering the frustum, so every
+            // pixel of it is the pond and nothing else. Whatever these two
+            // differ by is what the audience sees at the cut.
+            if (f == 0 && pond) {
+                // At the pond's own resolution and then bilinearly upscaled --
+                // the mirror renders below the window size and the presenter
+                // scales it up, so the image the audience actually sees at the
+                // cut is the upscaled one. Reading it at W x H instead silently
+                // returns zeros, which reads as a perfectly black pond.
+                const int pw = (int)pond.width, ph = (int)pond.height;
+                const std::vector<float> src = readTexRGB(pond, pw, ph);
+                seamPond.assign((size_t)W * H * 3, 0.f);
+                for (int y = 0; y < H; ++y) {
+                    const float sy = std::min(float(ph - 1),
+                        std::max(0.f, (y + 0.5f) * float(ph) / float(H) - 0.5f));
+                    const int y0 = int(sy), y1 = std::min(ph - 1, y0 + 1);
+                    const float fy = sy - float(y0);
+                    for (int x = 0; x < W; ++x) {
+                        const float sx = std::min(float(pw - 1),
+                            std::max(0.f, (x + 0.5f) * float(pw) / float(W) - 0.5f));
+                        const int x0 = int(sx), x1 = std::min(pw - 1, x0 + 1);
+                        const float fx = sx - float(x0);
+                        for (int c = 0; c < 3; ++c) {
+                            const float a = src[((size_t)y0 * pw + x0) * 3 + c];
+                            const float b = src[((size_t)y0 * pw + x1) * 3 + c];
+                            const float d = src[((size_t)y1 * pw + x0) * 3 + c];
+                            const float e = src[((size_t)y1 * pw + x1) * 3 + c];
+                            seamPond[((size_t)y * W + x) * 3 + c] =
+                                (a + (b - a) * fx) * (1.f - fy) + (d + (e - d) * fx) * fy;
+                        }
+                    }
+                }
+            }
             clock += dt;
             seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared());
             roots.advance(dt);
@@ -1878,6 +1991,29 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
             snprintf(path, sizeof(path), "%s%04d.ppm", prefix, f);
             if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
                 return 1;
+            if (f == 0 && !seamPond.empty()) {
+                // Both sides read and written identically -- see readTexRGB.
+                // The pond is display-referred already (it is what the Mirror
+                // phase puts on screen); the cloth frame is encoded iff the
+                // post chain ran, which outputIsEncoded() answers.
+                const std::vector<float> shown = readTexRGB(tex, W, H);
+                snprintf(path, sizeof(path), "%sseam_pond.ppm", prefix);
+                writeRGBPPM(path, seamPond, W, H, /*encoded=*/true);
+                snprintf(path, sizeof(path), "%sseam_cloth.ppm", prefix);
+                writeRGBPPM(path, shown, W, H, roots.renderer().outputIsEncoded());
+                double sum = 0, worst = 0; size_t n = 0;
+                std::vector<float> diff(shown.size());
+                for (size_t k = 0; k < shown.size() && k < seamPond.size(); ++k) {
+                    const double d = std::fabs(double(shown[k]) - double(seamPond[k]));
+                    diff[k] = float(std::min(1.0, d * 4.0));   // x4 so it is visible
+                    sum += d; worst = std::max(worst, d); ++n;
+                }
+                snprintf(path, sizeof(path), "%sseam_diff.ppm", prefix);
+                writeRGBPPM(path, diff, W, H, /*encoded=*/true);
+                printf("clothshot: SEAM mean |pond - cloth| = %.4f  worst = %.4f  "
+                       "(0 = the cut is invisible; wrote %sseam_{pond,cloth,diff}.ppm)\n",
+                       n ? sum / double(n) : 0.0, worst, prefix);
+            }
             if ((f % 20) == 0)
                 printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f\n",
                        f, frames, roots.clothPhaseName(), roots.clothPress(),

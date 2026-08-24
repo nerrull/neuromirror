@@ -146,6 +146,18 @@ struct RootClothU {
     float   reliefShade;  // how far Lambert is allowed to swing from the flat sheet
     float   reliefSharp;  // curvature term strength
     float   sheen;        // raking specular on the sheet's own bends
+    // How much of this pass's output is a display-referred *picture* rather
+    // than scene radiance. The film the sheet carries is the mirror's own
+    // output -- the exact image the piece cuts from -- so grading it (exposure,
+    // ACES, split-tone, fog, AO, vignette, grain) makes the cut visible: on a
+    // live fit it moves the frame by 0.27 mean absolute, which is not a seam,
+    // it is a dissolve to a washed-out copy. The cloth pass writes -passThrough
+    // into alpha; root_fog.metal and root_post.metal read that and hand the
+    // pixel back unchanged. Ramps to 0 across the release, so the film that
+    // falls away *is* graded with the scene it is falling into -- it stops
+    // being a picture and becomes an object at the same moment it stops
+    // covering the frame.
+    float passThrough;
 };
 
 // Leaf mid-geometry pass (root_leaf.metal): meshed leaves rasterized into the

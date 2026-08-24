@@ -248,9 +248,12 @@ fragment float4 root_fog_fs(FogVOut in [[stage_in]],
     // see. The AO buffer is half-resolution and sampled linearly; its own
     // bilateral blur has already stopped it from crossing depth edges, so the
     // upsample cannot drag occlusion onto a surface that is not occluded.
+    // Negative alpha marks a display-referred pixel (the cloth's film -- see
+    // root_cloth.metal); clamping the weight at 0 leaves it unoccluded.
+    const float filmWeight = max(0.0, -sceneSample.a);
     if (U.aoEnabled == 1) {
         const float ao = aoTex.sample(linSmp, uv).r;
-        sceneColor *= mix(1.0, ao, sceneSample.a);
+        sceneColor *= mix(1.0, ao, max(0.0, sceneSample.a));
     }
 
     // Reconstruct the world ray (matches root_geom_vs's NDC).
@@ -328,5 +331,12 @@ fragment float4 root_fog_fs(FogVOut in [[stage_in]],
     }
 
     float glowGate = clamp(U.fogDensity / 0.015, 0.0, 1.0) * U.wispGlowStrength;
-    return float4(foggedColor + wispGlow * 0.15 * glowGate, 1.0);
+    // The film does not sit in the medium: it is the picture the piece is
+    // cutting from, not a surface eight units into a foggy room. Mixed rather
+    // than branched so a partially-released sheet crossfades into the fog as
+    // it stops being a picture. Alpha is forwarded so the composite can finish
+    // the job -- it is the only reason this pass has ever returned anything but
+    // 1 in alpha.
+    const float3 lit = foggedColor + wispGlow * 0.15 * glowGate;
+    return float4(mix(lit, sceneSample.rgb, filmWeight), sceneSample.a);
 }

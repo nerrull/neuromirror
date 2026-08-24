@@ -875,6 +875,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         cu.reliefShade = cloth.reliefShade;
         cu.reliefSharp = cloth.reliefSharp;
         cu.sheen = cloth.sheen;
+        cu.passThrough = std::clamp(cloth.passThrough, 0.f, 1.f);
         [ge setRenderPipelineState:clothPipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];

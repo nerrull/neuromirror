@@ -730,6 +730,13 @@ float RootScene::anchorFrontLocalZ() const {
 // simulated in local coordinates (see the file comment above).
 void RootScene::packClothMesh() {
     if (!rr_) return;
+    // The film is a picture until it starts to leave, and an object once it
+    // has. Held at 1 through hold/press/settle -- where the sheet covers the
+    // frame and the audience must not be able to tell that the Mirror phase
+    // ended -- then handed over to the scene's own grade across the release, by
+    // which point it is falling away and being lit with the room is what it
+    // wants. See RootClothU::passThrough for why this exists at all.
+    rr_->cloth.passThrough = 1.f - smoothstep01(clothRelease());
     if (!showCloth || !clothActive_ || cloth_.tris.empty()) { rr_->uploadClothMesh({}); return; }
 
     const float o = clothBuiltOversize_ > 0.f ? clothBuiltOversize_ : 1.f;

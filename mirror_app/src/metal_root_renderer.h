@@ -168,6 +168,12 @@ public:
         float reliefShade = 0.55f;
         float reliefSharp = 0.8f;
         float sheen       = 0.35f;
+        // 1 = the film reaches the display exactly as the mirror made it (see
+        // RootClothU::passThrough in root_shared.h); 0 = it is graded with the
+        // rest of the scene. RootScene drives this from the cloth's own
+        // release, so the opening frame of the press is the pond and the sheet
+        // that falls away belongs to the room it falls into.
+        float passThrough = 1.0f;
     };
     ClothParams cloth;
 
