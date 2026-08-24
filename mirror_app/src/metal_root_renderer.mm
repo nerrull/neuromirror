@@ -463,23 +463,23 @@ void MetalRootRenderer::uploadSegments(const std::vector<float>& nodesXYZ,
 
 void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {
     faceVertCount_ = (int)(interleaved.size() / 12);
-    faceBuf_ = faceVertCount_ > 0
-        ? makeBuffer(interleaved.data(), interleaved.size() * sizeof(float))
-        : nil;
+    if (faceVertCount_ > 0)
+        uploadBuffer(faceBuf_, faceCap_, interleaved.data(),
+                     interleaved.size() * sizeof(float));
 }
 
 void MetalRootRenderer::uploadLeafMesh(const std::vector<float>& interleaved) {
     leafVertCount_ = (int)(interleaved.size() / 12);
-    leafBuf_ = leafVertCount_ > 0
-        ? makeBuffer(interleaved.data(), interleaved.size() * sizeof(float))
-        : nil;
+    if (leafVertCount_ > 0)
+        uploadBuffer(leafBuf_, leafCap_, interleaved.data(),
+                     interleaved.size() * sizeof(float));
 }
 
 void MetalRootRenderer::uploadClothMesh(const std::vector<float>& interleaved) {
     clothVertCount_ = (int)(interleaved.size() / 10);
-    clothBuf_ = clothVertCount_ > 0
-        ? makeBuffer(interleaved.data(), interleaved.size() * sizeof(float))
-        : nil;
+    if (clothVertCount_ > 0)
+        uploadBuffer(clothBuf_, clothCap_, interleaved.data(),
+                     interleaved.size() * sizeof(float));
 }
 
 // Constant per-segment attributes (prim=0, grp=0, frame=0, aux=(0,1,0,0)) that

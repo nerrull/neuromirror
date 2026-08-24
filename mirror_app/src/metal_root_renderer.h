@@ -519,6 +519,16 @@ private:
     // buffer's live contents; see uploadBuffer().
     size_t nodeCap_ = 0, segCap_ = 0, radCap_ = 0, distCap_ = 0;
     size_t grpCap_ = 0, primCap_ = 0, frameCap_ = 0, auxCap_ = 0;
+    // The mid-geometry meshes get the same treatment as the segment buffers
+    // above, and for a much sharper reason: this file is not built with ARC
+    // (only imgui_impl_metal.mm is), so newBufferWithLength: hands back a +1
+    // object that assigning over simply drops on the floor. These three are
+    // re-uploaded every frame -- the masks are rebuilt per frame even while the
+    // growth is held, and the cloth is packed per frame for the whole press --
+    // so leaving them on makeBuffer leaked a few megabytes per frame, which is
+    // gigabytes per minute rather than the per-visitor trickle the segment
+    // buffers were.
+    size_t faceCap_ = 0, leafCap_ = 0, clothCap_ = 0;
     int segCount_ = 0;
 
     // A cached, static capsule system. node/dist are per-node (shared across LODs);
