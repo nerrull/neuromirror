@@ -133,6 +133,21 @@ struct RootFaceU {
     RS_F4   keyColor;     // xyz, the directional key's colour x intensity
 };
 
+// Cloth mid-geometry pass (root_cloth.metal): the pond -> face draped sheet,
+// rasterized into the shared colour+depth target alongside the face mask and
+// the leaves. Ported from TransitionScene's f_main (transition.metal), minus
+// the fixed front-on camera assumption -- the cloth now sits in RootScene's
+// own orbiting camera, sharing its viewProj/lightDir rather than owning a
+// second fixed one.
+struct RootClothU {
+    RS_F4X4 viewProj;
+    RS_F4   lightDir;     // xyz
+    float   refract;      // uv shift from the surface normal, gated by displacement
+    float   reliefShade;  // how far Lambert is allowed to swing from the flat sheet
+    float   reliefSharp;  // curvature term strength
+    float   sheen;        // raking specular on the sheet's own bends
+};
+
 // Leaf mid-geometry pass (root_leaf.metal): meshed leaves rasterized into the
 // same shared colour+depth target as the face masks, for the same reason -- but
 // with leaf shading (matte lamina, back-lit translucency) rather than stone.

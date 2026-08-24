@@ -2,4 +2,5 @@
 fit = new_color
 show = default
 mirror = mirror_bw
+roots = default
 debug = debug

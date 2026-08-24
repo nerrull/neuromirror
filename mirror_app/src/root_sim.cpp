@@ -110,6 +110,23 @@ struct RootSim::Impl {
     std::string paramPath;
     double tipRadius = 0.0;
 
+    // The anchor-first placement (see reset()): a rigid transform, computed once
+    // per reset from mask 0's own natural frame, applied to every mask's render-
+    // space placement and to the render-space skeleton/tip. Identity until
+    // reset() computes it, so an empty sim (masks never built) is a no-op.
+    //
+    // Stored as the rows of the rotation matrix (so applyAnchor's dot products
+    // read directly as "row i . v") plus a translation applied to points only.
+    Vector3d anchorRowT{1, 0, 0}, anchorRowB{0, 1, 0}, anchorRowN{0, 0, 1};
+    Vector3d anchorTrans{0, 0, 0};
+
+    Vector3d applyAnchorRot(const Vector3d& v) const {
+        return Vector3d(anchorRowT.times(v), anchorRowB.times(v), anchorRowN.times(v));
+    }
+    Vector3d applyAnchorPoint(const Vector3d& v) const {
+        return applyAnchorRot(v).plus(anchorTrans);
+    }
+
     // The host the masks sit on, and that travel is confined to. Null for a
     // placement that has no surface (lobes) -- travel is then bounded only by
     // the mask cavities.
@@ -315,6 +332,13 @@ struct RootSim::Impl {
         // vertical flip the old toYup baked in.)
         Vector3d t = toYup(m.tangent);
         Vector3d b = toYup(m.bitangent);
+        // Anchor-first placement, composed after toYup (see reset()): a single
+        // rigid transform so mask 0 always lands at the same fixed pose,
+        // whatever host/pattern/seed produced its natural first sample.
+        pos = applyAnchorPoint(pos);
+        n = applyAnchorRot(n);
+        t = applyAnchorRot(t);
+        b = applyAnchorRot(b);
         SimMask sm;
         sm.pos[0] = (float)pos.x; sm.pos[1] = (float)pos.y; sm.pos[2] = (float)pos.z;
         sm.normal[0] = (float)n.x; sm.normal[1] = (float)n.y; sm.normal[2] = (float)n.z;
@@ -525,6 +549,45 @@ bool RootSim::reset(const SimParams& p) {
     }
     if (impl_->masks.empty()) return false;
 
+    // Anchor-first placement.
+    //
+    // masks[0] is "the anchor" -- placed by the host/pattern's own first
+    // sample, wherever that happens to fall (a UV of (0, startFrac) on
+    // whatever host is configured). That is not a chosen transform, it is
+    // whatever the pattern math produced, and it moves whenever N, the host,
+    // the pattern, or the seed changes -- which is exactly the placement the
+    // directive wants inverted: RootScene needs mask 0 at one fixed, known
+    // pose so cloth/collision geometry can be built against it without
+    // knowing anything about the growth layout.
+    //
+    // Fixed anchor pose (a look decision, not a derived one): render-space
+    // origin, normal facing +z, bitangent (up-the-face) along +y. This reads
+    // square-on to RootScene's default camera (azimuth ~0.6 rad, elevation
+    // ~0.35 rad -- eye sits mostly along +x/+y/+z from the target, so a mask
+    // facing +z presents its front rather than its edge or its back) and
+    // keeps the face upright, matching how appendFaceVertexData expects a
+    // mask's own frame to already be "correct side up".
+    //
+    // T is the unique rigid transform mapping mask 0's own natural (toYup'd)
+    // frame onto that fixed pose: since both frames are orthonormal, the
+    // rotation is just "rows = the natural frame's axes" (a transpose/inverse
+    // of an orthonormal matrix is its transpose), and the translation carries
+    // the natural position to the origin. Composed *after* toYup, per the
+    // plan -- CPlantBox's own grow-space math (Tropism, SDF hosts, cavity
+    // avoidance) is completely untouched by this; only the render-space
+    // output (every mask's frame, the skeleton, and the tip) is transformed.
+    {
+        const Vector3d n0 = toYup(impl_->masks[0].normal);
+        const Vector3d t0 = toYup(impl_->masks[0].tangent);
+        const Vector3d b0 = toYup(impl_->masks[0].bitangent);
+        const Vector3d p0 = toYup(impl_->masks[0].pos);
+        impl_->anchorRowT = t0;
+        impl_->anchorRowB = b0;
+        impl_->anchorRowN = n0;
+        impl_->anchorTrans = Vector3d(0, 0, 0);   // applyAnchorPoint needs it zeroed first
+        impl_->anchorTrans = Vector3d(0, 0, 0).minus(impl_->applyAnchorRot(p0));
+    }
+
     // Probe the parameter file: readParameters throws if the XML is missing.
     // The probe also carries the one thing the hop budget needs out of the
     // species file -- how the main root (subType 1, the tap root in every one
@@ -571,7 +634,7 @@ void RootSim::geometry(std::vector<float>& nodesXYZ,
     auto emit = [&](const std::vector<Vector3d>& ns, const std::vector<Vector2i>& ss,
                     const std::vector<double>& rs) {
         for (const auto& n : ns) {
-            Vector3d y = toYup(n);
+            Vector3d y = impl_->applyAnchorPoint(toYup(n));
             nodesXYZ.push_back((float)y.x); nodesXYZ.push_back((float)y.y); nodesXYZ.push_back((float)y.z);
         }
         for (const auto& s : ss) { segs.push_back(s.x + base); segs.push_back(s.y + base); }
@@ -606,7 +669,7 @@ bool RootSim::tip(float out[3]) const {
         const double d = n.minus(from).length();
         if (d > best) { best = d; bestNode = n; }
     }
-    const Vector3d y = toYup(bestNode);
+    const Vector3d y = impl_->applyAnchorPoint(toYup(bestNode));
     out[0] = (float)y.x; out[1] = (float)y.y; out[2] = (float)y.z;
     return true;
 }

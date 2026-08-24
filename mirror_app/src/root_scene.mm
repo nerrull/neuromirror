@@ -153,6 +153,15 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
     }
 }
 
+// --- cloth helpers (see advanceCloth/rasteriseClothField/packClothMesh) ----
+float smoothstep01(float x) {
+    x = std::clamp(x, 0.f, 1.f);
+    return x * x * (3.f - 2.f * x);
+}
+// The collider's resolution -- see TransitionScene's FIELD_RES for the same
+// reasoning (a couple of texels per cloth cell across the face).
+constexpr int kClothFieldRes = 160;
+
 // Right/up basis for a mask facing `n`, using world up (0,1,0).
 Mask makeMask(F3 pos, F3 n, float r) {
     n = norm(n);
@@ -417,6 +426,15 @@ void RootScene::uploadFaceFromMasks() {
             m.tangent = {sm.tangent[0], sm.tangent[1], sm.tangent[2]};
             m.bitangent = {sm.bitangent[0], sm.bitangent[1], sm.bitangent[2]};
         }
+        // The cloth press: while the anchor mask is still advancing through
+        // the sheet (see advanceCloth), it is retracted behind its resting
+        // position along its own -normal by clothPressOffset_, reaching 0 --
+        // i.e. exactly the placement this loop already computes -- by the
+        // time the press finishes. Only the anchor moves; every other mask
+        // (revealed later, once Roots is growing) is drawn at its own place
+        // as always.
+        if (mi == anchorMask && clothActive_ && clothPressOffset_ != 0.f)
+            m.pos = sub(m.pos, mul(m.normal, clothPressOffset_));
         m.rDepth = sm.rDepth; m.rWidth = sm.rWidth; m.rHeight = sm.rHeight;
         appendFaceVertexData(data, m, verts, faceTris_, faceScale, faceRecess, 3.0f,
                              maskColor, faceColors_, rr_->face.smoothNormals);
@@ -453,6 +471,323 @@ void RootScene::uploadFaceFromMasks() {
         }
     }
     rr_->uploadFaceMesh(data);
+}
+
+// ---------------------------------------------------------------------------
+// Cloth: the pond -> face press/release, moved in from TransitionScene.
+//
+// The cloth is built and simulated entirely in the anchor mask's own local
+// frame (tangent -> local x, bitangent -> local y, normal -> local z) rather
+// than in a fixed camera frame: step 1-2's anchor-first placement guarantees
+// that frame is fixed and known (render-space origin, normal +z, bitangent
+// +y -- see root_sim.cpp), so a rest sheet built flat at local z=0 already
+// sits exactly in the mask's own plane, and gravity along -normal is just
+// (0,0,-g) in local coordinates -- the same simplicity TransitionScene had
+// from its fixed front-on camera, without depending on one. Positions are
+// only ever converted to world space at the very end, in packClothMesh, for
+// the GPU to draw; the collider (rasteriseClothField) is built in the same
+// local frame the cloth already lives in, so collision needs no transform
+// either.
+// ---------------------------------------------------------------------------
+
+void RootScene::restartCloth() {
+    clothT_ = 0.0;
+    clothActive_ = true;
+    clothClearanceVal_ = -1e9f;
+    clothPressOffset_ = 0.f;
+    clothBuiltRes_ = 0;   // force ensureClothSheet to rebuild flat & fully pinned
+}
+
+float RootScene::clothPress() const {
+    return std::clamp((float(clothT_) - clothTiming.hold) / std::max(1e-3f, clothTiming.press), 0.f, 1.f);
+}
+float RootScene::clothRelease() const {
+    const float t0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
+    return std::clamp((float(clothT_) - t0) / std::max(1e-3f, clothTiming.release), 0.f, 1.f);
+}
+bool RootScene::clothDone() const {
+    return float(clothT_) > clothTiming.hold + clothTiming.press + clothTiming.settle +
+                            clothTiming.release + clothTiming.fall;
+}
+const char* RootScene::clothPhaseName() const {
+    const float t = float(clothT_);
+    if (t < clothTiming.hold) return "hold";
+    if (t < clothTiming.hold + clothTiming.press) return "press";
+    if (t < clothTiming.hold + clothTiming.press + clothTiming.settle) return "settle";
+    if (t < clothTiming.hold + clothTiming.press + clothTiming.settle + clothTiming.release)
+        return "release";
+    return "fall";
+}
+
+// The anchor mask's frame, for this frame -- read from the sim's planned
+// layout (available from reset() on, whether or not that mask has actually
+// been revealed yet) rather than hardcoded, so a future change to the anchor
+// pose in root_sim.cpp cannot silently desync the cloth from the mask.
+// Falls back to the identity frame (origin, +z/+x/+y) -- the documented
+// anchor pose -- when there is no sim to ask (the synthetic-roots fallback).
+void RootScene::refreshClothAnchor() {
+    const auto& pm = plannedMasks();
+    if (sim_ && anchorMask >= 0 && anchorMask < (int)pm.size()) {
+        const auto& m = pm[size_t(anchorMask)];
+        clothAnchorPos_ = simd_make_float3(m.pos[0], m.pos[1], m.pos[2]);
+        clothAnchorN_   = simd_make_float3(m.normal[0], m.normal[1], m.normal[2]);
+        clothAnchorT_   = simd_make_float3(m.tangent[0], m.tangent[1], m.tangent[2]);
+        clothAnchorB_   = simd_make_float3(m.bitangent[0], m.bitangent[1], m.bitangent[2]);
+        clothAnchorRW_ = m.rWidth; clothAnchorRH_ = m.rHeight; clothAnchorRD_ = m.rDepth;
+    } else {
+        clothAnchorPos_ = simd_make_float3(0, 0, 0);
+        clothAnchorN_   = simd_make_float3(0, 0, 1);
+        clothAnchorT_   = simd_make_float3(1, 0, 0);
+        clothAnchorB_   = simd_make_float3(0, 1, 0);
+        clothAnchorRW_ = clothAnchorRH_ = clothAnchorRD_ = 2.6f;
+    }
+}
+
+// The sheet has to cover the anchor's own placed size, which tracks
+// faceScale and the mask's own rWidth/rHeight rather than a magic constant --
+// see clothOversize's doc comment for why this differs from TransitionScene's
+// frustum-derived halfX/halfY.
+void RootScene::ensureClothSheet() {
+    const int res = std::clamp(clothSheetRes, 16, 192);
+    const float over = std::max(1.0f, clothOversize);
+    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    const float half = std::max(0.05f, scale * over);
+    if (res == clothBuiltRes_ && std::fabs(over - clothBuiltOversize_) < 1e-4f &&
+        std::fabs(half - clothHalfExtent_) < 1e-4f)
+        return;
+    clothBuiltRes_ = res;
+    clothBuiltOversize_ = over;
+    clothHalfExtent_ = half;
+    cloth_.buildSheet(res, res, 2.f * half, 2.f * half, /*borderCells=*/1);
+    // Normals before the first render -- buildSheet leaves them zeroed, and a
+    // zero normal normalises to garbage.
+    cloth_.computeNormals();
+    clothField_.resize(kClothFieldRes, kClothFieldRes, half, half);
+}
+
+// The collider: the anchor's own placed face mesh (at the current press
+// offset), rasterised as a depth map in the anchor's local (x, y) -- an
+// affine projection (three dot products), not TransitionScene's perspective
+// one, because the frame it projects into is fixed rather than a moving
+// camera. See TransitionScene::Impl::rasteriseField for the pattern this
+// ports.
+void RootScene::rasteriseClothField() {
+    clothField_.clear();
+    if (faceVerts_.empty() || faceTris_.empty()) return;
+    const int fw = clothField_.w, fh = clothField_.h;
+    if (fw < 2 || fh < 2) return;
+
+    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    // The same base placement appendFaceVertexData uses for this mask
+    // (recessed into its cavity), retracted further by the current press
+    // offset -- see uploadFaceFromMasks' anchor special-case above.
+    const simd_float3 base = clothAnchorPos_
+        - clothAnchorN_ * (clothAnchorRD_ * faceRecess)
+        - clothAnchorN_ * clothPressOffset_;
+
+    auto toField = [&](simd_float3 w, float& fx, float& fy, float& z) {
+        const simd_float3 d = w - clothAnchorPos_;
+        const float lx = simd_dot(d, clothAnchorT_);
+        const float ly = simd_dot(d, clothAnchorB_);
+        z = simd_dot(d, clothAnchorN_);
+        fx = (lx + clothHalfExtent_) / (2.f * clothHalfExtent_) * float(fw - 1);
+        fy = (clothHalfExtent_ - ly) / (2.f * clothHalfExtent_) * float(fh - 1);
+    };
+
+    const size_t nv = faceVerts_.size() / 3;
+    std::vector<simd_float3> wpos(nv);
+    for (size_t i = 0; i < nv; ++i) {
+        const simd_float3 local =
+            simd_make_float3(faceVerts_[i * 3], faceVerts_[i * 3 + 1], faceVerts_[i * 3 + 2]);
+        wpos[i] = base + clothAnchorT_ * (local.x * scale) + clothAnchorB_ * (local.y * scale)
+                       + clothAnchorN_ * (local.z * scale);
+    }
+
+    for (size_t t = 0; t + 2 < faceTris_.size(); t += 3) {
+        const int ia = faceTris_[t], ib = faceTris_[t + 1], ic = faceTris_[t + 2];
+        if (ia < 0 || ib < 0 || ic < 0) continue;
+        if (size_t(ia) >= nv || size_t(ib) >= nv || size_t(ic) >= nv) continue;
+        float ax, ay, az, bx, by, bz, cx, cy, cz;
+        toField(wpos[size_t(ia)], ax, ay, az);
+        toField(wpos[size_t(ib)], bx, by, bz);
+        toField(wpos[size_t(ic)], cx, cy, cz);
+
+        const float area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        if (std::fabs(area) < 1e-9f) continue;
+        const float inv = 1.f / area;
+
+        int x0 = std::max(0, int(std::floor(std::min({ax, bx, cx}))));
+        int x1 = std::min(fw - 1, int(std::ceil(std::max({ax, bx, cx}))));
+        int y0 = std::max(0, int(std::floor(std::min({ay, by, cy}))));
+        int y1 = std::min(fh - 1, int(std::ceil(std::max({ay, by, cy}))));
+
+        for (int y = y0; y <= y1; ++y) {
+            const float py = float(y) + 0.5f;
+            for (int x = x0; x <= x1; ++x) {
+                const float px = float(x) + 0.5f;
+                float w0 = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * inv;
+                float w1 = ((px - ax) * (cy - ay) - (py - ay) * (cx - ax)) * inv;
+                const float w2 = 1.f - w0 - w1;
+                if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+                const float z = w2 * az + w1 * bz + w0 * cz;
+                const size_t k = size_t(y) * size_t(fw) + size_t(x);
+                if (!clothField_.cover[k] || z > clothField_.z[k]) {
+                    clothField_.z[k] = z; clothField_.cover[k] = 1;
+                }
+            }
+        }
+    }
+
+    const float texel = 2.f * clothHalfExtent_ / float(std::max(1, fw - 1));
+    const float cell  = 2.f * clothHalfExtent_ / float(std::max(1, cloth_.nx - 1));
+    clothField_.dilate(int(std::ceil(cell / std::max(texel, 1e-6f))));
+    clothField_.buildNormals();
+}
+
+// The anchor's own front z (in its local frame) minus the cloth's mean --
+// positive and growing as the sheet recedes behind the face. See
+// TransitionScene::Impl::updateClothClearance, same intent.
+//
+// faceHalfDepthLocal is an approximation of the canonical face model's own
+// depth extent (it measures well under half its width -- see
+// appendFaceVertexData's neighbouring comments) rather than the exact
+// per-vertex extent TransitionScene computed each frame; clothClearDistance
+// is a tunable threshold, not a hard geometric fact, so this does not need to
+// be exact -- flagged here as a simplification against the original port.
+void RootScene::updateClothClearance() {
+    if (cloth_.pos.empty()) return;
+    double zsum = 0; size_t n = 0;
+    for (size_t k = 0; k < cloth_.pos.size(); ++k) {
+        if (!cloth_.active[k]) continue;
+        zsum += cloth_.pos[k].z;
+        ++n;
+    }
+    if (!n) return;
+    const float faceHalfDepthLocal = 0.2f;
+    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    const float maskFrontLocalZ =
+        -(clothAnchorRD_ * faceRecess) - clothPressOffset_ + faceHalfDepthLocal * scale;
+    clothClearanceVal_ = maskFrontLocalZ - float(zsum / double(n));
+}
+
+// cloth_'s local-frame triangles -> world-space interleaved vertices (10
+// floats/vertex: pos3, nrm3, uv2, aux2) for MetalRootRenderer::uploadClothMesh
+// / root_cloth.metal's ClothVertex. uv/aux mirror TransitionScene's
+// Impl::packCloth exactly (rest-grid uv, discrete-Laplacian curvature,
+// displacement off the rest plane) -- only the position/normal conversion to
+// world space (via the anchor's basis) is new, since the cloth itself is
+// simulated in local coordinates (see the file comment above).
+void RootScene::packClothMesh() {
+    if (!rr_) return;
+    if (!showCloth || !clothActive_ || cloth_.tris.empty()) { rr_->uploadClothMesh({}); return; }
+
+    const float o = clothBuiltOversize_ > 0.f ? clothBuiltOversize_ : 1.f;
+    const float cellW = 2.f * clothHalfExtent_ / float(std::max(1, cloth_.nx - 1));
+    const int di[4] = {-1, 1, 0, 0}, dj[4] = {0, 0, -1, 1};
+
+    std::vector<float> data;
+    data.reserve(cloth_.tris.size() * 10);
+    for (size_t t = 0; t + 2 < cloth_.tris.size(); t += 3) {
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t vi = cloth_.tris[t + k];
+            const int i = int(vi) % cloth_.nx, j = int(vi) / cloth_.nx;
+            const simd_float3 p = cloth_.pos[vi];
+            const simd_float3 n = cloth_.nrm[vi];
+
+            simd_float3 acc = simd_make_float3(0, 0, 0);
+            int cnt = 0;
+            for (int d = 0; d < 4; ++d) {
+                const int ii = i + di[d], jj = j + dj[d];
+                if (ii < 0 || ii >= cloth_.nx || jj < 0 || jj >= cloth_.ny) continue;
+                acc += cloth_.pos[size_t(cloth_.idx(ii, jj))];
+                ++cnt;
+            }
+            float curv = 0.f;
+            if (cnt > 0) {
+                const simd_float3 lap = acc / float(cnt) - p;
+                const float sgn = n.z < 0.f ? -1.f : 1.f;
+                curv = -simd_dot(lap, n) * sgn / std::max(1e-5f, cellW);
+            }
+
+            const simd_float3 pw = clothAnchorPos_ + clothAnchorT_ * p.x
+                                  + clothAnchorB_ * p.y + clothAnchorN_ * p.z;
+            const simd_float3 nw = clothAnchorT_ * n.x + clothAnchorB_ * n.y + clothAnchorN_ * n.z;
+            const float u = 0.5f + (i / float(cloth_.nx - 1) - 0.5f) * o;
+            const float v = 0.5f - (j / float(cloth_.ny - 1) - 0.5f) * o;
+
+            data.push_back(pw.x); data.push_back(pw.y); data.push_back(pw.z);
+            data.push_back(nw.x); data.push_back(nw.y); data.push_back(nw.z);
+            data.push_back(u); data.push_back(v);
+            data.push_back(curv); data.push_back(p.z);
+        }
+    }
+    rr_->uploadClothMesh(data);
+}
+
+// Drives the whole hold->press->settle->release->fall timeline. No-op until
+// restartCloth() has been called once; from then on this runs every frame
+// RootScene::advance() runs, independently of which show phase is current --
+// see main.mm's dispatch, which now renders RootScene continuously from
+// Transition entry onward instead of handing off to a separate scene.
+void RootScene::advanceCloth(double dt) {
+    if (!clothActive_) return;
+    refreshClothAnchor();
+    ensureClothSheet();
+    clothT_ += dt;
+
+    // The press: the anchor mask travels from fully retracted behind the
+    // sheet to its own natural resting placement (offset 0) -- see
+    // uploadFaceFromMasks' anchor special-case. Unlike TransitionScene, which
+    // pressed the mask *proud* of the sheet plane by a tunable amount and
+    // held it there through settle, this simplifies to "arrives exactly where
+    // it already belongs": the anchor's resting position is the one
+    // RootScene's own cavity placement (faceRecess) already computes, so
+    // there is no second resting depth to keep in sync with it. Flagged here
+    // as a deliberate simplification against the original port.
+    const float pe = smoothstep01(clothPress());
+    const float pressRetract = std::max(clothAnchorRD_, 1.0f) * 2.0f + 0.5f;
+    clothPressOffset_ = pressRetract * (1.f - pe);
+
+    rasteriseClothField();
+    cloth_.collider = &clothField_;
+
+    if (float(clothT_) <= clothTiming.hold) {
+        updateClothClearance();
+        packClothMesh();
+        return;
+    }
+
+    cloth_.skin = clothSkin;
+    cloth_.iterations = clothIterations;
+    cloth_.stretchMax = clothStretchMax;
+    cloth_.damping = clothDamping;
+    const float gr = smoothstep01(clothRelease());
+    cloth_.plastic     = clothPlastic  * (1.f - gr);
+    cloth_.stretchGive = clothStretch  * (1.f - 0.85f * gr);
+    cloth_.friction    = clothFriction * (1.f - 0.75f * gr);
+    cloth_.setRelease(clothRelease() * 1.25f);
+
+    const float g = smoothstep01(clothRelease());
+    simd_float3 grav = simd_make_float3(0.f, -clothGravityDown * g, -clothGravityBack * g);
+    // Guaranteed clearance, same intent as TransitionScene's -- see
+    // sideForceDelay/sideForceMag's doc comments there. Unlike that version,
+    // this always pushes the same way (local +x): the anchor's own frame is
+    // fixed and does not turn with the visitor's head the way the live-fitted
+    // face mesh did, so there is no head asymmetry to key the sign off.
+    // Flagged as a simplification -- the guarantee (a bounded schedule to
+    // clear) still holds, only the "reads as a continuation of the mask's own
+    // asymmetry" nuance is lost.
+    const float relT0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
+    const float relElapsed = float(clothT_) - relT0;
+    const float sideRamp = smoothstep01((relElapsed - sideForceDelay) / 1.0f);
+    if (sideRamp > 0.f) grav.x += sideForceMag * sideRamp;
+    cloth_.gravity = grav;
+
+    const int ss = std::max(1, clothSubsteps);
+    for (int i = 0; i < ss; ++i) cloth_.step(float(dt) / float(ss));
+    cloth_.computeNormals();
+    updateClothClearance();
+    packClothMesh();
 }
 
 std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned seed,
@@ -879,6 +1214,11 @@ void RootScene::advance(double dt) {
 
     focusAngle_ += orbitRate * (float)dt;
 
+    // Ahead of the face upload below: clothPressOffset_ (the anchor mask's
+    // current retraction while the cloth press is running) has to be current
+    // before uploadFaceFromMasks reads it for the anchor's placement.
+    advanceCloth(dt);
+
     // Live growth: advance a few steps, then re-upload geometry + revealed masks.
     if (useSim_ && sim_ && !sim_->done() && !simPaused) {
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
@@ -923,6 +1263,7 @@ void RootScene::setWideAngle(bool on) {
 
 id<MTLTexture> RootScene::render(id<MTLCommandBuffer> cb) {
     if (!valid()) return nil;
+    rr_->setClothTexture(pondTex_);
     float ld = std::sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
     if (ld < 1e-5f) ld = 1.f;
     float L[3] = {lightDir[0]/ld, lightDir[1]/ld, lightDir[2]/ld};

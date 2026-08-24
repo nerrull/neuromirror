@@ -57,8 +57,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace mirror {
+
+// One cue-point hit from a marker-carrying event -- see postFirePlucker().
+// `strength` is 0..1, taken from the cue's label text (a plain float baked
+// in by tools/embed_pluck_markers.py at analysis time); an unlabeled cue
+// reports 1.
+struct MarkerHit {
+    float strength = 1.f;
+};
 
 // Everything continuous the piece sends to Wwise, in one struct, so the call
 // site is "here is the state of the world" rather than nine setters. Ranges
@@ -111,6 +120,20 @@ public:
     void post(const char* event_name);
     void setState(const char* group, const char* state);
     void stopAll();
+
+    // Play_FirePlucker, with its Wwise cue markers (see
+    // tools/embed_pluck_markers.py) wired to a callback that feeds
+    // pollFirePluckerMarkers(). The bed loops for the whole Idle/Fitting
+    // phase on one Play_, so this is a drop-in replacement for
+    // post("Play_FirePlucker") at those two call sites -- no per-frame
+    // re-registration needed.
+    void postFirePlucker();
+
+    // Marker hits queued since the last call. Call every frame regardless of
+    // phase: the callback keeps queuing while the bed plays, and leaving it
+    // undrained would land a whole phase's worth of hits at once the next
+    // time somebody asks.
+    std::vector<MarkerHit> pollFirePluckerMarkers();
 
     // Record the main output to a WAV at an absolute path. The engine's own
     // capture, so it is what the room hears including every bus effect -- which

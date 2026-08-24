@@ -1,0 +1,71 @@
+// The draped pond/cloth sheet, as a mid-geometry pass in RootScene's own
+// renderer -- see metal_root_renderer.mm's render(), which draws this between
+// the leaf pass and [ge endEncoding], sharing the scene's camera/depth with
+// the capsules, the face mask and the leaves.
+//
+// Ported from transition_scene's f_main (shaders/transition.metal), which drew
+// the sheet in TransitionScene's own fixed front-on camera. That fixed frame
+// is gone -- the cloth is built and simulated in the anchor mask's own frame
+// (see RootScene::rasteriseClothField/packClothMesh) and rendered here in
+// RootScene's orbiting camera, sharing viewProj/lightDir with the rest of the
+// scene via RootClothU rather than a second, scene-local uniform block.
+#include <metal_stdlib>
+using namespace metal;
+
+struct ClothVertex {            // matches RootScene::packClothMesh's interleave
+    float3 pos;
+    float3 nrm;
+    float2 uv;
+    float2 aux;                 // x = curvature along the normal, y = z off rest
+};
+
+struct ClothVOut {
+    float4 clip [[position]];
+    float3 wnrm;
+    float2 uv;
+    float2 aux;
+};
+
+vertex ClothVOut root_cloth_vs(uint vid [[vertex_id]],
+                               device const ClothVertex* verts [[buffer(0)]],
+                               constant RootClothU& u [[buffer(1)]]) {
+    ClothVOut o;
+    float3 p = verts[vid].pos;
+    o.clip = u.viewProj * float4(p, 1.0);
+    o.wnrm = verts[vid].nrm;
+    o.uv = verts[vid].uv;
+    o.aux = verts[vid].aux;
+    return o;
+}
+
+fragment float4 root_cloth_fs(ClothVOut in [[stage_in]],
+                              constant RootClothU& u [[buffer(1)]],
+                              texture2d<float> pond [[texture(0)]]) {
+    // The sheet's own normal is expressed in the anchor mask's local frame
+    // (tangent/bitangent/normal -> x/y/z), which by construction (see
+    // root_sim.cpp's anchor-first placement) is the frame the mask faces the
+    // camera square-on in, so N.z >= 0 reads the same way "toward the camera"
+    // did in TransitionScene's fixed rig.
+    float3 N = normalize(in.wnrm);
+    if (N.z < 0.0) N = -N;
+    float3 L = normalize(u.lightDir.xyz);
+    float ndl = max(0.0, dot(N, L));
+    // Shading as a deviation from the flat sheet -- see transition.metal's
+    // f_main for the full reasoning; unchanged here.
+    float flat = 0.30 + 0.85 * max(1e-3, L.z);
+    float shade = 1.0 + u.reliefShade * ((0.30 + 0.85 * ndl) - flat) / flat;
+
+    float bulge = clamp(abs(in.aux.y) * 6.0, 0.0, 1.0);
+    float curv  = tanh(in.aux.x * 3.0);
+    shade *= 1.0 + u.reliefSharp * curv * bulge;
+
+    float3 V = float3(0.0, 0.0, 1.0);
+    float3 Hv = normalize(L + V);
+    float spec = pow(max(0.0, dot(N, Hv)), 48.0);
+    shade += u.sheen * spec * bulge;
+
+    constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 uv = in.uv + N.xy * u.refract * bulge;
+    float3 base = pond.sample(smp, uv).rgb;
+    return float4(base * max(0.0, shade), 1.0);
+}

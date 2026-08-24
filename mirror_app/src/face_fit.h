@@ -59,6 +59,12 @@ struct FacePose {
 // is needed because a 2x2 rotation is one angle.
 FacePose Similarity2D(const std::vector<float>& src, const std::vector<float>& dst);
 
+// Rotate every vertex of `verts` (3 floats each) about their own centroid by
+// the row-major 3x3 `rot`. Shared by FaceFitter::update() and anything else
+// that reconstructs a posed mesh from a basis reconstruction + a stored
+// rotation (e.g. face track playback).
+void RotateAboutCentroid(std::vector<float>& verts, const float rot[9]);
+
 class FaceFitter {
 public:
     struct Config {
@@ -131,6 +137,10 @@ public:
     const FacePose& pose() const { return pose_; }
     // Head rotation in radians, for display. Zero without a tracker pose.
     void headAngles(float& yaw, float& pitch, float& roll) const;
+    // Row-major 3x3 head rotation used to pose vertices() this frame -- the
+    // same block RotateAboutCentroid() applies. Identity without a tracker
+    // pose.
+    const float* rotation() const { return rot_; }
 
     void useTrackerPose(bool on) { use_tracker_pose_ = on; }
     bool trackerPose() const { return use_tracker_pose_; }

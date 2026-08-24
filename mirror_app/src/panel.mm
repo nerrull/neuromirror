@@ -575,6 +575,24 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 }
                                 ui::EndHeader();
                             }
+                            ui::PushSection("beat 1  clearance");
+                            ui::BeginHeader("beat 1  clearance", false);
+                            {
+                                ui::SliderFloat("clear-tail (s)",
+                                                &g_root_beats.beat1_clear_tail_seconds,
+                                                0.f, 30.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Beat 1 also waits on the transition's own\n"
+                                        "cloth-clearance signal: it holds \"duration\"\n"
+                                        "above as a floor, then this many seconds more\n"
+                                        "once the cloth has actually fallen clear, so\n"
+                                        "beat 2 never starts while the film is still\n"
+                                        "visibly falling.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "beat 1  clearance"
                             ui::PushSection("beat 4  meander");
                             ui::BeginHeader("beat 4  meander", false);
                             {
@@ -709,10 +727,24 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "each emitter's own Pitch) -- moving this does not touch\n"
                         "the chord's voicing or the key, only where it all sits.");
                 }
+                ui::Checkbox("shepherd rise", &g_shepherd_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A looping glissando layered under the pad in Wwise\n"
+                        "(Mirror_Pad_Shepherd), riding this same `Transpose`\n"
+                        "RTPC -- speed follows FitLevel. Fitting phase only;\n"
+                        "off leaves transpose at the slider above.");
+                }
+                ui::SliderFloat("shepherd rate min (st/s)", &g_shepherd_rate_min, 0.f, 3.f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rise speed at fit_level 0 -- semitones/sec.");
+                ui::SliderFloat("shepherd rate max (st/s)", &g_shepherd_rate_max, 0.f, 3.f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rise speed at fit_level 1 -- semitones/sec.");
 
                 if (ui::Visible()) {
                     ImGui::SeparatorText("post");
-                    if (ImGui::Button("pluck bed")) g_audio.post("Play_FirePlucker");
+                    if (ImGui::Button("pluck bed")) g_audio.postFirePlucker();
                     ImGui::SameLine();
                     if (ImGui::Button("pad")) g_audio.post("Play_Pad");
                     ImGui::SameLine();
@@ -1938,6 +1970,26 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "release: the pins letting go, corners first.\n"
                         "fall: draping off the face and away.");
                 }
+                ImGui::SeparatorText("clearance -- merges into the root scene once cleared");
+                ui::SliderFloat("clear distance (world units)", &pf.trans.clothClearDistance,
+                                0.2f, 5.f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far the sheet's average depth has to recede past\n"
+                        "the mask's own front surface before the merged\n"
+                        "Transition/Roots handoff treats it as \"cleared\" --\n"
+                        "see root scene beat 1's clear-tail control.");
+                }
+                ui::SliderFloat("side force delay (s into release)", &pf.trans.sideForceDelay,
+                                0.f, 30.f, "%.1f");
+                ui::SliderFloat("side force magnitude", &pf.trans.sideForceMag, 0.f, 15.f, "%.1f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A visitor holding still could otherwise stall release\n"
+                        "indefinitely. This many seconds into release, a\n"
+                        "lateral force (this magnitude) is added so the sheet\n"
+                        "always slides clear on a bounded schedule.");
+                }
                 ImGui::SeparatorText("look");
                 ui::SliderFloat("refraction", &pf.trans.refract, 0.f, 0.25f);
                 if (ImGui::IsItemHovered()) {
@@ -2274,6 +2326,17 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("hit -> strength", &P.spawn.hit_amp, 0.0f, 1.0f);
                     ui::SliderFloat("hit -> size", &P.spawn.hit_width, 0.0f, 1.0f);
                     ui::SliderFloat("hit -> position", &P.spawn.hit_pan, 0.0f, 1.0f);
+                }
+                ui::EndGroup();
+
+                ui::BeginGroup("pluck onsets (idle/fitting)", true, P.drops_on);
+                if (ui::Visible()) {
+                    // Threshold is tuned offline, in tools/embed_pluck_markers.py
+                    // against the FirePlucker source -- these markers are baked
+                    // into Racine.bnk, not live-adjustable from here. This is
+                    // just whether the mirror reacts to them right now.
+                    ui::Checkbox("pluck onsets spawn drops", &g_pluck_drops);
+                    ui::SliderFloat("pluck onset gain", &g_pluck_drop_gain, 0.1f, 4.0f);
                 }
                 ui::EndGroup();
 

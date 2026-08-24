@@ -73,6 +73,8 @@ std::string g_midi_err;
 mirror::AudioPulses g_pulses;
 bool  g_pulse_drops  = true;    // onsets spawn raindrops
 float g_pulse_gain   = 1.0f;    // scales an onset's strength before it is used
+bool  g_pluck_drops     = false;  // pluck-bed crackle onsets spawn raindrops
+float g_pluck_drop_gain = 1.0f;   // scales a marker hit's strength before it is used
 mirror::FaceTracker g_tracker;
 mirror::FaceResult  g_face;
 mirror::FaceFitter  g_fitter;
@@ -248,6 +250,10 @@ bool  g_audio_auto = true;        // the phases post their own events
 float g_audio_key  = 48.f;        // MIDI note: the piece's base pitch
 float g_audio_intensity = 1.f;    // master, on the main bus
 float g_audio_transpose = 0.f;    // semitones: offsets every emitter, Wwise-side
+bool  g_shepherd_on = true;       // the Fitting-phase glissando, on or off
+float g_shepherd_rate_min = 0.15f;  // semitones/s at fit_level 0
+float g_shepherd_rate_max = 0.6f;   // semitones/s at fit_level 1
+float g_shepherd_phase = 0.f;     // semitones, 0..12: Fitting-phase glissando position
 std::string g_audio_err;
 
 // The neural texture the mask wears: per-vertex RGB sampled from the mirror's

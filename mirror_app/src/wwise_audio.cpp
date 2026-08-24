@@ -35,6 +35,8 @@ void WwiseAudio::update(const AudioParams&) {}
 void WwiseAudio::post(const char*) {}
 void WwiseAudio::setState(const char*, const char*) {}
 void WwiseAudio::stopAll() {}
+void WwiseAudio::postFirePlucker() {}
+std::vector<MarkerHit> WwiseAudio::pollFirePluckerMarkers() { return {}; }
 bool WwiseAudio::startCapture(const std::string&) { return false; }
 void WwiseAudio::stopCapture() {}
 
@@ -70,6 +72,9 @@ void WwiseAudio::stopCapture() {}
 
 #include "AkDefaultIOHookDeferred.h"
 
+#include <cstdlib>
+#include <mutex>
+
 namespace mirror {
 namespace {
 
@@ -86,6 +91,26 @@ CAkDefaultIOHookDeferred g_lowLevelIO;
 // Routing, which the scene mixers have on for their aux sends.
 constexpr AkGameObjectID kRacineObj = 100;
 constexpr AkGameObjectID kListener = 1;
+
+// Marker hits from Play_FirePlucker, queued here by the audio thread and
+// drained by pollFirePluckerMarkers() on the main thread. File-scope for the
+// same reason g_lowLevelIO is: there is one WwiseAudio in the whole app, and
+// the callback the engine calls has no `this` to reach it through.
+std::mutex g_markerMutex;
+std::vector<MarkerHit> g_markerQueue;
+
+void OnFirePluckerMarker(AkCallbackType in_type, AkEventCallbackInfo* /*in_eventInfo*/,
+                          void* in_pCallbackInfo, void* /*in_cookie*/) {
+    if (in_type != AK_Marker || !in_pCallbackInfo) return;
+    const auto* mi = static_cast<const AkMarkerCallbackInfo*>(in_pCallbackInfo);
+    float strength = 1.f;
+    if (mi->strLabel && mi->strLabel[0]) {
+        strength = std::strtof(mi->strLabel, nullptr);
+        strength = strength < 0.f ? 0.f : (strength > 1.f ? 1.f : strength);
+    }
+    std::lock_guard<std::mutex> lock(g_markerMutex);
+    g_markerQueue.push_back({strength});
+}
 
 // RTPCs are pushed every frame but only when they have moved. The threshold is
 // well under audibility for all of them and keeps a still room from queueing
@@ -247,6 +272,20 @@ void WwiseAudio::post(const char* event_name) {
     if (!ready_ || !event_name) return;
     AK::SoundEngine::PostEvent(event_name, kRacineObj);
     ++posted_;
+}
+
+void WwiseAudio::postFirePlucker() {
+    if (!ready_) return;
+    AK::SoundEngine::PostEvent("Play_FirePlucker", kRacineObj, AK_Marker,
+                                OnFirePluckerMarker, nullptr);
+    ++posted_;
+}
+
+std::vector<MarkerHit> WwiseAudio::pollFirePluckerMarkers() {
+    std::vector<MarkerHit> out;
+    std::lock_guard<std::mutex> lock(g_markerMutex);
+    out.swap(g_markerQueue);
+    return out;
 }
 
 void WwiseAudio::setState(const char* group, const char* state) {

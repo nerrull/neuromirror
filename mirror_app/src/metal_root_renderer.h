@@ -160,6 +160,17 @@ public:
     };
     LeafParams leaf;
 
+    // Draped-sheet material for the cloth mid-geometry pass -- ported from
+    // TransitionScene's refract/reliefShade/reliefSharp/sheen knobs. See
+    // root_cloth.metal.
+    struct ClothParams {
+        float refract     = 0.05f;
+        float reliefShade = 0.55f;
+        float reliefSharp = 0.8f;
+        float sheen       = 0.35f;
+    };
+    ClothParams cloth;
+
     // Environment and organic-shading terms, shared by the capsule/blade pass
     // and the mask pass so both sit in the same light.
     struct EnvParams {
@@ -336,6 +347,17 @@ public:
     // Empty data clears the leaf pass.
     void uploadLeafMesh(const std::vector<float>& interleaved);
 
+    // Cloth mid-geometry mesh: flat interleaved triangles, 10 floats/vertex
+    // (pos3, normal3, uv2, aux2) -- matches ClothVertex in root_cloth.metal and
+    // RootScene::packClothMesh's interleave. Drawn between the leaf pass and the
+    // fog, sampling `setClothTexture`'s texture. Empty data clears the pass.
+    void uploadClothMesh(const std::vector<float>& interleaved);
+    // The pond/mirror texture the cloth samples -- set every frame by the
+    // caller (RootScene::render()), the same texture TransitionScene's
+    // setPondTexture used to receive. nil skips the cloth draw entirely rather
+    // than sampling an unbound texture.
+    void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
+
     // --- cached instances (many static root systems, LOD + culling) ----------
     // Placement of a cached system in the world (applied once, baked into the
     // uploaded vertices — cached systems are static).
@@ -449,6 +471,11 @@ private:
 
     id<MTLBuffer> leafBuf_ = nil;
     int leafVertCount_ = 0;
+
+    id<MTLBuffer> clothBuf_ = nil;
+    int clothVertCount_ = 0;
+    id<MTLRenderPipelineState> clothPipe_ = nil;
+    id<MTLTexture> clothTex_ = nil;
 
     // The scene passes (geometry, mask, fog) run at sw_ x sh_, which is the
     // output size times the supersample factor; everything from the composite

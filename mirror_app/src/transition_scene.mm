@@ -1,4 +1,5 @@
 #include "transition_scene.h"
+#include "fullscreen_present.h"
 #include "metal_context.h"
 
 #include <algorithm>
@@ -82,12 +83,15 @@ struct TransitionScene::Impl {
     id<MTLRenderPipelineState> psoMain = nil, psoFace = nil;
     id<MTLDepthStencilState> dss = nil;
     id<MTLTexture> colorTex = nil, depthTex = nil, pondTex = nil, savedPondTex = nil;
+    id<MTLTexture> bgTex = nil;   // Roots' live output, composited as the background -- see setBackground
+    std::unique_ptr<FullscreenPresent> bgPresent;
     id<MTLBuffer> clothVB = nil, clothIB = nil, faceVB = nil, faceIB = nil;
     size_t clothIdx = 0, faceIdx = 0;
 
     Cloth cloth;
     MaskField field;
     std::vector<Vertex> clothVerts;
+    float clothClearance = -1e9f;   // cloth centroid z minus mask front z; see clothCleared()
 
     // The mesh as it arrives (model units) and where the fit says each vertex
     // lands on screen, plus the world-space placement derived from the two.
@@ -141,6 +145,7 @@ struct TransitionScene::Impl {
     void uploadFace();
     void rasteriseField();
     void packCloth();
+    void updateClothClearance();
 };
 
 bool TransitionScene::Impl::buildPipelines(const std::string& shaderDir) {
@@ -495,6 +500,26 @@ void TransitionScene::Impl::packCloth() {
     }
 }
 
+// The mask's own current front z minus the cloth's average z -- positive and
+// growing as the sheet recedes behind the face (gravity pulls it to -z, away
+// from the camera at CAM_D). The "has the film receded past the face" signal
+// the merged Transition/Roots handoff waits on. Cheap: one pass over the
+// active vertices, no different in kind from computeNormals which already
+// runs every frame.
+void TransitionScene::Impl::updateClothClearance() {
+    if (cloth.pos.empty()) return;
+    double zsum = 0;
+    size_t n = 0;
+    for (size_t k = 0; k < cloth.pos.size(); ++k) {
+        if (!cloth.active[k]) continue;
+        zsum += cloth.pos[k].z;
+        ++n;
+    }
+    if (n == 0) return;
+    const float maskFrontZ = zFront + zOffset;   // zFront is relative to zref; zOffset is the press
+    clothClearance = maskFrontZ - float(zsum / double(n));
+}
+
 // ---------------------------------------------------------------------------
 
 TransitionScene::TransitionScene(const MetalContext& ctx, int w, int h)
@@ -502,6 +527,11 @@ TransitionScene::TransitionScene(const MetalContext& ctx, int w, int h)
     if (!impl_->buildPipelines(std::string(MIRROR_APP_SHADER_DIR))) return;
     impl_->makeTargets(std::max(2, w), std::max(2, h));
     impl_->ensureSheet(sheetRes, float(impl_->w) / float(std::max(1, impl_->h)), oversize);
+    // Own pipeline instance because a Metal PSO is bound to one target pixel
+    // format, and I.colorTex (RGBA16Float) is not the drawable's own format
+    // that main.mm's top-level `present` is built against.
+    impl_->bgPresent = std::make_unique<FullscreenPresent>(
+        ctx, std::string(MIRROR_APP_SHADER_DIR) + "/present.metal", MTLPixelFormatRGBA16Float);
 }
 
 TransitionScene::~TransitionScene() = default;
@@ -514,6 +544,12 @@ const Cloth& TransitionScene::cloth() const { return impl_->cloth; }
 bool TransitionScene::hasFace() const { return impl_->haveFace; }
 double TransitionScene::clock() const { return impl_->t; }
 void TransitionScene::setPondTexture(id<MTLTexture> pond) { impl_->pondTex = pond; }
+void TransitionScene::setBackground(id<MTLTexture> tex) { impl_->bgTex = tex; }
+
+bool TransitionScene::clothCleared() const {
+    return impl_->clothClearance >= clothClearDistance;
+}
+float TransitionScene::clothClearance() const { return impl_->clothClearance; }
 
 // Freeze the live film: read the pond texture back, encode it to 8-bit sRGB
 // once, and build the static texture the sheet and the mask sample from here
@@ -696,6 +732,7 @@ void TransitionScene::setFaceMesh(const std::vector<float>& verts, const std::ve
 void TransitionScene::restart() {
     impl_->t = 0.0;
     impl_->zOffset = 0.f;
+    impl_->clothClearance = -1e9f;
     impl_->builtRes = 0;             // force a fresh sheet: flat, fully held
     // A replay is a fresh sitting: the film goes back to live and the uv goes
     // back to tracking, or the second run through would open on the first
@@ -777,7 +814,10 @@ void TransitionScene::advance(double dt) {
     // Nothing to solve while the film is flat and untouched, and solving it
     // anyway is how a sheet that should be perfectly still acquires a shimmer.
     // The alignment hold wants the sheet left flat for the same reason.
-    if (alignMask || float(I.t) <= timing.hold) return;
+    if (alignMask || float(I.t) <= timing.hold) {
+        I.updateClothClearance();
+        return;
+    }
 
     I.cloth.skin = skin;
     I.cloth.iterations = iterations;
@@ -811,12 +851,30 @@ void TransitionScene::advance(double dt) {
     // while every pin still holds only sags, and the press is supposed to read
     // as the mask doing the work.
     const float g = smoothstep01(r);
-    I.cloth.gravity = simd_make_float3(0.f, -gravityDown * g, -gravityBack * g);
+    simd_float3 grav = simd_make_float3(0.f, -gravityDown * g, -gravityBack * g);
+
+    // Guaranteed clearance: a visitor who holds still through the whole
+    // release could otherwise stall here indefinitely, relying only on their
+    // own head-turning to shed the film (see the Timing struct's measured
+    // note above -- a static head only gets half off). sideForceDelay
+    // seconds into release(), add a lateral force so the sheet always slides
+    // clear on a bounded schedule regardless. Ramped in over ~1s rather than
+    // snapped on, matching the feel of the other release ramps; the sign
+    // follows the mask's own facing so it reads as a continuation of the
+    // mask's own asymmetry rather than an arbitrary push.
+    const float releaseElapsed = float(I.t) - (timing.hold + timing.press + timing.settle);
+    const float sideRamp = smoothstep01((releaseElapsed - sideForceDelay) / 1.0f);
+    if (sideRamp > 0.f) {
+        const float sign = I.faceFacing.x >= 0.f ? 1.f : -1.f;
+        grav.x += sideForceMag * sideRamp * sign;
+    }
+    I.cloth.gravity = grav;
 
     const int ss = std::max(1, substeps);
     for (int i = 0; i < ss; ++i) I.cloth.step(float(dt) / float(ss));
     I.cloth.computeNormals();
     I.packCloth();
+    I.updateClothClearance();
 }
 
 id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
@@ -835,6 +893,15 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
     rp.depthAttachment.storeAction = MTLStoreActionDontCare;
 
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+    // Roots' own live render (fog, lighting, beat-1 camera), if the caller set
+    // one via setBackground -- drawn first, filling every pixel, before the
+    // mask/cloth pass. No depth test/write here (no setDepthStencilState has
+    // run yet, so the encoder is still Metal's default always-pass/no-write):
+    // this is a different scene in a different coordinate space, and the
+    // point is exactly that the opaque mask/cloth draws that follow overwrite
+    // it wherever they cover a pixel, leaving it showing through the gaps.
+    if (I.bgTex && I.bgPresent && I.bgPresent->valid())
+        I.bgPresent->encode(enc, I.bgTex);
     [enc setRenderPipelineState:I.psoMain];
     [enc setDepthStencilState:I.dss];
     [enc setCullMode:MTLCullModeNone];

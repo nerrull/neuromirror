@@ -11,7 +11,7 @@
 #import <Metal/Metal.h>
 #include "metal_root_renderer.h"
 #include "root_sim.h"
-#include "root_sim.h"
+#include "cloth.h"
 
 #include <cmath>
 #include <memory>
@@ -120,7 +120,12 @@ public:
     // the world around a face that never leaves the centre of frame -- which is
     // the move the piece is made of, and not something a cut between framings
     // can imitate.
-    int   anchorMask   = -1;
+    // Defaults to 0: RootSim now places mask 0 at one fixed, known transform
+    // (see root_sim.cpp's anchor-first placement in reset()) specifically so
+    // there is always an unambiguous "the anchor" to build a camera -- and,
+    // per the cloth work, a collider frame -- against. -1 still opts back out
+    // to the old "whole scene" framing for callers that want it.
+    int   anchorMask   = 0;
     // Seconds for the camera to converge on a new shot. 0 snaps, which is what
     // the stills want; anything above about 0.3 reads as a move.
     float camEase      = 0.f;
@@ -220,6 +225,68 @@ public:
     void addNeighbours(int count, float ringRadius, unsigned seed,
                        const float centre[3], float keepClearAz);
 
+    // --- the cloth: pond -> face press/release, ported from TransitionScene ---
+    //
+    // One mask, one placement (see the file header and root_sim.cpp's
+    // anchor-first reset()): the cloth presses against and drapes off the
+    // *same* anchor mask RootScene already places and shades, in the anchor's
+    // own fixed (tangent, bitangent, normal) frame -- an affine placement,
+    // not TransitionScene's perspective one, because that frame is fixed and
+    // known rather than solved per frame from a moving camera. See
+    // root_scene.mm's advanceCloth/rasteriseClothField/packClothMesh.
+    struct ClothTiming {
+        float hold    = 0.5f;   // flat film, nothing happening
+        float press   = 1.6f;   // the mask advancing through the sheet plane
+        float settle  = 8.0f;   // fully through, the fabric taut over it
+        float release = 0.7f;   // pins letting go, corners first
+        float fall    = 1.8f;   // draping off and away
+    };
+    ClothTiming clothTiming;
+
+    // How far, in the anchor's own local units, the cloth's average depth has
+    // to recede past the mask's own front surface before it counts as
+    // "cleared" -- see TransitionScene::clothCleared(), same intent.
+    float clothClearDistance = 1.5f;
+    float sideForceDelay = 17.0f;
+    float sideForceMag   = 4.0f;
+    bool  clothCleared() const { return clothClearanceVal_ >= clothClearDistance; }
+    float clothClearance() const { return clothClearanceVal_; }
+
+    bool  showCloth     = true;
+    // The sheet, as a multiple of the anchor mask's own placed size -- there is
+    // no camera frustum to size it against here (unlike TransitionScene), so
+    // this is a look decision: big enough that the mask's silhouette is well
+    // inside it with room for the drape to hang past the edge.
+    float clothOversize = 1.7f;
+    float clothGravityBack = 6.0f;   // along -normal, behind the mask
+    float clothGravityDown = 0.0f;   // along -bitangent (world down, for the anchor pose)
+    float clothFriction = 0.07f;
+    float clothSkin     = 0.012f;
+    float clothStretch    = 0.80f;
+    float clothStretchMax = 1.90f;
+    float clothPlastic    = 2.0f;
+    float clothDamping    = 0.985f;
+    int   clothSubsteps   = 2;
+    int   clothIterations = 24;
+    int   clothSheetRes   = 72;
+
+    // The film -- MirrorScene's own live output, or the frozen mirror during
+    // Roots proper. Set every frame by the caller; see RootScene::render(),
+    // which hands it straight to the renderer's cloth pass.
+    void setPondTexture(id<MTLTexture> pond) { pondTex_ = pond; }
+
+    // Begin the hold->press->settle->release->fall timeline from t=0, with a
+    // fresh, fully-pinned flat sheet -- the RootScene analogue of
+    // TransitionScene::restart(). Call once, on the phase edge that used to
+    // call trans.restart().
+    void restartCloth();
+    double clothClock() const { return clothT_; }
+    float clothPress() const;      // 0..1, how far the mask has come through
+    float clothRelease() const;    // 0..1, how far the release front has run
+    bool  clothDone() const;
+    const char* clothPhaseName() const;
+    const Cloth& cloth() const { return cloth_; }
+
     bool  showFace  = true;
     float faceScale = 0.85f;
     // How deep the face sits inside its cavity, in multiples of the cavity's
@@ -262,6 +329,34 @@ public:
 private:
     void buildSyntheticRoots(uint32_t seed);
     void uploadFaceFromMasks();      // build face verts from the live sim's masks
+
+    // --- cloth internals (see the public section above) --------------------
+    void refreshClothAnchor();       // cache the anchor mask's frame for this frame
+    void ensureClothSheet();         // (re)build cloth_/clothField_ on a size change
+    void rasteriseClothField();      // the anchor's placed face -> the collider depth map
+    void updateClothClearance();
+    void packClothMesh();            // cloth_ -> interleaved buffer -> rr_->uploadClothMesh
+    void advanceCloth(double dt);
+
+    Cloth     cloth_;
+    MaskField clothField_;
+    id<MTLTexture> pondTex_ = nil;
+    double clothT_ = 0.0;
+    bool   clothActive_ = false;     // false until restartCloth() is called
+    float  clothPressOffset_ = 0.f;  // current retraction of the anchor along -normal
+    float  clothClearanceVal_ = -1e9f;
+    int    clothBuiltRes_ = 0;
+    float  clothBuiltOversize_ = 0.f;
+    float  clothHalfExtent_ = 1.f;
+    // The anchor mask's frame, refreshed once per advance() -- fixed by
+    // construction (root_sim.cpp's anchor-first reset()) but read from the sim
+    // rather than hardcoded, so a future change to the anchor pose does not
+    // silently desync the cloth from the mask it is meant to collide with.
+    simd_float3 clothAnchorPos_ = simd_make_float3(0, 0, 0);
+    simd_float3 clothAnchorN_   = simd_make_float3(0, 0, 1);
+    simd_float3 clothAnchorT_   = simd_make_float3(1, 0, 0);
+    simd_float3 clothAnchorB_   = simd_make_float3(0, 1, 0);
+    float clothAnchorRW_ = 2.6f, clothAnchorRH_ = 2.6f, clothAnchorRD_ = 2.6f;
 
     std::unique_ptr<MetalRootRenderer> rr_;
     std::unique_ptr<rootsim::RootSim>  sim_;

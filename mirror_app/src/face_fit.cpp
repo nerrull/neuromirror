@@ -371,6 +371,22 @@ bool FaceFitter::fitIdentity(float* residual_px) {
 
 // ---------------------------------------------------------------------------
 
+void RotateAboutCentroid(std::vector<float>& verts, const float rot[9]) {
+    float cx = 0, cy = 0, cz = 0;
+    const size_t n = verts.size() / 3;
+    if (n == 0) return;
+    for (size_t i = 0; i < n; ++i) {
+        cx += verts[i * 3]; cy += verts[i * 3 + 1]; cz += verts[i * 3 + 2];
+    }
+    cx /= float(n); cy /= float(n); cz /= float(n);
+    for (size_t i = 0; i < n; ++i) {
+        const float x = verts[i * 3] - cx, y = verts[i * 3 + 1] - cy, z = verts[i * 3 + 2] - cz;
+        verts[i * 3]     = rot[0] * x + rot[1] * y + rot[2] * z + cx;
+        verts[i * 3 + 1] = rot[3] * x + rot[4] * y + rot[5] * z + cy;
+        verts[i * 3 + 2] = rot[6] * x + rot[7] * y + rot[8] * z + cz;
+    }
+}
+
 bool FaceFitter::update(const FaceResult& r, int w, int h) {
     if (!basis_.valid() || !r.valid) return false;
 
@@ -397,7 +413,9 @@ bool FaceFitter::update(const FaceResult& r, int w, int h) {
             for (int i = 0; i < 9; ++i) rot_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
         }
         // Rotate about the mesh centroid, so the head turns in place rather
-        // than swinging around the model origin.
+        // than swinging around the model origin. lm_model_ rotates about
+        // verts_'s centroid too (not its own), so the similarity solved
+        // below stays consistent with where verts_ actually ended up.
         float cx = 0, cy = 0, cz = 0;
         const size_t n = verts_.size() / 3;
         for (size_t i = 0; i < n; ++i) {

@@ -53,13 +53,19 @@
 // hazard in changing a value mid-shot the way Timeline::setScript used to
 // have).
 struct RootBeatParams {
-    float beat1_seconds = 2.3f;   // face alone
+    float beat1_seconds = 2.3f;   // face alone -- floor; see beat1_clear_tail_seconds
     // Fog only exists in the Roots renderer, so it would otherwise pop the
     // instant Roots starts -- right where TransitionScene's cloth has just
     // fallen away. The host (main.mm) ramps fog visibility from clear down
     // to the phase's intensity over this many seconds at the start of beat 1
     // instead of assigning it flat; see the Roots render branch.
     float beat1_fog_fade_seconds = 2.0f;
+    // Beat 1 now also waits on TransitionScene's own cloth-clearance signal
+    // (see TransitionScene::clothCleared()) rather than running a flat
+    // duration: it holds beat1_seconds as a floor, then this many seconds
+    // more once the cloth has actually cleared, so beat 2 never starts while
+    // the film is still visibly falling. See step()'s `clothCleared` param.
+    float beat1_clear_tail_seconds = 10.0f;
     float beat2_seconds = 3.1f;   // masks deal
     float beat3_seconds = 8.6f;   // growth follows the tip
     // Beat 4 (meander) has no duration of its own -- it loops until the host
@@ -105,6 +111,7 @@ public:
         waypoint_        = -1;   // forces a fresh camSpeed_ pick on waypoint 0
         beat_            = Beat::Face;
         outroFade_       = 0.f;
+        clothClearAt_    = -1.0;
 
         const auto& planned = roots.plannedMasks();
         if (planned.empty()) { valid_ = false; return; }
@@ -176,14 +183,21 @@ public:
     // since the show entered this phase); `dt` is this frame's delta.
     // `wantOutro` is the host's own call on when the outro should start (it
     // owns the timing so the fade can be made to finish exactly when the
-    // phase itself is about to end -- see main.mm). Writes the
-    // camera/growth-pacing fields on `roots` directly.
+    // phase itself is about to end -- see main.mm). `clothCleared` is a
+    // level, mirroring `wantOutro`'s convention: TransitionScene's own
+    // cloth-clearance signal, true once the film has visibly fallen clear of
+    // the mask. The first phaseTime it is seen true is when beat 1's
+    // clear-tail timer (RootBeatParams::beat1_clear_tail_seconds) starts.
+    // Writes the camera/growth-pacing fields on `roots` directly.
     void step(RootScene& roots, double phaseTime, double dt,
-             const RootBeatParams& bp, bool wantOutro) {
+             const RootBeatParams& bp, bool wantOutro, bool clothCleared) {
         if (!valid_) return;
 
         const float fdt = float(std::max(0.0, dt));
-        const double b1 = bp.beat1_seconds;
+        if (clothCleared && clothClearAt_ < 0.0) clothClearAt_ = phaseTime;
+        const double b1 = (clothClearAt_ >= 0.0)
+            ? std::max((double)bp.beat1_seconds, clothClearAt_ + (double)bp.beat1_clear_tail_seconds)
+            : 1e30;   // never advances past beat 1 until the cloth has cleared at least once
         const double b2 = b1 + bp.beat2_seconds;
         const double b3 = b2 + bp.beat3_seconds;
         const double t = phaseTime;
@@ -420,6 +434,7 @@ private:
     float az0_ = 0.f, el0_ = 0.f;
     float prevAz_ = 0.f, prevEl_ = 0.f;
     double slowStepsPerSec_ = 0.0, fastStepsPerSec_ = 0.0;
+    double clothClearAt_ = -1.0;   // first phaseTime clothCleared was seen true, -1 until then
 
     std::vector<Neighbour> hood_;
     int neighboursGen_ = -1;   // plant generation the current instances were built for; see step()

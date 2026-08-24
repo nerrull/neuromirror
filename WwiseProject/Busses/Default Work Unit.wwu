@@ -12,19 +12,7 @@
 					<ChildrenList>
 						<Bus Name="Mirror" ID="{58C3B2FD-A29D-4B9D-9D17-14BC78ECD02B}">
 							<ChildrenList>
-								<AuxBus Name="Mirror_Verb" ID="{0BB50E19-4CE9-4784-B385-D54D488BC07D}">
-									<ObjectLists>
-										<ObjectList Name="Effects">
-											<EffectSlot Name="" ID="{2DAAB95E-3A5B-42BF-B4B7-3DE628E4DDD4}" ShortID="45014288">
-												<ReferenceList>
-													<Reference Name="Effect" PluginName="Wwise RoomVerb" CompanyID="0" PluginID="118" PluginType="3">
-														<ObjectRef Name="Mirror_Room" ID="{8A524DC8-3609-42A3-9E81-CD4536C31776}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
-													</Reference>
-												</ReferenceList>
-											</EffectSlot>
-										</ObjectList>
-									</ObjectLists>
-								</AuxBus>
+								<AuxBus Name="Mirror_Verb" ID="{0BB50E19-4CE9-4784-B385-D54D488BC07D}"/>
 							</ChildrenList>
 						</Bus>
 						<Bus Name="Roots" ID="{D3557D67-7B30-4654-9CD9-38ED5B1D022A}">
@@ -55,6 +43,13 @@
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
 										<ObjectRef Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{B46E1225-111E-4016-9C0F-B59BAF779CC3}" ShortID="373508190">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Parametric EQ" CompanyID="0" PluginID="105" PluginType="3">
+										<ObjectRef Name="New_Parametric_EQ" ID="{B22679F3-1BE1-40A5-AEAB-6F3B5BAFB09F}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
 									</Reference>
 								</ReferenceList>
 							</EffectSlot>

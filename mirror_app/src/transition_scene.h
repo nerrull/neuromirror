@@ -107,6 +107,24 @@ public:
     };
     Timing timing;
 
+    // How far, in world units, the cloth's average depth has to recede past the
+    // mask's own front surface before it counts as "cleared" -- the signal the
+    // merged Transition/Roots handoff waits on (see clothCleared()).
+    float clothClearDistance = 1.5f;
+    // How many seconds into release() the guaranteed side force (below) kicks
+    // in, so a visitor holding still still sheds the cloth on a bounded
+    // schedule rather than relying only on their own head-turning.
+    float sideForceDelay = 17.0f;
+    float sideForceMag   = 4.0f;
+
+    // True once the sheet's average depth has receded clothClearDistance past
+    // the mask's own front surface. Always false before release() has begun --
+    // there is nothing to measure a clearance against while the sheet is still
+    // taut over the face.
+    bool  clothCleared() const;
+    // The raw signed distance clothCleared() thresholds, for tuning/HUD.
+    float clothClearance() const;
+
     // Look.
     // The film refracts where the fabric bends -- driven by the cloth's own
     // normals, so it is exactly zero on the flat sheet (the rest state has to
@@ -290,6 +308,13 @@ public:
     // The film. This is MirrorScene's own output texture -- the sheet is
     // skinned with whatever the network is currently rendering.
     void setPondTexture(id<MTLTexture> pond);
+
+    // Roots' own live render, composited behind the cloth/mask draw -- nil (the
+    // default) keeps today's plain clear color. The cloth is a fixed-topology,
+    // fully opaque quad grid with no per-pixel alpha, so wherever it does not
+    // cover a pixel (as it recedes/drapes off during release/fall) this shows
+    // through untouched instead of the clear color -- see render()'s ordering.
+    void setBackground(id<MTLTexture> tex);
 
     // --- the lock ------------------------------------------------------------
     //

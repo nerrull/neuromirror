@@ -383,7 +383,10 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
     for (int f = 0; f < frames; ++f) {
         const double ts = double(f) / (frames - 1) * seconds;
 
-        seq.step(roots, ts, dt, bp, /*wantOutro=*/false);
+        // No cloth in this offline export -- clothCleared=true from frame 0
+        // so beat 1 just runs its authored beat1_seconds, unaffected by the
+        // live app's cloth-clearance gating.
+        seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true);
         roots.advance(dt);
 
         id<MTLTexture> tex = nil;

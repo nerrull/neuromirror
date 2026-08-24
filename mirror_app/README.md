@@ -269,6 +269,19 @@ from a published event to a source on the water, playing the plug-in's part
 through the same header the plug-in writes through, so it needs no Wwise
 install.
 
+### Pluck-bed onsets (a second, marker-based path)
+
+Separately from OnsetTap, the **pluck bed** (`Play_FirePlucker`, playing
+through Idle and Fitting) drives its own raindrops via Wwise's native cue
+markers instead of a live analysis plug-in: `tools/embed_pluck_markers.py`
+detects loud onsets in the source WAV offline and bakes them into the file as
+markers, each labeled with a 0..1 strength. `WwiseAudio::postFirePlucker()`
+posts the event with an `AK_Marker` callback; `pollFirePluckerMarkers()`
+drains the hits in `main.mm`, which spawns a drop per hit — Idle/Fitting only
+— when **pluck onsets spawn drops** is on in the panel. See
+`tools/README.md` and `../WwiseProject/README.md` for how to retune and
+re-bake the markers.
+
 ## Root render performance
 
 `mirror_app --rootbench [downscale] [frames] [baseW] [baseH]` grows the sim to
@@ -312,3 +325,4 @@ On a 256-system field (immersive camera, 1080p, base M4): naive all-full **19.1 
 - `src/metal_context.{h,mm}` — the shared Metal device/queue (same one MLX uses) + MSL loader.
 - `shaders/` — app MSL (compositor / transition / ported root passes).
 - `plans/` — working plan, versioned with the code.
+- `tools/` — offline scripts, run by hand; see [`tools/README.md`](tools/README.md).

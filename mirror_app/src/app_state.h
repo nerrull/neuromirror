@@ -92,6 +92,11 @@ extern mirror::AudioPulses g_pulses;
 extern bool  g_pulse_drops;
 extern float g_pulse_gain;
 
+// The pluck bed's own crackle onsets (Wwise cue markers on Play_FirePlucker,
+// see wwise_audio.h), Idle/Fitting only -- the phases where that bed plays.
+extern bool  g_pluck_drops;
+extern float g_pluck_drop_gain;
+
 extern mirror::FaceTracker g_tracker;
 extern mirror::FaceResult  g_face;
 extern mirror::FaceFitter  g_fitter;
@@ -149,6 +154,10 @@ extern bool  g_audio_auto;
 extern float g_audio_key;
 extern float g_audio_intensity;
 extern float g_audio_transpose;
+extern bool  g_shepherd_on;     // the Fitting-phase glissando, on or off
+extern float g_shepherd_rate_min;  // semitones/s at fit_level 0
+extern float g_shepherd_rate_max;  // semitones/s at fit_level 1
+extern float g_shepherd_phase;  // semitones, 0..12 -- the Fitting-phase glissando's position
 extern std::string g_audio_err;
 
 extern std::vector<float> g_face_colors;

@@ -101,6 +101,7 @@ add_library(mirror_core STATIC
     src/face_basis.cpp
     src/face_fit.cpp
     src/face_capture.cpp
+    src/face_track.cpp
     src/mirror_render.cpp
     src/screen_layout.cpp
     src/show_timeline.cpp

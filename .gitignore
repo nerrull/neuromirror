@@ -18,3 +18,7 @@ reaper_proj/
 # not something anyone downstream needs.
 WwiseProject/*.prof
 mirror_app/crashlogs/
+
+# Coverage builds and raw profile data: re-derivable, large, machine-local.
+build_coverage/
+coverage_profiles/

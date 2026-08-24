@@ -34,7 +34,13 @@ const PhaseGraph kGraph[(int)Phase::Count] = {
     // edges,          n, timeout,       min,  max
     {kIdleEdges,       1, Phase::Idle,    8.f,  0.f},
     {kFittingEdges,    2, Phase::Idle,    2.f, 30.f},
-    {kTransitionEdges, 1, Phase::Roots,   0.f, 12.f},
+    // 30s, not 12: the merged Transition/Roots composite (see main.mm's
+    // pre-warm block) now retimes SceneDone to fire off the cloth-clearance
+    // signal plus its clear-tail, which can run well past the old fixed
+    // ~12.6s Timing sum. This ceiling is only the safety net for a visitor
+    // who somehow never triggers clearance (see TransitionScene's guaranteed
+    // side force) -- SceneDone is the everyday path now, not this timeout.
+    {kTransitionEdges, 1, Phase::Roots,   0.f, 30.f},
     {kRootsEdges,      1, Phase::Idle,   40.f,  0.f},
 };
 

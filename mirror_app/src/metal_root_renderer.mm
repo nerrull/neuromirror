@@ -92,11 +92,12 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     id<MTLLibrary> geomLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_geom.metal"});
     id<MTLLibrary> faceLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_face.metal"});
     id<MTLLibrary> leafLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_leaf.metal"});
+    id<MTLLibrary> clothLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_cloth.metal"});
     id<MTLLibrary> fogLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_fog.metal"});
     id<MTLLibrary> aoLib   = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_ao.metal"});
     id<MTLLibrary> blmLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_bloom.metal"});
     id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_post.metal"});
-    if (!geomLib || !faceLib || !leafLib || !fogLib || !aoLib || !blmLib || !postLib) {
+    if (!geomLib || !faceLib || !leafLib || !clothLib || !fogLib || !aoLib || !blmLib || !postLib) {
         fprintf(stderr, "MetalRootRenderer: shader compile failed\n"); return;
     }
 
@@ -127,6 +128,15 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         d.depthAttachmentPixelFormat = kDepthFmt;
         leafPipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
         if (!leafPipe_) { NSLog(@"leaf pipeline failed: %@", err); return; }
+    }
+    {
+        MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+        d.vertexFunction   = [clothLib newFunctionWithName:@"root_cloth_vs"];
+        d.fragmentFunction = [clothLib newFunctionWithName:@"root_cloth_fs"];
+        d.colorAttachments[0].pixelFormat = kColorFmt;
+        d.depthAttachmentPixelFormat = kDepthFmt;
+        clothPipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
+        if (!clothPipe_) { NSLog(@"cloth pipeline failed: %@", err); return; }
     }
     {
         MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
@@ -461,6 +471,13 @@ void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {
 void MetalRootRenderer::uploadLeafMesh(const std::vector<float>& interleaved) {
     leafVertCount_ = (int)(interleaved.size() / 12);
     leafBuf_ = leafVertCount_ > 0
+        ? makeBuffer(interleaved.data(), interleaved.size() * sizeof(float))
+        : nil;
+}
+
+void MetalRootRenderer::uploadClothMesh(const std::vector<float>& interleaved) {
+    clothVertCount_ = (int)(interleaved.size() / 10);
+    clothBuf_ = clothVertCount_ > 0
         ? makeBuffer(interleaved.data(), interleaved.size() * sizeof(float))
         : nil;
 }
@@ -844,6 +861,29 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         [ge setFragmentBytes:&lu length:sizeof(lu) atIndex:1];
         [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
                 vertexCount:(NSUInteger)leafVertCount_];
+    }
+
+    // Cloth mid-geometry pass: the draped pond sheet, same targets and depth
+    // convention as the face/leaf passes -- see root_cloth.metal. Skipped
+    // outright (rather than drawn with an unbound texture) when the caller
+    // has not handed over a pond texture this frame.
+    if (clothVertCount_ > 0 && clothPipe_ && clothTex_) {
+        RootClothU cu = {};
+        cu.viewProj = vp;
+        cu.lightDir = gu.lightDir;
+        cu.refract = cloth.refract;
+        cu.reliefShade = cloth.reliefShade;
+        cu.reliefSharp = cloth.reliefSharp;
+        cu.sheen = cloth.sheen;
+        [ge setRenderPipelineState:clothPipe_];
+        [ge setDepthStencilState:depthState_];
+        [ge setCullMode:MTLCullModeNone];
+        [ge setVertexBuffer:clothBuf_ offset:0 atIndex:0];
+        [ge setVertexBytes:&cu length:sizeof(cu) atIndex:1];
+        [ge setFragmentBytes:&cu length:sizeof(cu) atIndex:1];
+        [ge setFragmentTexture:clothTex_ atIndex:0];
+        [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                vertexCount:(NSUInteger)clothVertCount_];
     }
     [ge endEncoding];
 

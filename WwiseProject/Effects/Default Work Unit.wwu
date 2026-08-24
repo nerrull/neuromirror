@@ -81,7 +81,19 @@
 					<PropertyList>
 						<Property Name="DelayTime" Type="Real32" Value="10"/>
 						<Property Name="FilterType" Type="int32" Value="4"/>
-						<Property Name="Pitch" Type="Real32" Value="-1300"/>
+						<Property Name="Pitch" Type="Real32" Value="1800"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="New_Parametric_EQ" ID="{B22679F3-1BE1-40A5-AEAB-6F3B5BAFB09F}" PluginName="Wwise Parametric EQ" CompanyID="0" PluginID="105" PluginType="3">
+					<PropertyList>
+						<Property Name="FilterTypeBand3" Type="int32" Value="0"/>
+						<Property Name="FrequencyBand1" Type="Real32" Value="84.13892"/>
+						<Property Name="FrequencyBand2" Type="Real32" Value="1193.179"/>
+						<Property Name="FrequencyBand3" Type="Real32" Value="18184.76"/>
+						<Property Name="GainBand1" Type="Real32" Value="15.6129"/>
+						<Property Name="GainBand2" Type="Real32" Value="22.96774"/>
+						<Property Name="OnOffBand3" Type="bool" Value="True"/>
+						<Property Name="OutputLevel" Type="Real32" Value="-16"/>
 					</PropertyList>
 				</Effect>
 			</ChildrenList>
