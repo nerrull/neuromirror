@@ -1946,20 +1946,48 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                            atoi(getenv("CLOTHSHOT_AUTOFRAME")) != 0;
     if (autoframe) {
         roots.autoFrame = true;
-        // What main.mm's Transition branch does when the authored sequence is
-        // not driving: frame the press on the face it is happening to.
-        roots.focusMask = roots.anchorMask;
-        roots.camEase = 0.6f;        // a move, not a cut -- see RootScene::camEase
-        // Where the previous phase leaves the camera: RootScene's own default
-        // framing, well below and away from the anchor.
-        roots.target[0] = 0.f; roots.target[1] = -8.f; roots.target[2] = 0.f;
-        roots.radius = 42.f;
+        const bool outward = atoi(getenv("CLOTHSHOT_AUTOFRAME")) == 2;
+
+        // Prime the camera at the *start* pose before arming the ease.
+        //
+        // applyFraming snaps rather than eases until camPrimed_ is set, which
+        // happens on its first call ever -- so a harness that just assigns a
+        // pose and starts rendering gets one snap and then a stationary
+        // camera, which is exactly the case the cloth already handles and not
+        // the one worth testing. Live, camPrimed_ has been true since startup,
+        // so the phase change hands the press a camera in mid-flight. One
+        // zero-ease advance here reproduces that state.
+        roots.camEase = 0.f;
+        roots.focusMask = outward ? roots.anchorMask : -1;
+        roots.advance(1.0 / double(fps));
+
+        // ...then aim it somewhere else and let it ease the whole way there
+        // while the press runs. Inward (=1) is the live default: tight on the
+        // anchor. Outward (=2) is the adversarial direction, where the frustum
+        // keeps growing past whatever the sheet was built to cover -- the case
+        // that breaks a sheet sized against its entry pose while leaving the
+        // opening frame perfect.
+        roots.camEase = 0.6f;
+        roots.focusMask = outward ? -1 : roots.anchorMask;
     }
     roots.restartCloth();
 
     const double dt = 1.0 / double(fps);
     double clock = 0.0;
     std::vector<float> seamPond;
+    // Worst-case border coverage over the whole pinned window.
+    //
+    // SEAM only ever looks at frame 0, and frame 0 is the one moment the sheet
+    // is guaranteed right because it is the moment it was solved. The camera
+    // keeps easing afterwards, and a sheet frozen against the entry pose can
+    // stop reaching the edges without SEAM moving at all -- so the number that
+    // says "the film still covers the frame" has to be measured across the
+    // window, not at its start. Measured against a cloth-off render of the
+    // same frame rather than by guessing at colours: a border pixel that is
+    // identical with and without the sheet is a border pixel the sheet is not
+    // covering, and that is exact.
+    double worstUncovered = 0.0;
+    int    worstFrame = -1, coverageFrames = 0;
     for (int f = 0; f < frames; ++f) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
@@ -2017,6 +2045,8 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
             snprintf(path, sizeof(path), "%s%04d.ppm", prefix, f);
             if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
                 return 1;
+
+
             if (f == 0 && !seamPond.empty()) {
                 // Both sides read and written identically -- see readTexRGB.
                 // The pond is display-referred already (it is what the Mirror
@@ -2040,12 +2070,53 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                        "(0 = the cut is invisible; wrote %sseam_{pond,cloth,diff}.ppm)\n",
                        n ? sum / double(n) : 0.0, worst, prefix);
             }
+
+            // Coverage, for as long as the sheet is supposed to be covering:
+            // hold, press and settle. Once the release starts the film is
+            // meant to be leaving, and border that stops being film is the
+            // effect working rather than failing.
+            if (roots.showCloth && roots.clothRelease() <= 0.f && roots.clothActive()) {
+                const std::vector<float> withCloth = readTexRGB(tex, W, H);
+                // Drop the sheet and draw the same frame again. Safe to leave
+                // dropped: advance() re-packs it at the top of the next frame.
+                roots.renderer().uploadClothMesh({});
+                id<MTLCommandBuffer> cb2 = [ctx.queue() commandBuffer];
+                id<MTLTexture> bare = roots.render(cb2);
+                [cb2 commit]; [cb2 waitUntilCompleted];
+                const std::vector<float> without = readTexRGB(bare, W, H);
+                size_t border = 0, uncovered = 0;
+                auto sample = [&](int x, int y) {
+                    const size_t k = ((size_t)y * W + x) * 3;
+                    ++border;
+                    const float d = std::fabs(withCloth[k]     - without[k])
+                                  + std::fabs(withCloth[k + 1] - without[k + 1])
+                                  + std::fabs(withCloth[k + 2] - without[k + 2]);
+                    if (d < 1e-4f) ++uncovered;
+                };
+                for (int y = 0; y < H; ++y) { sample(0, y); sample(W - 1, y); }
+                for (int x = 0; x < W; ++x) { sample(x, 0); sample(x, H - 1); }
+                const double frac = border ? double(uncovered) / double(border) : 0.0;
+                ++coverageFrames;
+                if (frac > worstUncovered || worstFrame < 0) {
+                    worstUncovered = frac; worstFrame = f;
+                }
+            }
             if ((f % 20) == 0)
-                printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f\n",
+                printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f "
+                       "cam r=%.2f t=(%.2f,%.2f,%.2f)\n",
                        f, frames, roots.clothPhaseName(), roots.clothPress(),
-                       roots.clothRelease(), roots.clothClearance());
+                       roots.clothRelease(), roots.clothClearance(),
+                       roots.radius, roots.target[0], roots.target[1], roots.target[2]);
         }
     }
+    // The sample count is printed because a coverage number measured over zero
+    // frames looks exactly like perfect coverage, and the whole reason this
+    // metric exists is that a number which quietly stops looking is worse than
+    // no number at all.
+    printf("clothshot: COVERAGE worst %.2f%% of the border not film, at frame %d, "
+           "over %d frames (0%% = the film reaches every edge for the whole "
+           "pinned window)\n",
+           worstUncovered * 100.0, worstFrame, coverageFrames);
     printf("clothshot: wrote %d frames %s0000.ppm.. (%dx%d @ %.0f fps)\n",
            frames, prefix, W, H, fps);
     return 0;

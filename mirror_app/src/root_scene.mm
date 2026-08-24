@@ -606,35 +606,97 @@ void RootScene::ensureClothSheet() {
     // would snap the whole drape back to flat -- hence the freeze.
     if (!clothExtentFrozen_) {
         const float aspect = float(std::max(1, width())) / float(std::max(1, height()));
+        const float tanF = std::tan(std::clamp(effectiveFov(), 0.05f, 1.4f));
+
+        // The frustum's footprint on the anchor's plane, for one camera pose:
+        // where the view axis crosses it, and how far the frame reaches either
+        // side of that in the sheet's own tangent/bitangent coordinates.
+        //
         // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz) -- the same
         // spherical convention applyFraming and the renderer use.
-        const float ce = std::cos(elevation), se = std::sin(elevation);
-        const simd_float3 eye = simd_make_float3(target[0] + radius * ce * std::sin(azimuth),
-                                                 target[1] + radius * se,
-                                                 target[2] + radius * ce * std::cos(azimuth));
-        const simd_float3 at = simd_make_float3(target[0], target[1], target[2]);
-        const float dist = std::max(0.5f, std::fabs(simd_dot(eye - clothAnchorPos_, clothAnchorN_)));
-        const float halfY = dist * std::tan(std::clamp(effectiveFov(), 0.05f, 1.4f));
-        const float newHalfY = std::max(0.05f, halfY * over);
-        const float newHalfX = std::max(0.05f, halfY * aspect * over);
-
-        // Centre the sheet where the camera actually looks through its plane:
-        // the eye->target ray, intersected with the anchor's plane. Falls back
-        // to the anchor itself when the ray runs parallel to the plane, which
-        // is a camera looking along the mask's own surface -- a shot the press
-        // has no meaning in anyway, and not one worth a special case beyond
-        // not dividing by zero.
-        simd_float3 fwd = at - eye;
-        const float flen = simd_length(fwd);
-        simd_float3 centre = clothAnchorPos_;
-        if (flen > 1e-5f) {
-            fwd /= flen;
-            const float denom = simd_dot(fwd, clothAnchorN_);
-            if (std::fabs(denom) > 1e-4f) {
-                const float t = simd_dot(clothAnchorPos_ - eye, clothAnchorN_) / denom;
-                if (t > 0.f) centre = eye + fwd * t;
+        struct Foot { float u, v, halfX, halfY; };
+        auto footprint = [&](const float tgt[3], float rad, float az, float el) {
+            const float ce = std::cos(el), se = std::sin(el);
+            const simd_float3 eye = simd_make_float3(tgt[0] + rad * ce * std::sin(az),
+                                                     tgt[1] + rad * se,
+                                                     tgt[2] + rad * ce * std::cos(az));
+            const simd_float3 at = simd_make_float3(tgt[0], tgt[1], tgt[2]);
+            const float dist = std::max(0.5f,
+                std::fabs(simd_dot(eye - clothAnchorPos_, clothAnchorN_)));
+            // Centre the sheet where the camera actually looks through the
+            // plane. Falls back to the anchor when the ray runs parallel to it,
+            // which is a camera looking along the mask's own surface -- a shot
+            // the press has no meaning in anyway, and not one worth a special
+            // case beyond not dividing by zero.
+            simd_float3 fwd = at - eye;
+            const float flen = simd_length(fwd);
+            simd_float3 c = clothAnchorPos_;
+            if (flen > 1e-5f) {
+                fwd /= flen;
+                const float denom = simd_dot(fwd, clothAnchorN_);
+                if (std::fabs(denom) > 1e-4f) {
+                    const float t = simd_dot(clothAnchorPos_ - eye, clothAnchorN_) / denom;
+                    if (t > 0.f) c = eye + fwd * t;
+                }
             }
+            const simd_float3 d = c - clothAnchorPos_;
+            Foot f;
+            f.u = simd_dot(d, clothAnchorT_);
+            f.v = simd_dot(d, clothAnchorB_);
+            f.halfY = dist * tanF;
+            f.halfX = f.halfY * aspect;
+            return f;
+        };
+
+        // The union of where the camera is and where it is going.
+        //
+        // The sheet is pinned and flat right now, but it will still be this
+        // sheet when the ease has finished, and by then it is draping and can
+        // no longer be rebuilt. Sizing against the entry pose alone is the same
+        // trap as solving it against the previous frame's camera: correct at
+        // the instant it was measured and wrong for everything the audience
+        // actually watches. Taking the union of the two endpoints covers the
+        // whole path, because applyFraming interpolates target and radius
+        // monotonically between them -- the angles ease monotonically too, so
+        // the crossing point sweeps between the two footprints rather than
+        // outside them, and the oversize margin absorbs the small bow that a
+        // simultaneous angle-and-distance change puts in that sweep.
+        Foot f = footprint(target, radius, azimuth, elevation);
+        float uLo = f.u - f.halfX, uHi = f.u + f.halfX;
+        float vLo = f.v - f.halfY, vHi = f.v + f.halfY;
+        if (camDesValid_) {
+            const Foot g = footprint(camDesTarget_, camDesRadius_, camDesAz_, camDesEl_);
+            uLo = std::min(uLo, g.u - g.halfX); uHi = std::max(uHi, g.u + g.halfX);
+            vLo = std::min(vLo, g.v - g.halfY); vHi = std::max(vHi, g.v + g.halfY);
         }
+        // The film's own rectangle is the view being cut *from* -- the current
+        // pose, and exactly it, with no margin. uv 0..1 has to be the frame the
+        // pond filled at the instant of the cut; anything else scales the
+        // picture. The margin belongs on the extent below, where it always
+        // did: the sheet reaches past the frame and that overhang runs past
+        // 0..1 and clamps, which is what puts film rather than background at
+        // the edge when the sheet moves.
+        const float filmHalfX = std::max(0.05f, f.halfX);
+        const float filmHalfY = std::max(0.05f, f.halfY);
+
+        // Symmetric about the union's own centre, because the sheet is built
+        // symmetric about its centre.
+        const float cu = 0.5f * (uLo + uHi), cv = 0.5f * (vLo + vHi);
+        // ...and the film rectangle expressed relative to that centre.
+        clothFilmU_ = f.u - cu;
+        clothFilmV_ = f.v - cv;
+        clothFilmHalfX_ = filmHalfX;
+        clothFilmHalfY_ = filmHalfY;
+        // The extent covers the union, plus the margin. The union is the
+        // envelope of the two endpoint frustums; the poses in between sweep
+        // between them rather than outside, but a simultaneous change of angle
+        // and distance bows that sweep slightly, and the margin is what
+        // absorbs the bow. It is also what guarantees the edge of the frame is
+        // never the edge of the sheet.
+        const float newHalfX = std::max(0.05f, std::max(0.5f * (uHi - uLo), filmHalfX) * over);
+        const float newHalfY = std::max(0.05f, std::max(0.5f * (vHi - vLo), filmHalfY) * over);
+        const simd_float3 centre = clothAnchorPos_ + clothAnchorT_ * cu + clothAnchorB_ * cv;
+
         // Rebuild only on a real change, so a settled camera stops churning
         // the sheet every frame for nothing.
         const bool moved = simd_length(centre - clothCentre_) > 1e-3f ||
@@ -808,7 +870,6 @@ void RootScene::packClothMesh() {
     rr_->cloth.passThrough = 1.f - smoothstep01(clothRelease());
     if (!showCloth || !clothActive_ || cloth_.tris.empty()) { rr_->uploadClothMesh({}); return; }
 
-    const float o = clothBuiltOversize_ > 0.f ? clothBuiltOversize_ : 1.f;
     const float cellW = 2.f * clothHalfX_ / float(std::max(1, cloth_.nx - 1));
     const int di[4] = {-1, 1, 0, 0}, dj[4] = {0, 0, -1, 1};
 
@@ -839,8 +900,18 @@ void RootScene::packClothMesh() {
             const simd_float3 pw = clothCentre_ + clothAnchorT_ * p.x
                                   + clothAnchorB_ * p.y + clothAnchorN_ * p.z;
             const simd_float3 nw = clothAnchorT_ * n.x + clothAnchorB_ * n.y + clothAnchorN_ * n.z;
-            const float u = 0.5f + (i / float(cloth_.nx - 1) - 0.5f) * o;
-            const float v = 0.5f - (j / float(cloth_.ny - 1) - 0.5f) * o;
+            // uv from the vertex's *rest* position against the film
+            // rectangle, rather than from its grid index against the sheet.
+            // The two agreed while the sheet was the frustum times a margin;
+            // they stop agreeing the moment the sheet has to be bigger than
+            // the frame to survive a camera move, and it is the film rectangle
+            // that keeps the cut invisible. Taken from the rest grid, not from
+            // the live position, so the mapping stays locked to the fabric as
+            // it stretches and falls -- the same property packCloth had.
+            const float rx = (i / float(cloth_.nx - 1) - 0.5f) * (2.f * clothHalfX_);
+            const float ry = (j / float(cloth_.ny - 1) - 0.5f) * (2.f * clothHalfY_);
+            const float u = 0.5f + (rx - clothFilmU_) / (2.f * clothFilmHalfX_);
+            const float v = 0.5f - (ry - clothFilmV_) / (2.f * clothFilmHalfY_);
 
             data.push_back(pw.x); data.push_back(pw.y); data.push_back(pw.z);
             data.push_back(nw.x); data.push_back(nw.y); data.push_back(nw.z);
@@ -1164,7 +1235,9 @@ bool RootScene::maskBound(const std::vector<int>& idx, float centre[3], float& r
 }
 
 void RootScene::applyFraming(double dt) {
-    if (!autoFrame) return;
+    // The authored sequence assigns the camera outright, so there is no ease
+    // in flight and no future pose to anticipate -- see camDesValid_.
+    if (!autoFrame) { camDesValid_ = false; return; }
     // The layout, not the reveals: a bound that grows a step per revealed mask
     // makes the camera climb a staircase, and easing a staircase is a pump.
     const auto& ms = frameOnPlanned && !plannedMasks().empty() ? plannedMasks()
@@ -1261,6 +1334,16 @@ void RootScene::applyFraming(double dt) {
         desTarget[2] = idleCentre_[2];
         desRadius = (idleExtent_ * 0.75f + 12.0f) * zoom;
     }
+
+    // Published before the ease consumes them: ensureClothSheet needs the pose
+    // the camera is heading for, not the one it is passing through.
+    camDesValid_ = true;
+    camDesRadius_ = desRadius;
+    camDesTarget_[0] = desTarget[0];
+    camDesTarget_[1] = desTarget[1];
+    camDesTarget_[2] = desTarget[2];
+    camDesAz_ = desAz;
+    camDesEl_ = desEl;
 
     // Ease. Exponential convergence rather than a spring: no overshoot, frame
     // rate independent, and it never has to be told when a move ends -- a shot

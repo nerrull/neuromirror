@@ -324,6 +324,10 @@ public:
     float clothPress() const;      // 0..1, how far the mask has come through
     float clothRelease() const;    // 0..1, how far the release front has run
     bool  clothDone() const;
+    // Whether a film is currently being simulated and drawn at all -- false
+    // before the first restartCloth(), and again once the fall has finished
+    // or skipCloth() has retired it.
+    bool  clothActive() const { return clothActive_; }
     const char* clothPhaseName() const;
     const Cloth& cloth() const { return cloth_; }
 
@@ -410,6 +414,21 @@ private:
     // the sheet cover the frame by construction, whatever the camera is doing
     // and wherever the anchor ends up.
     simd_float3 clothCentre_ = simd_make_float3(0, 0, 0);
+    // The rectangle, in the sheet's own local coordinates, that the film maps
+    // onto -- uv 0..1 spans exactly this and the sheet may extend well past it.
+    //
+    // Kept separate from the sheet's extent because the two answer different
+    // questions and can want different answers. uv is fixed by what the film
+    // *is*: the pond filled the frame at the moment of the cut, so uv 0..1 has
+    // to be the frustum at that moment or the cut is visible. The extent is
+    // fixed by what the sheet has to *cover*: every view the camera will reach
+    // while the sheet is still pinned. Tying uv to the extent (which is what
+    // dividing through by `oversize` did) makes those the same number, and
+    // then a camera that pulls back during the press can only be covered by
+    // giving up the registration at entry. Split, both hold: the sheet reaches
+    // as far as it must and the film still lands where it did.
+    float  clothFilmU_ = 0.f, clothFilmV_ = 0.f;        // centre, local
+    float  clothFilmHalfX_ = 1.f, clothFilmHalfY_ = 1.f;
     // The face model's own local z extent, measured from the mesh actually
     // uploaded rather than estimated. Feeds both the press retraction (how far
     // behind the sheet the mask starts) and the clearance signal (where the
@@ -451,6 +470,18 @@ private:
     void  updateBounds(const std::vector<float>& nodes);
     void  applyFraming(double dt = 0.0);
     bool  camPrimed_ = false;   // false until the first frame has snapped
+    // The pose applyFraming is easing *towards*, published so the cloth can
+    // size its sheet against where the camera is going and not only against
+    // where it is. A sheet is a physical object -- it cannot be resized once
+    // it is draping -- so the only way it can be guaranteed to cover the frame
+    // for the whole of the pinned phase is to be built for the widest view it
+    // will meet during that phase. Only meaningful while autoFrame is on;
+    // the authored sequence assigns the camera outright with no ease, so
+    // there is nothing to anticipate and camDesValid_ stays false.
+    bool  camDesValid_ = false;
+    float camDesRadius_ = 0.f;
+    float camDesTarget_[3] = {0.f, 0.f, 0.f};
+    float camDesAz_ = 0.f, camDesEl_ = 0.f;
     bool  facesUploaded_ = false;
     std::vector<int>   canonTris_;
     std::vector<float> faceColors_;   // per-vertex RGB, empty = flat material
