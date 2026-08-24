@@ -1934,6 +1934,24 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
     RootCameraSequence seq;
     seq.begin(roots, bp);
     if (!seq.valid()) { fprintf(stderr, "clothshot: no masks\n"); return 1; }
+
+    // CLOTHSHOT_AUTOFRAME=1 reproduces the show's *default* camera, which is
+    // not the authored sequence at all: g_root_authored_camera is off unless
+    // the operator turns it on, so applyFraming is what actually drives the
+    // live press -- and applyFraming eases, converging target and radius in
+    // from wherever the previous phase left them. That is the configuration
+    // the sheet was reported off-centre in, so it is the one worth being able
+    // to render.
+    const bool autoframe = getenv("CLOTHSHOT_AUTOFRAME") &&
+                           atoi(getenv("CLOTHSHOT_AUTOFRAME")) != 0;
+    if (autoframe) {
+        roots.autoFrame = true;
+        roots.camEase = 0.6f;        // a move, not a cut -- see RootScene::camEase
+        // Where the previous phase leaves the camera: RootScene's own default
+        // framing, well below and away from the anchor.
+        roots.target[0] = 0.f; roots.target[1] = -8.f; roots.target[2] = 0.f;
+        roots.radius = 42.f;
+    }
     roots.restartCloth();
 
     const double dt = 1.0 / double(fps);
@@ -1951,7 +1969,11 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
             // sheet is flat, fully pinned and covering the frustum, so every
             // pixel of it is the pond and nothing else. Whatever these two
             // differ by is what the audience sees at the cut.
-            if (f == 0 && pond) {
+            // Only ever measured against a real MirrorScene frame. The
+            // synthetic grid film is RGBA8Unorm and readTexRGB reads halves,
+            // so a seam number off the grid path is reading its bytes as
+            // float16 and reporting noise in the tens of thousands.
+            if (f == 0 && pond && !film) {
                 // At the pond's own resolution and then bilinearly upscaled --
                 // the mirror renders below the window size and the presenter
                 // scales it up, so the image the audience actually sees at the
@@ -1982,7 +2004,8 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                 }
             }
             clock += dt;
-            seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared());
+            if (!autoframe)
+                seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared());
             roots.advance(dt);
             id<MTLTexture> tex = roots.render(cb);
             [cb commit]; [cb waitUntilCompleted];

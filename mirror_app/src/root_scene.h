@@ -381,6 +381,20 @@ private:
     // sheet that is mid-fall.
     float  clothHalfX_ = 1.f, clothHalfY_ = 1.f;
     bool   clothExtentFrozen_ = false;
+    // Where the sheet's own centre sits, on the anchor's plane. The point the
+    // camera is actually looking through, not the anchor's position.
+    //
+    // These are the same point only when the camera has settled on the anchor,
+    // and live it routinely has not: g_root_authored_camera is off by default,
+    // so applyFraming drives the camera, and applyFraming *eases* -- target
+    // converges exponentially from wherever the previous phase left it (the
+    // default is {0,-8,0}). A sheet centred on the anchor while the camera is
+    // still looking below and beside it reads as the film sitting up and to
+    // one side, with the far corner running off the end of its own uv and
+    // smearing the film's edge pixels. Following the view axis instead makes
+    // the sheet cover the frame by construction, whatever the camera is doing
+    // and wherever the anchor ends up.
+    simd_float3 clothCentre_ = simd_make_float3(0, 0, 0);
     // The face model's own local z extent, measured from the mesh actually
     // uploaded rather than estimated. Feeds both the press retraction (how far
     // behind the sheet the mask starts) and the clearance signal (where the

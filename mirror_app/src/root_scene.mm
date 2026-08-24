@@ -566,6 +566,18 @@ void RootScene::ensureClothSheet() {
     const int res = std::clamp(clothSheetRes, 16, 192);
     const float over = std::max(1.0f, clothOversize);
 
+    // Re-solved every frame for as long as the sheet is still flat and fully
+    // pinned, then frozen when the press begins.
+    //
+    // Freezing on the very first frame (what this did before) trusts a camera
+    // that has usually not arrived yet: with the authored sequence off --
+    // which is the default -- applyFraming eases target and radius in from
+    // whatever the previous phase left, so frame one of the press sees a
+    // camera still travelling. Rebuilding costs nothing while the sheet is
+    // flat, because there is no simulated state to lose: every vertex is at
+    // its rest position and every pin is fully held, so a rebuild is a no-op
+    // the eye can see. Once the press starts there *is* state, and a rebuild
+    // would snap the whole drape back to flat -- hence the freeze.
     if (!clothExtentFrozen_) {
         const float aspect = float(std::max(1, width())) / float(std::max(1, height()));
         // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz) -- the same
@@ -574,12 +586,40 @@ void RootScene::ensureClothSheet() {
         const simd_float3 eye = simd_make_float3(target[0] + radius * ce * std::sin(azimuth),
                                                  target[1] + radius * se,
                                                  target[2] + radius * ce * std::cos(azimuth));
+        const simd_float3 at = simd_make_float3(target[0], target[1], target[2]);
         const float dist = std::max(0.5f, std::fabs(simd_dot(eye - clothAnchorPos_, clothAnchorN_)));
         const float halfY = dist * std::tan(std::clamp(effectiveFov(), 0.05f, 1.4f));
-        clothHalfY_ = std::max(0.05f, halfY * over);
-        clothHalfX_ = std::max(0.05f, halfY * aspect * over);
-        clothExtentFrozen_ = true;
-        clothBuiltRes_ = 0;          // force the build below
+        const float newHalfY = std::max(0.05f, halfY * over);
+        const float newHalfX = std::max(0.05f, halfY * aspect * over);
+
+        // Centre the sheet where the camera actually looks through its plane:
+        // the eye->target ray, intersected with the anchor's plane. Falls back
+        // to the anchor itself when the ray runs parallel to the plane, which
+        // is a camera looking along the mask's own surface -- a shot the press
+        // has no meaning in anyway, and not one worth a special case beyond
+        // not dividing by zero.
+        simd_float3 fwd = at - eye;
+        const float flen = simd_length(fwd);
+        simd_float3 centre = clothAnchorPos_;
+        if (flen > 1e-5f) {
+            fwd /= flen;
+            const float denom = simd_dot(fwd, clothAnchorN_);
+            if (std::fabs(denom) > 1e-4f) {
+                const float t = simd_dot(clothAnchorPos_ - eye, clothAnchorN_) / denom;
+                if (t > 0.f) centre = eye + fwd * t;
+            }
+        }
+        // Rebuild only on a real change, so a settled camera stops churning
+        // the sheet every frame for nothing.
+        const bool moved = simd_length(centre - clothCentre_) > 1e-3f ||
+                           std::fabs(newHalfX - clothHalfX_) > 1e-3f ||
+                           std::fabs(newHalfY - clothHalfY_) > 1e-3f;
+        clothCentre_ = centre;
+        clothHalfX_ = newHalfX;
+        clothHalfY_ = newHalfY;
+        if (moved) clothBuiltRes_ = 0;   // force the build below
+        // The press is about to start doing physics: stop moving the ground.
+        if (float(clothT_) >= clothTiming.hold) clothExtentFrozen_ = true;
     }
 
     if (res == clothBuiltRes_ && std::fabs(over - clothBuiltOversize_) < 1e-4f) return;
@@ -632,7 +672,10 @@ void RootScene::rasteriseClothField() {
         - clothAnchorN_ * clothPressOffset_;
 
     auto toField = [&](simd_float3 w, float& fx, float& fy, float& z) {
-        const simd_float3 d = w - clothAnchorPos_;
+        // Lateral offsets are measured from the sheet's own centre; the depth
+        // is unchanged by the swap, because clothCentre_ is on the anchor's
+        // plane by construction and so has zero component along the normal.
+        const simd_float3 d = w - clothCentre_;
         const float lx = simd_dot(d, clothAnchorT_);
         const float ly = simd_dot(d, clothAnchorB_);
         z = simd_dot(d, clothAnchorN_);
@@ -767,7 +810,7 @@ void RootScene::packClothMesh() {
                 curv = -simd_dot(lap, n) * sgn / std::max(1e-5f, cellW);
             }
 
-            const simd_float3 pw = clothAnchorPos_ + clothAnchorT_ * p.x
+            const simd_float3 pw = clothCentre_ + clothAnchorT_ * p.x
                                   + clothAnchorB_ * p.y + clothAnchorN_ * p.z;
             const simd_float3 nw = clothAnchorT_ * n.x + clothAnchorB_ * n.y + clothAnchorN_ * n.z;
             const float u = 0.5f + (i / float(cloth_.nx - 1) - 0.5f) * o;
@@ -825,7 +868,14 @@ void RootScene::advanceCloth(double dt) {
     // most of the press travelling through empty space before touching
     // anything.
     const float restFront = -(clothAnchorRD_ * faceRecess) + clothFaceZMax_ * scale;
-    const float retract = restFront + 0.05f * scale;
+    // Never negative. restFront is where the mask's frontmost point rests
+    // relative to the sheet's plane, and on a mesh whose depth puts that point
+    // *behind* the plane it goes negative -- which would start the press with
+    // the mask already through the sheet, so the collider's first act is to
+    // shove a fully-pinned sheet off a solid it is interpenetrating. That does
+    // not read as a press at all; it reads as the film vanishing the moment it
+    // is touched.
+    const float retract = std::max(0.f, restFront + 0.05f * scale);
     // ...and where it ends: proud of the plane, so the film is actually tented
     // over a face rather than grazed by one. Held through the settle, unwound
     // over the release, so the mask is back at exactly its cavity placement --
@@ -838,8 +888,7 @@ void RootScene::advanceCloth(double dt) {
 
     if (float(clothT_) <= clothTiming.hold) {
         updateClothClearance();
-        packClothMesh();
-        return;
+        return;   // advance() packs, after the framing -- see its tail
     }
 
     cloth_.skin = clothSkin;
@@ -872,7 +921,8 @@ void RootScene::advanceCloth(double dt) {
     for (int i = 0; i < ss; ++i) cloth_.step(float(dt) / float(ss));
     cloth_.computeNormals();
     updateClothClearance();
-    packClothMesh();
+    // No pack here: advance() does it once the camera has stopped moving for
+    // this frame, so the sheet is always solved against the camera that draws it.
 }
 
 std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned seed,
@@ -952,6 +1002,15 @@ void RootScene::clearTestIdentities() {
 
 void RootScene::rebuildFace() {
     if (!rr_) return;
+    // Every path that replaces faceVerts_ ends here, so this is the one place
+    // the cloth's depth model can be kept honest. It used to be measured only
+    // in restartCloth(), which is wrong for the live show by construction: the
+    // press starts on the Transition edge and setFittedFace() then replaces
+    // the mesh on every frame of it, normalised to max-abs-coordinate 1 rather
+    // than to the canonical model's own extent -- so the press was being
+    // driven off a depth belonging to whatever mesh happened to be loaded
+    // before the visitor arrived.
+    measureClothFaceDepth();
     if (useSim_) { uploadFaceFromMasks(); return; }
     if (!showFace || faceVerts_.empty() || faceTris_.empty()) {
         rr_->uploadFaceMesh({});
@@ -1321,6 +1380,20 @@ void RootScene::advance(double dt) {
     // one-shot flag that has to know about every reason a mask might move.
     if (useSim_ && sim_ && simPaused) uploadFaceFromMasks();
     applyFraming(dt);
+
+    // The sheet is solved and packed *after* the framing, not before it.
+    //
+    // applyFraming is the last thing that moves the camera, and render() draws
+    // with what it leaves behind -- so a sheet sized and centred at the top of
+    // advance() is a sheet built for the previous frame's camera. That is
+    // invisible on a camera standing still and obvious on one easing into
+    // position, which is exactly the live default (the authored sequence is
+    // off unless the operator turns it on, so applyFraming's exponential ease
+    // is what actually drives the press). Measured on a reproduction of that
+    // configuration, building before the ease put the film 0.34 mean absolute
+    // away from the pond it is supposed to be identical to; building after it
+    // brings that back to 0.006.
+    if (clothActive_) { ensureClothSheet(); packClothMesh(); }
 }
 
 void RootScene::setWideAngle(bool on) {
