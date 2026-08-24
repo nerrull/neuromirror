@@ -276,7 +276,11 @@ fragment float4 root_post_fs(PostVOut in [[stage_in]],
     // phase puts on screen untouched -- so anything done to it here is a
     // difference the audience sees at the cut. Before the grain, which is the
     // last thing that would otherwise land on it.
-    col = mix(col, filmColor, filmWeight);
+    // Re-encoded, because the cloth pass writes linear radiance now (see
+    // root_cloth.metal): srgbEncode(srgbDecode(film)) is the film, so a
+    // pass-through pixel comes out exactly as the mirror made it, while the
+    // same buffer value grades correctly once passThrough lets go of it.
+    col = mix(col, srgbEncode(filmColor), filmWeight);
 
     // --- grain ---------------------------------------------------------------
     // Weighted towards the midtones by 1 - |2L-1|: grain in the deep shadows

@@ -12,6 +12,13 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Piecewise sRGB, matching face_shade.metal's srgbEncode (this pass compiles
+// against root_shared.h alone, so it cannot share that one).
+static float3 srgbDecode(float3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+}
+
 // Matches RootScene::packClothMesh's interleave: ten tightly packed floats per
 // vertex, the same convention root_face.metal and root_leaf.metal use.
 //
@@ -78,7 +85,19 @@ fragment float4 root_cloth_fs(ClothVOut in [[stage_in]],
 
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = in.uv + N.xy * u.refract * bulge;
-    float3 base = pond.sample(smp, uv).rgb;
+    // Decoded to linear radiance, not used as-is.
+    //
+    // The film arrives display-referred (it is the mirror's output, the literal
+    // image the Mirror phase puts on screen). While passThrough is 1 that does
+    // not matter -- root_post.metal hands the pixel straight back. But as
+    // passThrough falls and the sheet becomes an object in the room, whatever
+    // is in this buffer is read as radiance by exposure, the bloom threshold
+    // and the tonemap, and sRGB 0.8 read as linear radiance is enormously
+    // brighter than 0.8 of the display: the film blows out the instant it
+    // starts to be graded. Decoding here means the buffer holds real radiance
+    // in both regimes, and the pass-through simply re-encodes it -- which
+    // round-trips to the original pixel, so nothing is lost by doing it.
+    float3 base = srgbDecode(pond.sample(smp, uv).rgb);
     // Alpha carries two things, by sign. The geometry passes write the AO
     // weight in [0,1] (see root_geom.metal, read by root_fog.metal); the film
     // writes *negative* alpha to say "this pixel is already a finished picture,

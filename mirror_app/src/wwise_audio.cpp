@@ -61,6 +61,7 @@ void WwiseAudio::stopCapture() {}
 #include <AK/Plugin/AkTimeStretchFXFactory.h>
 #include <AK/Plugin/AkConvolutionReverbFXFactory.h>
 #include <AK/Plugin/AkPeakLimiterFXFactory.h>
+#include <AK/Plugin/AkParametricEQFXFactory.h>
 #include "MacroOscillatorSourceFactory.h"
 #include "DrumSynthSourceFactory.h"
 #include "ModalVoiceFXFactory.h"
