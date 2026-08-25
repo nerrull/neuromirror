@@ -570,9 +570,16 @@ float RootScene::clothRelease() const {
 // somehow never recedes (a collider that traps it, a gravity of zero), so the
 // film cannot outlive the visit.
 bool RootScene::clothRetired() const {
-    if (!clothDone()) return false;
+    // Distance, not schedule. The authored `fall` does not appear here at all:
+    // the sim owns the fall, and the only question this answers is whether the
+    // film has got far enough behind the mask to be gone. Gating on the
+    // schedule first (an earlier version did) just moved the early cut later --
+    // it still cut on a clock.
     const float gone = clothGoneDistance * std::max(0.05f, clothHalfY_);
     if (clothClearanceVal_ >= gone) return true;
+    // The safety net, for a sheet that somehow never recedes -- a collider that
+    // traps it, a gravity of zero -- so the film cannot outlive the visit.
+    // Deliberately far past anything the physics needs.
     const float ceiling = clothTiming.hold + clothTiming.press + clothTiming.settle +
                           clothTiming.release + clothTiming.fall * kClothFallCeiling;
     return float(clothT_) > ceiling;
@@ -1541,11 +1548,14 @@ void RootScene::advance(double dt) {
     advanceCloth(dt);
 
     // Live growth: advance a few steps, then re-upload geometry + revealed masks.
-    // Held outright while the film is still up -- the roots must not exist at
-    // the same time as the cloth, and relying on the caller's beat to have
-    // paused the sim is a weaker guarantee than saying so here (auto-framing
-    // runs no beats at all, so nothing would have paused it).
-    if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothPinned()) {
+    // Held for as long as there is any film on screen at all -- not merely
+    // while it is pinned. The roots must not exist at the same time as the
+    // cloth, and the fall is the longest part of the cloth being on screen, so
+    // gating on the pinned window alone had the plant growing up through a
+    // sheet that was still visibly falling off it. Relying on the caller's beat
+    // to have paused the sim is a weaker guarantee than saying so here, since
+    // auto-framing runs no beats at all.
+    if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothActive_) {
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
             sim_->step();
         std::vector<float> nodes, radii; std::vector<int> segs;
@@ -1559,7 +1569,7 @@ void RootScene::advance(double dt) {
     // moves masks without growing anything) never updates. Rebuilt every frame
     // rather than once: it is a handful of masks, and the alternative is a
     // one-shot flag that has to know about every reason a mask might move.
-    if (useSim_ && sim_ && (simPaused || clothPinned())) uploadFaceFromMasks();
+    if (useSim_ && sim_ && (simPaused || clothActive_)) uploadFaceFromMasks();
     applyFraming(dt);
 
     // The sheet is solved and packed *after* the framing, not before it.

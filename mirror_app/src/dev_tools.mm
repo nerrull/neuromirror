@@ -1918,6 +1918,7 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
     // behind it, which by eye alone is genuinely ambiguous once the post chain
     // (bloom, DOF, fog, tonemap) has been over both.
     if (const char* nc = getenv("CLOTHSHOT_NOCLOTH")) roots.showCloth = atoi(nc) == 0;
+    const bool traceOn = getenv("CLOTHSHOT_TRACE") && atoi(getenv("CLOTHSHOT_TRACE")) != 0;
     // CLOTHSHOT_RAW=1 drops the scene's post-processing, so what lands in the
     // PPM is the geometry pass and not a graded version of it.
     if (const char* raw = getenv("CLOTHSHOT_RAW")) {
@@ -2092,7 +2093,12 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
             // hold, press and settle. Once the release starts the film is
             // meant to be leaving, and border that stops being film is the
             // effect working rather than failing.
-            if (roots.showCloth && roots.clothRelease() <= 0.f && roots.clothActive()) {
+            // Not while tracing: both metrics re-render into the renderer's own
+            // colour target, so whichever runs second reads the other's bare
+            // frame as if it were the real one -- which reports the film as
+            // absent on every frame, including the ones where it covers
+            // everything.
+            if (!traceOn && roots.showCloth && roots.clothRelease() <= 0.f && roots.clothActive()) {
                 const std::vector<float> withCloth = readTexRGB(tex, W, H);
                 // Drop the sheet and draw the same frame again. Safe to leave
                 // dropped: advance() re-packs it at the top of the next frame.
@@ -2117,6 +2123,31 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                 if (frac > worstUncovered || worstFrame < 0) {
                     worstUncovered = frac; worstFrame = f;
                 }
+            }
+            // CLOTHSHOT_TRACE=1: what fraction of the WHOLE frame the film still
+            // occupies, per frame, beside the clearance reading. The kill
+            // distance is meant to be "far enough behind the mask that the film
+            // has gone", and that is only checkable by measuring both at once --
+            // clearance alone cannot say whether a receding sheet is still on
+            // screen, because a plane receding along the view axis stays inside
+            // the frustum however far it goes and only leaves by crumpling.
+            if (traceOn && roots.clothActive()) {
+                const std::vector<float> withCloth = readTexRGB(tex, W, H);
+                roots.renderer().uploadClothMesh({});
+                id<MTLCommandBuffer> cb3 = [ctx.queue() commandBuffer];
+                id<MTLTexture> bare = roots.render(cb3);
+                [cb3 commit]; [cb3 waitUntilCompleted];
+                const std::vector<float> without = readTexRGB(bare, W, H);
+                size_t on = 0, tot = 0;
+                for (size_t k = 0; k + 2 < withCloth.size(); k += 3 * 7) {
+                    ++tot;
+                    const float d = std::fabs(withCloth[k]     - without[k])
+                                  + std::fabs(withCloth[k + 1] - without[k + 1])
+                                  + std::fabs(withCloth[k + 2] - without[k + 2]);
+                    if (d > 1e-3f) ++on;
+                }
+                printf("TRACE %d %.4f %.4f %.4f\n", f, float(roots.clothClock()),
+                       roots.clothClearance(), tot ? double(on) / double(tot) : 0.0);
             }
             if ((f % 20) == 0)
                 printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f "

@@ -346,7 +346,13 @@ public:
     // being drawn, in sheet half-heights. Scale-invariant on purpose: the sheet
     // is sized from the display aspect and the camera distance, so a threshold
     // in world units would mean something different on a different screen.
-    float clothGoneDistance = 2.4f;
+    // 10 is measured, not guessed: traced against the film's actual occupancy
+    // of the frame (CLOTHSHOT_TRACE), it still covers 8.5% of the screen at 2.4
+    // half-heights and does not reach zero until about 9.6. A receding plane
+    // never leaves the frustum by receding -- perspective keeps it covering --
+    // so it only goes by crumpling, and that takes far longer than the depth
+    // reading alone suggests.
+    float clothGoneDistance = 10.0f;
     // Whether a film is currently being simulated and drawn at all -- false
     // before the first restartCloth(), and again once the fall has finished
     // or skipCloth() has retired it.
