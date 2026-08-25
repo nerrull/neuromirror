@@ -161,6 +161,16 @@ float smoothstep01(float x) {
 // The collider's resolution -- see TransitionScene's FIELD_RES for the same
 // reasoning (a couple of texels per cloth cell across the face).
 constexpr int kClothFieldRes = 160;
+// The sheet half-width the cloth's gravity/side-force knobs were tuned at:
+// TransitionScene's frustum at its fixed camera distance of 3, times its 1.08
+// oversize. Nothing depends on it being exact -- it is the reference that makes
+// those knobs scale-invariant, not a measurement of anything. See advanceCloth.
+constexpr float kClothTunedHalfX = 2.39f;
+// How far past the authored `fall` the film is allowed to keep simulating while
+// it finishes leaving, before it is dropped regardless. Generous, because the
+// cost of holding a sheet too long is a film that lingers and the cost of
+// cutting it early is the pop this exists to prevent.
+constexpr float kClothFallCeiling = 4.0f;
 
 // Right/up basis for a mask facing `n`, using world up (0,1,0).
 Mask makeMask(F3 pos, F3 n, float r) {
@@ -545,6 +555,29 @@ float RootScene::clothRelease() const {
     const float t0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
     return std::clamp((float(clothT_) - t0) / std::max(1e-3f, clothTiming.release), 0.f, 1.f);
 }
+// When the film may stop being drawn.
+//
+// Not when the timeline says so. The fall is physics, and how long it takes to
+// carry a crumpling sheet off the mask depends on how big the sheet is -- so a
+// fixed `fall` duration deleted the film mid-air, in one frame, while it was
+// still a wad sitting over the face. That is the pop: an object that was
+// visibly moving simply ceased.
+//
+// So the schedule is a floor and the geometry is the decision. clothClearance
+// is the mean depth of the sheet past the mask's own front, and it rises
+// monotonically through the fall; expressed in sheet half-heights it says the
+// same thing at any frustum. The ceiling is the safety net for a sheet that
+// somehow never recedes (a collider that traps it, a gravity of zero), so the
+// film cannot outlive the visit.
+bool RootScene::clothRetired() const {
+    if (!clothDone()) return false;
+    const float gone = clothGoneDistance * std::max(0.05f, clothHalfY_);
+    if (clothClearanceVal_ >= gone) return true;
+    const float ceiling = clothTiming.hold + clothTiming.press + clothTiming.settle +
+                          clothTiming.release + clothTiming.fall * kClothFallCeiling;
+    return float(clothT_) > ceiling;
+}
+
 bool RootScene::clothDone() const {
     return float(clothT_) > clothTiming.hold + clothTiming.press + clothTiming.settle +
                             clothTiming.release + clothTiming.fall;
@@ -948,7 +981,7 @@ void RootScene::advanceCloth(double dt) {
     // parked in front of the mask -- for the whole rest of the visit. Dropping
     // clothActive_ also freezes clothT_, so clothDone() stays true for the
     // phase gate that reads it.
-    if (clothDone()) {
+    if (clothRetired()) {
         clothActive_ = false;
         clothPressOffset_ = 0.f;   // the mask at exactly its cavity placement
         if (rr_) rr_->uploadClothMesh({});
@@ -1011,7 +1044,18 @@ void RootScene::advanceCloth(double dt) {
     cloth_.setRelease(clothRelease() * 1.25f);
 
     const float g = smoothstep01(clothRelease());
-    simd_float3 grav = simd_make_float3(0.f, -clothGravityDown * g, -clothGravityBack * g);
+    // Scaled by the sheet's own size. The knobs below were tuned against
+    // TransitionScene's sheet, which spanned about 2.4 units because its camera
+    // sat 3 away; this one is sized to RootScene's frustum and spans about 11,
+    // so the same acceleration carries it a fifth as far *relative to itself*
+    // and the fall no longer clears the mask in anything like the same number
+    // of seconds. Scaling here rather than re-tuning the numbers keeps `fall`
+    // meaning the same thing at any frustum -- which matters, because the sheet
+    // is now sized from the display's aspect and the camera's distance, and
+    // both can change without anyone revisiting these.
+    const float sizeK = std::max(0.2f, clothHalfX_ / kClothTunedHalfX);
+    simd_float3 grav = simd_make_float3(0.f, -clothGravityDown * g * sizeK,
+                                            -clothGravityBack * g * sizeK);
     // Guaranteed clearance, same intent as TransitionScene's -- see
     // sideForceDelay/sideForceMag's doc comments there. Unlike that version,
     // this always pushes the same way (local +x): the anchor's own frame is
@@ -1023,7 +1067,7 @@ void RootScene::advanceCloth(double dt) {
     const float relT0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
     const float relElapsed = float(clothT_) - relT0;
     const float sideRamp = smoothstep01((relElapsed - sideForceDelay) / 1.0f);
-    if (sideRamp > 0.f) grav.x += sideForceMag * sideRamp;
+    if (sideRamp > 0.f) grav.x += sideForceMag * sideRamp * sizeK;
     cloth_.gravity = grav;
 
     const int ss = std::max(1, clothSubsteps);

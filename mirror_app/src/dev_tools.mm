@@ -1930,6 +1930,23 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
         }
     }
 
+    // CLOTHSHOT_TIMING="hold,press,settle,release,fall" -- the press schedule is
+    // a look decision that now has panel sliders, and tuning it against stills
+    // needs the same numbers reachable from here.
+    if (const char* t = getenv("CLOTHSHOT_TIMING")) {
+        float v[5] = {roots.clothTiming.hold, roots.clothTiming.press,
+                      roots.clothTiming.settle, roots.clothTiming.release,
+                      roots.clothTiming.fall};
+        int n = sscanf(t, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+        if (n > 0) {
+            roots.clothTiming.hold = v[0]; roots.clothTiming.press = v[1];
+            roots.clothTiming.settle = v[2]; roots.clothTiming.release = v[3];
+            roots.clothTiming.fall = v[4];
+            printf("clothshot: timing hold %.2f press %.2f settle %.2f release %.2f fall %.2f\n",
+                   v[0], v[1], v[2], v[3], v[4]);
+        }
+    }
+
     RootBeatParams bp;
     RootCameraSequence seq;
     seq.begin(roots, bp);

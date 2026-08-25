@@ -340,7 +340,13 @@ public:
     double clothClock() const { return clothT_; }
     float clothPress() const;      // 0..1, how far the mask has come through
     float clothRelease() const;    // 0..1, how far the release front has run
-    bool  clothDone() const;
+    bool  clothDone() const;      // the authored schedule has run out
+    bool  clothRetired() const;   // ...and the film has actually left -- see the .mm
+    // How far the film's mean depth has to recede past the mask before it stops
+    // being drawn, in sheet half-heights. Scale-invariant on purpose: the sheet
+    // is sized from the display aspect and the camera distance, so a threshold
+    // in world units would mean something different on a different screen.
+    float clothGoneDistance = 2.4f;
     // Whether a film is currently being simulated and drawn at all -- false
     // before the first restartCloth(), and again once the fall has finished
     // or skipCloth() has retired it.
