@@ -79,6 +79,14 @@ extern float  g_w0_from;
 extern float  g_w0_idle;
 extern double g_w0_t0;
 
+// --- colour follows the fit ----------------------------------------------
+extern bool   g_colour_fit_on;
+extern float  g_colour_fit_full;
+extern float  g_colour_fit_secs;
+extern float  g_colour_from;
+extern float  g_colour_idle;
+extern float  g_colour_now;
+
 #if MIRROR_HAVE_KINECT
 extern mirror::KinectFitTarget g_kinect;
 extern bool g_open_sensor;

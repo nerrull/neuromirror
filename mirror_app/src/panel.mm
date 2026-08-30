@@ -1727,6 +1727,50 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     }
                 }
                 ui::EndGate();
+
+                ui::Checkbox("colour follows the fit", &g_colour_fit_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Drive the mirror's 'color mix' from the fit level --\n"
+                        "the same number the harmony climbs on -- so the room\n"
+                        "idles in black and white and gains colour as she is\n"
+                        "captured. Put back on the way out to idle.\n\n"
+                        "It writes the mirror's own colour slider, so that\n"
+                        "slider is what it starts from and what it returns to:\n"
+                        "the preset decides the idle colour, this decides how\n"
+                        "the fit takes it to full.");
+                }
+                ui::BeginGate(g_colour_fit_on);
+                {
+                    ImGui::PushItemWidth(110);
+                    ui::SliderFloat("full colour at fit", &g_colour_fit_full,
+                                    0.1f, 1.0f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The fit level that reaches full RGB. Below 1 on\n"
+                            "purpose: the last stretch of convergence is slow,\n"
+                            "and colour that only completes at the very end\n"
+                            "reads as a switch being thrown rather than as the\n"
+                            "image filling in.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderFloat("colour secs", &g_colour_fit_secs, 0.f, 20.f,
+                                    "%.1fs");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Fastest the mix may cross grey to full colour. The\n"
+                            "loss is noisy frame to frame; this and the one-way\n"
+                            "ratchet are what keep the colour from flickering\n"
+                            "back out on a bad step.");
+                    }
+                    ImGui::PopItemWidth();
+                    if (ui::Visible() && g_colour_idle >= 0.f) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.4f, 1.f),
+                                           "colour %.0f%%", 100.f * g_colour_now);
+                    }
+                }
+                ui::EndGate();
             ui::PopSection();               // "fit"
             DrawBankSaveUI(ui::Bank::Fit);
             ui::EndTab();
@@ -2429,6 +2473,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 if (ImGui::Button("reset color")) { P.srgb_fix = false; P.gamma = 1.0f; }
                 ui::SliderFloat("gamma (>1 darkens)", &P.gamma, 0.3f, 2.0f);
                 ui::SliderFloat("color mix (0 grey -> 1 RGB)", &P.color_mix, 0.0f, 1.0f);
+                if (ui::Visible() && g_colour_fit_on && g_colour_idle >= 0.f) {
+                    ImGui::TextDisabled(
+                        "(the fit is driving this -- fit tab, 'colour follows "
+                        "the fit')");
+                }
                 ImGui::SameLine(); ImGui::SetNextItemWidth(90);
                 const char* greyItems[] = {"R", "G", "B"};
                 ImGui::Combo("grey ch", &P.grey_channel, greyItems, 3);

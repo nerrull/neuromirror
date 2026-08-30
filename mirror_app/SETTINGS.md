@@ -85,11 +85,13 @@ dump and load into nothing banked. Add a rule for their section.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (30 parameters)
+## fit (33 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
 | `fit/animate z outside` | bool | -- | 1 |
+| `fit/colour follows the fit` | bool | -- | 1 |
+| `fit/colour secs` | float | 0 .. 20 | 6 |
 | `fit/crop shape` | int | 0 .. 1 | 1 |
 | `fit/crop the fit to the face` | bool | -- | 1 |
 | `fit/crop/grid` | int | 1 .. 8 | 1 |
@@ -103,6 +105,7 @@ dump and load into nothing banked. Add a rule for their section.
 | `fit/feed/steps` | int | 1 .. 32 | 1 |
 | `fit/fit w0` | float | 1 .. 80 | 60 |
 | `fit/follow the outline` | bool | -- | 1 |
+| `fit/full colour at fit` | float | 0.1 .. 1 | 0.7 |
 | `fit/grey outside` | float | 0 .. 1 | 1 |
 | `fit/head mode` | int | 0 .. 2 | 1 |
 | `fit/head smoothing` | float | 0.02 .. 1 | 0.25 |

@@ -41,6 +41,28 @@ float g_w0_ramp_secs = 1.5f;
 float g_w0_from      = 0.f;
 float g_w0_idle      = -1.f;    // < 0 = nothing saved
 double g_w0_t0       = -1.0;    // < 0 = not ramping
+
+// --- colour follows the fit ----------------------------------------------
+// The mirror idles in black and white and the fitting phase brings colour in,
+// so the room sees the person arriving in the image rather than a cut. It is
+// driven by `g_fit_level_now` -- the same number the harmony and the shepherd
+// climb on -- so the three rise together off one measurement of how well she
+// has been captured, instead of each running its own clock.
+//
+// Two shapings, both necessary. The level is mapped through `g_colour_fit_full`
+// so full colour lands before the fit has finished converging (that last stretch
+// is slow, and colour arriving only at the very end reads as a switch); and the
+// result is a one-way ratchet, slew-limited by `g_colour_fit_secs`, because the
+// loss is noisy frame to frame and colour that drains back out on a bad step is
+// the one thing that would give the mechanism away.
+bool  g_colour_fit_on   = true;
+float g_colour_fit_full = 0.7f;   // fit level that reaches full colour
+float g_colour_fit_secs = 6.f;    // fastest the mix may cross 0 -> 1
+// Ramp state: where it started, where it is, and what to put back on the way
+// out to idle.
+float g_colour_from     = 0.f;
+float g_colour_idle     = -1.f;   // < 0 = nothing saved
+float g_colour_now      = 0.f;
 #if MIRROR_HAVE_KINECT
 mirror::KinectFitTarget g_kinect;
 // The sensor is opened at startup (see main). --no-sensor leaves it closed,

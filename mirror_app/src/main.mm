@@ -1859,6 +1859,14 @@ int main(int argc, char** argv) {
                             if (g_w0_idle >= 0.f) mirror.params().sine_w0 = g_w0_idle;
                             g_w0_t0 = -1.0;
                             g_w0_idle = -1.f;
+                            // Same forgetting for the colour the fit brought
+                            // in: the next person has to arrive in black and
+                            // white, or the second visitor of the day walks up
+                            // to a mirror already wearing the first one's.
+                            if (g_colour_idle >= 0.f)
+                                mirror.params().color_mix = g_colour_idle;
+                            g_colour_idle = -1.f;
+                            g_colour_now = 0.f;
                             // The harmony is the third thing that has to be
                             // forgotten. Without this the next person walks in
                             // on the last one's resolved major and the whole
@@ -1906,6 +1914,15 @@ int main(int argc, char** argv) {
                                 g_w0_idle = mirror.params().sine_w0;
                                 g_w0_from = mirror.params().sine_w0;
                                 g_w0_t0 = nowT;
+                            }
+                            // Colour starts from wherever the preset left it --
+                            // black and white in the show presets, but a preset
+                            // that idles with some colour already in it should
+                            // rise from there rather than jump down to grey.
+                            if (g_colour_fit_on) {
+                                g_colour_idle = mirror.params().color_mix;
+                                g_colour_from = mirror.params().color_mix;
+                                g_colour_now  = mirror.params().color_mix;
                             }
                             break;
                         case show::Phase::Transition:
@@ -2189,6 +2206,36 @@ int main(int argc, char** argv) {
                 }
 
                 g_audio.update(ap);
+            }
+
+            // --- colour follows the fit ----------------------------------
+            //
+            // After the audio block because that is where `g_fit_level_now` is
+            // computed, and before the fit steps and the render below, so the
+            // frame that is drawn is the one this level asked for.
+            //
+            // Runs in every phase, not just Fitting. `g_fit_level_now` reads
+            // zero the moment the pond stops fitting, so a phase test here
+            // would be doing the ratchet's job badly: the ratchet is what
+            // holds the colour through the transition and the roots, and it
+            // holds it whether the level fell because the sitting moved on or
+            // because a training step went badly. Idle's entry is the one
+            // place the colour is taken back out.
+            if (g_colour_fit_on && g_colour_idle >= 0.f) {
+                const float shaped = std::clamp(
+                    g_fit_level_now / std::max(1e-3f, g_colour_fit_full), 0.f, 1.f);
+                const float target = g_colour_from +
+                                     (1.f - g_colour_from) *
+                                         (shaped * shaped * (3.f - 2.f * shaped));
+                // One way only, and no faster than the slew: see the note on
+                // g_colour_fit_secs. A converged fit that wobbles must not
+                // take the colour back out with it.
+                const float step = g_colour_fit_secs > 0.f
+                                       ? (float)dt / g_colour_fit_secs
+                                       : 1.f;
+                if (target > g_colour_now)
+                    g_colour_now = std::min(target, g_colour_now + step);
+                mirror.params().color_mix = g_colour_now;
             }
 
             // --- source overlay: upload the raw frame ---------------------
