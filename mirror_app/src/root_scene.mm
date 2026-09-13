@@ -296,10 +296,39 @@ void RootScene::replant() {
     // be on screen while the pond is still up. Resetting the sim is not enough;
     // the upload has to be undone too.
     if (rr_) rr_->uploadSegments({}, {}, {});
+    // The beat-4 neighbour hood is exactly the same problem one layer up:
+    // addNeighbours() only clears `neighbours` and the renderer's instance
+    // buffers when it runs *again*, which is minutes into the new sitting
+    // (Beat::Meander). Until then the previous visitor's hood -- both its
+    // baked root-capsule instances (drawn straight out of rr_'s instances_)
+    // and its faces (uploadFaceFromMasks() loops over `neighbours`
+    // unconditionally, every frame, regardless of beat) -- was still sitting
+    // there, so the very first frame of the new sitting showed the new plant
+    // plus nine leftover copies of the old one: N masks x (1 + 9 neighbours)
+    // faces, and all of their root structures too. Drop both here, at the
+    // same place everything else about the last visitor gets dropped.
+    if (rr_) rr_->clearInstances();
+    neighbours.clear();
+    // The last visitor's face likewise has to go, not just the plant: the
+    // fit's normalisation is captured once "from the first mesh seen" (see
+    // setFittedFace) and otherwise never revisited, so every visitor after
+    // the first would have been normalised against someone else's face; and
+    // the captured colours/mesh are what a fresh anchor mask would otherwise
+    // reveal wearing until the new visitor is actually tracked.
+    faceColors_.clear();
+    fitted_face_ = false;
+    fit_norm_set_ = false;
+    faceVerts_ = canonVerts_;
+    faceTris_  = canonTris_;
     // ...and the framing bounds it left behind, which are a min/max over that
     // same vanished geometry.
     idleCentre_[0] = idleCentre_[1] = idleCentre_[2] = 0.f;
     idleExtent_ = 10.f;
+    // Push all of the above to the renderer now, rather than waiting for
+    // whatever incidental uploadFaceFromMasks()/rebuildFace() call happens to
+    // come next -- the caller's very next frame must not still be drawing the
+    // last visitor's hood.
+    rebuildFace();
 }
 
 int RootScene::growthStepEstimate() const {
