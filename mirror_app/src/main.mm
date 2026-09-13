@@ -1894,6 +1894,24 @@ int main(int argc, char** argv) {
                             g_idle_intro_t0 = nowT;
                             break;
                         case show::Phase::Fitting:
+                            // Do not trust Idle to have already forgotten the
+                            // last sitting's colour: the panel's "force" phase
+                            // buttons, keys 1-4, and the MIDI phase fader all
+                            // call goTo() directly, which can land here from
+                            // Roots/Transition without ever running Idle's
+                            // case above. If that happened, g_colour_idle is
+                            // still the *previous* visitor's pre-fit baseline
+                            // and color_mix is still wherever their ratchet
+                            // left it (typically near-max) -- restore to that
+                            // baseline now, the same forgetting Idle does,
+                            // before this fit gets a chance to adopt the
+                            // stale, already-saturated value as its own
+                            // starting point below.
+                            if (g_colour_idle >= 0.f) {
+                                mirror.params().color_mix = g_colour_idle;
+                                g_colour_idle = -1.f;
+                                g_colour_now = 0.f;
+                            }
                             // The harmony forgets the last sitting here, not
                             // on the way into Idle: resolve() (see the Idle
                             // case above) needs to survive at least until
@@ -1921,6 +1939,16 @@ int main(int argc, char** argv) {
                             // has nobody to do.
                             g_fit_live = true;
                             g_fit_arm = true;
+                            // Same reasoning as the colour guard above: a
+                            // forced jump straight into Fitting can leave
+                            // sine_w0 sitting at the previous visitor's fit
+                            // frequency with g_w0_idle never restored, which
+                            // would make this "ramp" capture that already-hot
+                            // value as its own idle baseline and do nothing.
+                            if (g_w0_idle >= 0.f) {
+                                mirror.params().sine_w0 = g_w0_idle;
+                                g_w0_idle = -1.f;
+                            }
                             // Take the basis up to fitting frequency first.
                             // The arm below waits for it: seeding the optimiser
                             // at the idle w0 and turning it up afterwards would
