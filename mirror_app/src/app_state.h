@@ -82,6 +82,7 @@ extern double g_w0_t0;
 // --- colour follows the fit ----------------------------------------------
 extern bool   g_colour_fit_on;
 extern float  g_colour_fit_full;
+extern float  g_colour_fit_max;
 extern float  g_colour_fit_secs;
 extern float  g_colour_from;
 extern float  g_colour_idle;

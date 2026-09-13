@@ -1835,11 +1835,22 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     0.1f, 1.0f, "%.2f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "The fit level that reaches full RGB. Below 1 on\n"
-                            "purpose: the last stretch of convergence is slow,\n"
-                            "and colour that only completes at the very end\n"
-                            "reads as a switch being thrown rather than as the\n"
-                            "image filling in.");
+                            "The fit level that reaches the ceiling below. Below\n"
+                            "1 on purpose: the last stretch of convergence is\n"
+                            "slow, and colour that only completes at the very\n"
+                            "end reads as a switch being thrown rather than as\n"
+                            "the image filling in.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderFloat("max colour", &g_colour_fit_max, 0.0f, 1.0f,
+                                    "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The ratchet's ceiling -- 1 is full RGB, lower caps\n"
+                            "the mirror at a partial mix even once the fit\n"
+                            "reaches 'full colour at fit'. Separate from that\n"
+                            "dial on purpose: one controls when colour arrives,\n"
+                            "this controls how far it ever gets.");
                     }
                     ImGui::SameLine();
                     ui::SliderFloat("colour secs", &g_colour_fit_secs, 0.f, 20.f,

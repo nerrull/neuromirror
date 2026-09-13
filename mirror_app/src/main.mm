@@ -2309,7 +2309,7 @@ int main(int argc, char** argv) {
                 const float shaped = std::clamp(
                     g_fit_level_now / std::max(1e-3f, g_colour_fit_full), 0.f, 1.f);
                 const float target = g_colour_from +
-                                     (1.f - g_colour_from) *
+                                     (g_colour_fit_max - g_colour_from) *
                                          (shaped * shaped * (3.f - 2.f * shaped));
                 // One way only, and no faster than the slew: see the note on
                 // g_colour_fit_secs. A converged fit that wobbles must not

@@ -49,15 +49,19 @@ double g_w0_t0       = -1.0;    // < 0 = not ramping
 // climb on -- so the three rise together off one measurement of how well she
 // has been captured, instead of each running its own clock.
 //
-// Two shapings, both necessary. The level is mapped through `g_colour_fit_full`
+// Three shapings, all necessary. The level is mapped through `g_colour_fit_full`
 // so full colour lands before the fit has finished converging (that last stretch
-// is slow, and colour arriving only at the very end reads as a switch); and the
-// result is a one-way ratchet, slew-limited by `g_colour_fit_secs`, because the
-// loss is noisy frame to frame and colour that drains back out on a bad step is
-// the one thing that would give the mechanism away.
+// is slow, and colour arriving only at the very end reads as a switch); the
+// ceiling it climbs to is `g_colour_fit_max` rather than a hardcoded 1 -- a
+// room that wants the mirror to only ever half-saturate, say, sets this
+// instead of fighting the arrival point to get there; and the result is a
+// one-way ratchet, slew-limited by `g_colour_fit_secs`, because the loss is
+// noisy frame to frame and colour that drains back out on a bad step is the
+// one thing that would give the mechanism away.
 bool  g_colour_fit_on   = true;
-float g_colour_fit_full = 0.7f;   // fit level that reaches full colour
-float g_colour_fit_secs = 6.f;    // fastest the mix may cross 0 -> 1
+float g_colour_fit_full = 0.7f;   // fit level that reaches g_colour_fit_max
+float g_colour_fit_max  = 1.0f;   // the ratchet's ceiling (0 grey -> 1 full RGB)
+float g_colour_fit_secs = 6.f;    // fastest the mix may cross 0 -> g_colour_fit_max
 // Ramp state: where it started, where it is, and what to put back on the way
 // out to idle.
 float g_colour_from     = 0.f;
