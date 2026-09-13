@@ -798,7 +798,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::Text("stage %d/%d  (next at fit %.2f)",
                                 cv.stage + 1, mirror::Chord::kStages,
                                 cv.stage + 1 < mirror::Chord::kStages
-                                    ? mirror::Chord::StageThreshold(cv.stage + 1)
+                                    ? g_chord.StageThreshold(cv.stage + 1)
                                     : 1.f);
                     for (int i = 0; i < mirror::kChordVoices; ++i) {
                         ImGui::Text("  V%d  %6.2f", i + 1, cv.note[i]);
@@ -829,6 +829,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "it makes the coinciding harmonics beat.");
                     }
                     ui::SliderFloat("checkpoint hysteresis", &cc.hysteresis, 0.f, 0.15f, "%.2f");
+                    ImGui::TextDisabled("checkpoints -- fit_level each stage becomes current at");
+                    for (int s = 1; s < mirror::Chord::kStages; ++s) {
+                        char label[32];
+                        std::snprintf(label, sizeof(label), "stage %d", s);
+                        ui::SliderFloat(label, &cc.thresholds[s], 0.f, 1.f, "%.2f");
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where each chord change lands against fit_level.\n"
+                            "Keep these increasing, or the checkpoint gate\n"
+                            "above (a Schmitt trigger per boundary) reads a\n"
+                            "later stage's threshold as already cleared. The\n"
+                            "last one deliberately stops short of 1.0 -- see\n"
+                            "chord.h's comment on `thresholds` for why.");
+                    }
                     ui::SliderFloat("pluck base", &cc.pluck_high, -12.f, 36.f, "%.0f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -842,6 +857,67 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "Semitones above the pluck base that full intensity\n"
                             "(fit and movement, averaged) can push the pluck to,\n"
                             "before the snap to the nearest chord tone.");
+                    }
+                }
+                ui::EndHeader();
+
+                // Not chord tuning -- these never move the pluck off its chord
+                // tone, they only jitter the comb Hz it lands on while pinned.
+                // Kept as its own header for that reason, even though the
+                // state lives on Chord::Config (see chord.h).
+                ui::BeginHeader("pinned pluck exploration", /*default_open=*/false);
+                {
+                    ui::Checkbox("center override", &cc.pluck_center_override_enabled);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The pinned frequency wander/offset below work\n"
+                            "around is normally root+pluck_high converted to\n"
+                            "Hz (chord tuning, above). Override it with an\n"
+                            "exact Hz instead -- still only while pinned.");
+                    }
+                    if (ui::SliderFloat("center (Hz)", &cc.pluck_center_hz, 400.f, 1600.f,
+                                         "%.0f")) {
+                        cc.pluck_center_hz = cc.pluck_center_snap_to_note
+                            ? mirror::Chord::NearestNoteHz(cc.pluck_center_hz)
+                            : 5.f * std::round(cc.pluck_center_hz / 5.f);
+                    }
+                    ui::Checkbox("snap to notes", &cc.pluck_center_snap_to_note);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Round the slider above to the nearest standard\n"
+                            "equal-tempered pitch (A440) instead of the\n"
+                            "nearest 5 Hz.");
+                    }
+
+                    ImGui::Separator();
+                    ui::Checkbox("wander", &cc.pluck_wander_enabled);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "While the pluck is pinned (intensity 0 -- most of\n"
+                            "Roots, and the start of every Fitting), let its comb\n"
+                            "frequency drift a few percent instead of sitting\n"
+                            "dead still. Stops the instant fitting moves it.");
+                    }
+                    ui::SliderFloat("wander depth", &cc.pluck_wander_depth, 0.001f, 0.5f,
+                                     "%.3f", ImGuiSliderFlags_Logarithmic);
+                    ui::SliderFloat("wander cycle (s)", &cc.pluck_wander_period_s,
+                                     1.f, 300.f, "%.1f", ImGuiSliderFlags_Logarithmic);
+
+                    ui::Checkbox("per-visitor offset", &cc.pluck_offset_enabled);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Instead of wandering, draw one random note step\n"
+                            "for the pinned comb frequency each time the piece\n"
+                            "resets -- i.e. once per visitor -- and hold it\n"
+                            "fixed for as long as the pluck is pinned.");
+                    }
+                    ui::SliderInt("offset range (semitones)", &cc.pluck_offset_max_semitones,
+                                   0, 7);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The draw is uniform over -N..+N semitones from\n"
+                            "the pinned note, so 3 lands anywhere within a\n"
+                            "minor third either way.");
                     }
                 }
                 ui::EndHeader();
@@ -3764,6 +3840,21 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                 if (!g_fit_live) {
                     ImGui::TextColored(ImVec4(1.f, 0.6f, 0.5f, 1.f),
                                        "live feed not armed");
+                }
+                // The tuned, interpretable readout: fit_level against the
+                // threshold ShowFitConverged() actually gates on (loss above
+                // is the raw number these two dials are tuned against, not
+                // what the show waits for), and the chord's own checkpoint --
+                // together, "how close is it, and what does that sound like
+                // right now".
+                {
+                    const ImVec4 col = g_fit_level_now >= g_show_fit_score
+                        ? ImVec4(0.6f, 1.f, 0.7f, 1.f) : ImVec4(1.f, 1.f, 1.f, 1.f);
+                    ImGui::TextColored(col, "fit_level %.2f / %.2f to convert",
+                                       g_fit_level_now, g_show_fit_score);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("| chord stage %d/%d",
+                                        g_chord.stage(), mirror::Chord::kStages - 1);
                 }
                 // --- rates ------------------------------------------
                 //

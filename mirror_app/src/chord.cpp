@@ -18,13 +18,6 @@ const float kOffsets[Chord::kStages][kChordVoices] = {
     { 0.f,  7.f, 16.f, 28.f },   // Cmaj
 };
 
-// The fit level at which each stage becomes current. The last one is 0.95, not
-// 1.0, deliberately: `fit_level` is half-scale at the residual the show waits
-// on and keeps climbing after, so it does reach 0.95 in a good fit but lands on
-// exactly 1.0 only by accident. A resolution the piece can only reach by
-// accident is not a resolution.
-const float kThresholds[Chord::kStages] = { 0.f, 0.25f, 0.50f, 0.75f, 0.95f };
-
 // Alternating up the stack, so that voices whose harmonics coincide -- the root
 // and its fifth, the root and the two-octave third -- are pulled apart rather
 // than together. Detuning them all the same way would transpose the chord and
@@ -62,8 +55,14 @@ const float* Chord::StageOffsets(int stage) {
     return kOffsets[std::clamp(stage, 0, kStages - 1)];
 }
 
-float Chord::StageThreshold(int stage) {
-    return kThresholds[std::clamp(stage, 0, kStages - 1)];
+float Chord::StageThreshold(int stage) const {
+    return cfg_.thresholds[std::clamp(stage, 0, kStages - 1)];
+}
+
+float Chord::NearestNoteHz(float hz) {
+    hz = std::max(1.f, hz);
+    const float midi = 69.f + 12.f * std::log2(hz / 440.f);
+    return NoteToHz(std::round(midi));
 }
 
 void Chord::reset() {
@@ -85,7 +84,19 @@ void Chord::reset() {
     }
     v_.stage = 0;
     v_.pluck_note = cfg_.root + cfg_.pluck_high;
-    v_.comb_hz = NoteToHz(v_.pluck_note);
+    v_.comb_hz = cfg_.pluck_center_override_enabled ? cfg_.pluck_center_hz
+                                                     : NoteToHz(v_.pluck_note);
+
+    // See the "pinned-pluck exploration" comment in chord.h: the wander's
+    // clock restarts clean, and a fresh per-visitor offset is drawn whether
+    // or not it's currently enabled.
+    wander_time_ = 0.f;
+    pluck_offset_semitones_ = cfg_.pluck_offset_max_semitones > 0
+        ? std::uniform_int_distribution<int>(-cfg_.pluck_offset_max_semitones,
+                                              cfg_.pluck_offset_max_semitones)(rng_)
+        : 0;
+    if (cfg_.pluck_offset_enabled)
+        v_.comb_hz *= std::pow(2.f, pluck_offset_semitones_ / 12.f);
 }
 
 void Chord::resolve() {
@@ -108,7 +119,8 @@ void Chord::update(float fit, float movement, float dt) {
     fit = std::clamp(fit, 0.f, 1.f);
     movement = std::clamp(movement, 0.f, 1.f);
     dt = std::max(0.f, dt);
-    (void)dt;  // no glide left to time -- Wwise's ChordStage transition owns it
+    // No chord glide left to time -- Wwise's ChordStage transition owns
+    // that -- but dt still drives the pinned-pluck wander clock below.
 
     // --- the checkpoint -----------------------------------------------------
     //
@@ -129,9 +141,9 @@ void Chord::update(float fit, float movement, float dt) {
     // instant the checkpoint was supposed to be holding its resolution.
     const int prev_stage = stage_;
     if (!resolved_) {
-        while (stage_ < kStages - 1 && fit >= kThresholds[stage_ + 1] + cfg_.hysteresis)
+        while (stage_ < kStages - 1 && fit >= cfg_.thresholds[stage_ + 1] + cfg_.hysteresis)
             ++stage_;
-        while (stage_ > 0 && fit < kThresholds[stage_] - cfg_.hysteresis)
+        while (stage_ > 0 && fit < cfg_.thresholds[stage_] - cfg_.hysteresis)
             --stage_;
     }
     // OR, not overwrite -- see stageChanged()'s comment in chord.h. Without
@@ -171,6 +183,34 @@ void Chord::update(float fit, float movement, float dt) {
                         + intensity * cfg_.pluck_intensity_range;
     v_.pluck_note = SnapToChordTone(linear, cfg_.root, stage_);
     v_.comb_hz = NoteToHz(v_.pluck_note);
+
+    // --- pinned-pluck exploration (see Config) ------------------------------
+    //
+    // Both read `comb_hz` after the snap above, so neither ever moves the
+    // pluck off its chord tone -- they only shade the Hz sent to the comb.
+    // Gated on `fit`, not `intensity`: intensity also folds in room movement,
+    // which Presence reports as soon as a face is tracked at all -- i.e.
+    // from the very first frame of Fitting, well before the pond has actually
+    // started converging. Gating on that left this dead the instant a face
+    // appeared. `fit` stays exactly zero until pond.beginFit() is training,
+    // which is the real "fitting has started" this was meant to hand off at.
+    if (fit <= 0.f) {
+        if (cfg_.pluck_center_override_enabled)
+            v_.comb_hz = cfg_.pluck_center_hz;
+        if (cfg_.pluck_offset_enabled)
+            v_.comb_hz *= std::pow(2.f, pluck_offset_semitones_ / 12.f);
+        if (cfg_.pluck_wander_enabled) {
+            wander_time_ += dt;
+            const float t = wander_time_;
+            const float rate_hz = 1.f / std::max(0.1f, cfg_.pluck_wander_period_s);
+            const float wobble =
+                0.6f * std::sin(2.f * (float)M_PI * rate_hz * t) +
+                0.4f * std::sin(2.f * (float)M_PI * rate_hz * 2.17f * t + 1.3f);
+            v_.comb_hz *= (1.f + cfg_.pluck_wander_depth * wobble);
+        }
+    } else {
+        wander_time_ = 0.f;
+    }
 }
 
 }  // namespace mirror

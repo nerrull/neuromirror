@@ -40,6 +40,8 @@
 
 #pragma once
 
+#include <random>
+
 namespace mirror {
 
 // How many voices the pad holds. Four is what the arc needs: a root that never
@@ -111,6 +113,17 @@ public:
         // walks the chord back and forth every frame.
         float hysteresis = 0.03f;
 
+        // The fit level at which each checkpoint becomes current -- tunable
+        // per-instance (rather than the fixed table an earlier version of
+        // this file had) so the panel can dial in where each chord change
+        // lands against how the live fit actually climbs, the same way
+        // `g_show_fit_score` tunes the separate Fitting -> Transition gate.
+        // thresholds[0] is never read (stage 0 is always where a reset
+        // starts); the last one is 0.95, not 1.0, deliberately -- see the
+        // comment this replaced in chord.cpp for why a resolution only
+        // reachable by accident is not a resolution.
+        float thresholds[kStages] = { 0.f, 0.25f, 0.50f, 0.75f, 0.95f };
+
         // Where the pluck sits, semitones from the root, before the snap to
         // the nearest chord tone (see Update's pluck section) -- the base it
         // is pinned to throughout Fitting, at zero intensity. Kept separate
@@ -128,6 +141,68 @@ public:
         // pluck drops to at the Transition handoff is not a note at all and
         // is not reached through this range -- see main.mm.
         float pluck_intensity_range = 12.f;
+
+        // --- pinned-pluck exploration ---------------------------------------
+        //
+        // Two ways of keeping the pinned pluck (intensity == 0 -- fit and
+        // movement both flat, which is most of Roots and the start of every
+        // Fitting) from landing on the exact same frequency every visit. Only
+        // meant to be explored one at a time; both read `comb_hz` after the
+        // chord-tone snap, so neither touches which chord tone the pluck
+        // belongs to, only where inside it the comb sits.
+        //
+        // Wander: a slow, continuous drift while pinned, gone the moment
+        // intensity leaves zero. An LFO on the comb's own Frequency in Wwise
+        // would have been simpler, but Wwise won't run an RTPC and an LFO on
+        // the same property at once (see the WwiseProject side), so this
+        // lives here instead, as a sum of two sines rather than noise so it
+        // never repeats on a beat.
+        bool  pluck_wander_enabled = false;
+
+        // Peak wander, as a fraction of the pinned frequency (0.03 = +/-3%).
+        float pluck_wander_depth = 0.03f;
+
+        // The wander's slower component, as a cycle time in seconds (not a
+        // rate, so the panel can dial it down to a barely-moving crawl
+        // without fighting a Hz slider's resolution down there). The faster
+        // component runs at 1/2.17 of this period so the two never fall into
+        // a visible shared cycle.
+        float pluck_wander_period_s = 12.5f;
+
+        // Offset: a single random pick per reset() -- i.e. per visitor --
+        // held fixed for as long as the pluck stays pinned, instead of
+        // drifting. Reads as "this visitor's tuning" rather than motion. A
+        // note step rather than a raw Hz jitter, so what lands is always a
+        // real pitch relative to the pinned one, not an out-of-tune smear.
+        bool  pluck_offset_enabled = false;
+
+        // How many semitones, at most, the per-visitor draw can land from the
+        // pinned note -- e.g. 3 means uniformly anywhere from -3 to +3
+        // semitones. Redrawn every reset() regardless of whether the offset
+        // is enabled (see reset()'s comment).
+        int pluck_offset_max_semitones = 3;
+
+        // The pinned frequency both behaviours work around is otherwise
+        // whatever `root + pluck_high` converts to -- fine for the chord's
+        // own tuning, but a step removed from the Hz an ear actually judges
+        // wander/offset depth against. When enabled, `pluck_center_hz`
+        // replaces it directly (still only while pinned; still snapped back
+        // to the real chord tone the moment intensity leaves zero).
+        bool  pluck_center_override_enabled = false;
+
+        // Hz. Defaults to what `root=48, pluck_high=34` already produces
+        // (NoteToHz(82)), so switching the override on doesn't jump the pitch.
+        // The panel keeps this on a 400-1600Hz, 5Hz-step slider -- wide enough
+        // to cover the pluck's usual register without a step so coarse it's
+        // audible as a jump.
+        float pluck_center_hz = 932.33f;
+
+        // If true, the panel rounds `pluck_center_hz` to the nearest standard
+        // equal-tempered pitch (A440, see Chord::NearestNoteHz) instead of the
+        // nearest 5 Hz -- a deliberately different reference than the piece's
+        // own `root`/key, since this control is a raw Hz explore, not a
+        // fourth way of picking a chord tone.
+        bool  pluck_center_snap_to_note = false;
     };
 
     Chord() { reset(); }
@@ -169,9 +244,18 @@ public:
         return changed;
     }
 
-    // The stage table, for the panel and the test.
+    // The stage table, for the panel and the test. Offsets are fixed (the
+    // voicing itself is not something a fit level should be able to detune),
+    // but the threshold is `cfg_.thresholds` -- see Config -- so this reads
+    // whatever the panel currently has it set to, not a fixed table.
     static const float* StageOffsets(int stage);
-    static float StageThreshold(int stage);
+    float StageThreshold(int stage) const;
+
+    // Nearest standard equal-tempered pitch (A440) to `hz` -- for the panel's
+    // "snap to notes" toggle on the pinned pluck's center-frequency override.
+    // Deliberately absolute, not relative to `root`/key: this control is a
+    // raw Hz explore, not another way of picking a chord tone.
+    static float NearestNoteHz(float hz);
 
 private:
     Config cfg_;
@@ -181,6 +265,15 @@ private:
     // Set by resolve(), cleared by reset(): while true, update() holds the
     // final checkpoint instead of tracking `fit`.
     bool resolved_ = false;
+
+    // Pinned-pluck exploration state (see Config). `wander_time_` is the
+    // wander's own clock, zeroed whenever intensity leaves zero so it never
+    // carries a phase into the next pin; `pluck_offset_semitones_` is redrawn
+    // once per reset() regardless of whether the offset is enabled, so
+    // toggling it on mid-run doesn't play back whatever was drawn at boot.
+    float wander_time_ = 0.f;
+    int   pluck_offset_semitones_ = 0;
+    std::mt19937 rng_{std::random_device{}()};
 };
 
 }  // namespace mirror
