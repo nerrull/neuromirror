@@ -21,7 +21,7 @@
 // to the visitor now on the masks (empty/invalid tracks are fine -- valid()
 // then reads false and step() is a no-op, leaving the masks exactly as
 // whatever else drove them). step() once per rendered frame after that,
-// alongside RootCameraSequence::step() -- same phaseTime()/dt convention.
+// alongside RootSequence::step() -- same phaseTime()/dt convention.
 #pragma once
 #ifndef __OBJC__
 #error "root_face_sequence.h is ObjC++ only"

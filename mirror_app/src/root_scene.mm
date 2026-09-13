@@ -73,7 +73,8 @@ std::vector<int> cropOvalTris(const std::vector<float>& v, const std::vector<int
 // One placed mask (render world space; Y-up).
 struct Mask { F3 pos, normal, tangent, bitangent; float rDepth, rWidth, rHeight; };
 
-// Build interleaved face triangles (12 floats/vert) for a set of masks.
+// Build interleaved face triangles (MetalRootRenderer::kFaceFloats per vertex)
+// for a set of masks.
 // `vcol`, when non-empty, is a per-vertex RGB (3 floats/vertex, same indexing as
 // `fv`) that overrides the flat `color` -- this is how a mask wears a sampled
 // face rather than a material tint.
@@ -81,10 +82,14 @@ struct Mask { F3 pos, normal, tangent, bitangent; float rDepth, rWidth, rHeight;
 // cavity's own half-depth: 0.5 puts it where it has always been, 0 centres it on
 // the cavity, and a negative value pushes it proud of the surface so it stands
 // clear of the nest wrapped around it.
+// `lit` is the per-vertex lit flag (root_face.metal): 1 shaded as normal, 0
+// standing dark. One mesh holds every structure's masks, so it rides on the
+// vertices rather than on a uniform.
 void appendFaceVertexData(std::vector<float>& out, const Mask& m,
                           const std::vector<float>& fv, const std::vector<int>& ftris,
                           float faceScale, float recess, float lightDist, const float color[3],
-                          const std::vector<float>& vcol = {}, bool smoothNormals = true) {
+                          const std::vector<float>& vcol = {}, bool smoothNormals = true,
+                          float lit = 1.f) {
     F3 n = m.normal, t = m.tangent, b = m.bitangent;
     F3 p = sub(m.pos, mul(n, m.rDepth * recess));
     float scale = faceScale * std::min(m.rWidth, m.rHeight);
@@ -149,6 +154,7 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
                 out.push_back(color[0]); out.push_back(color[1]); out.push_back(color[2]);
             }
             out.push_back(lightPos.x); out.push_back(lightPos.y); out.push_back(lightPos.z);
+            out.push_back(lit);
         }
     }
 }
@@ -278,6 +284,7 @@ void RootScene::regrow() {
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
     growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
+    variations_.clear();        // ...and so may the plants they were grown from
     ++growGeneration_;
 }
 
@@ -290,25 +297,32 @@ void RootScene::replant() {
     ++growGeneration_;
     // The renderer is still holding the *last* visitor's geometry, and nothing
     // else would drop it: the segment buffers are only rewritten by a growth
-    // step, and the beat that follows this call holds the growth paused. So a
+    // step, and the stage that follows this call holds the growth paused. So a
     // second sitting opened on a full-grown plant from the first one, visible
     // through the film during the press -- which is the one thing that must not
     // be on screen while the pond is still up. Resetting the sim is not enough;
     // the upload has to be undone too.
     if (rr_) rr_->uploadSegments({}, {}, {});
-    // The beat-4 neighbour hood is exactly the same problem one layer up:
-    // addNeighbours() only clears `neighbours` and the renderer's instance
-    // buffers when it runs *again*, which is minutes into the new sitting
-    // (Beat::Meander). Until then the previous visitor's hood -- both its
-    // baked root-capsule instances (drawn straight out of rr_'s instances_)
-    // and its faces (uploadFaceFromMasks() loops over `neighbours`
-    // unconditionally, every frame, regardless of beat) -- was still sitting
-    // there, so the very first frame of the new sitting showed the new plant
-    // plus nine leftover copies of the old one: N masks x (1 + 9 neighbours)
-    // faces, and all of their root structures too. Drop both here, at the
-    // same place everything else about the last visitor gets dropped.
+    // The Reveal stage's neighbour hood is exactly the same problem one layer
+    // up: addNeighbours() only clears `neighbours` and the renderer's instance
+    // buffers when it runs *again*, which is minutes into the new sitting.
+    // Until then the previous visitor's hood -- both its baked root-capsule
+    // instances (drawn straight out of rr_'s instances_) and its faces
+    // (uploadFaceFromMasks() loops over `neighbours` unconditionally, every
+    // frame, regardless of stage) -- was still sitting there, so the very
+    // first frame of the new sitting showed the new plant plus every leftover
+    // copy of the old one: N masks x (1 + neighbours) faces, and all of their
+    // root structures too. Drop both here, at the same place everything else
+    // about the last visitor gets dropped.
     if (rr_) rr_->clearInstances();
     neighbours.clear();
+    // The variations themselves stay: they are the *parameters'* plants, not
+    // this visitor's, and were the expensive part. Only their placement --
+    // and which of them is visible or lit -- belonged to the sitting.
+    //
+    // ...and the masks flagged visible ahead of the growth (WhenFramed
+    // reveal), which were this visitor's chain and not the next one's.
+    maskFlagged_.clear();
     // The last visitor's face likewise has to go, not just the plant: the
     // fit's normalisation is captured once "from the first mesh seen" (see
     // setFittedFace) and otherwise never revisited, so every visitor after
@@ -320,6 +334,12 @@ void RootScene::replant() {
     fit_norm_set_ = false;
     faceVerts_ = canonVerts_;
     faceTris_  = canonTris_;
+    // ...and the bank faces dealt to the other masks, which were dealt
+    // around *that* visitor's capture. The caller deals again for the next
+    // one (assignBankFaces), on the same edge it calls this.
+    bankFaces_.clear();
+    chainFaces_.clear();
+    structureFaces_.clear();
     // ...and the framing bounds it left behind, which are a min/max over that
     // same vanished geometry.
     idleCentre_[0] = idleCentre_[1] = idleCentre_[2] = 0.f;
@@ -383,41 +403,127 @@ void RootScene::buildField(int gridN, float spacing) {
     useSim_ = false;
 }
 
-void RootScene::addNeighbours(int count, float ringRadius, unsigned seed,
+void RootScene::ensureVariations(int K) {
+    K = std::max(0, K);
+    if ((int)variations_.size() == K) return;
+    variations_.clear();
+    // The same throwaway-growth pattern as growthStepEstimate(): the sim's own
+    // parameters, one seed on from the live plant per variation, run until
+    // done. Nothing here touches sim_ or the renderer.
+    rootsim::SimParams probe = simParams_;
+    probe.paramDir = ROOTSIM_PARAM_DIR;
+    for (int k = 0; k < K; ++k) {
+        probe.seed = simParams_.seed + 1u + unsigned(k);
+        rootsim::RootSim sim;
+        if (!sim.reset(probe)) break;
+        for (int steps = 0; !sim.done() && steps < 200000; ++steps) sim.step();
+        Variation v;
+        sim.geometry(v.nodes, v.segs, v.radii);
+        v.masks = sim.plannedMasks();
+        if (v.nodes.empty() || v.segs.empty() || v.masks.empty()) continue;
+        // Its bound, by the rule RootSequence::begin() frames this structure
+        // with: the masks' centroid, and a sphere covering each mask plus
+        // its own size. Roots trail past the masks, but the masks are what
+        // the shot is about.
+        for (const auto& m : v.masks)
+            for (int c = 0; c < 3; ++c) v.centre[c] += m.pos[c] / float(v.masks.size());
+        v.radius = 0.f;
+        for (const auto& m : v.masks) {
+            const float dx = m.pos[0] - v.centre[0], dy = m.pos[1] - v.centre[1],
+                        dz = m.pos[2] - v.centre[2];
+            v.radius = std::max(v.radius, std::sqrt(dx * dx + dy * dy + dz * dz)
+                                          + std::max(m.rWidth, m.rHeight));
+        }
+        variations_.push_back(std::move(v));
+    }
+}
+
+void RootScene::addNeighbours(int count, int variations, float spacing, float structR,
                               const float centre[3], float keepClearAz) {
     if (!rr_ || !sim_) return;
-    std::vector<float> nodes, radii; std::vector<int> segs;
-    sim_->geometry(nodes, segs, radii);
-    if (nodes.empty() || segs.empty()) return;
-
+    ensureVariations(variations);
     rr_->clearInstances();
     neighbours.clear();
-    std::mt19937 rng(seed);
+    if (variations_.empty()) { rebuildFace(); return; }
+
+    // Yaw and a little scale per structure are the only randomness left; the
+    // pattern itself is the phyllotaxis. Seeded from the plant's own seed so
+    // the hood is the same for every visitor to the same parameters.
+    std::mt19937 rng(simParams_.seed * 7919u + 99u);
     std::uniform_real_distribution<float> U(0.f, 1.f);
-    for (int i = 0; i < count; ++i) {
-        // Two loose rings rather than a grid: a grid reads as a diagram, and
-        // the depth spread is what makes the neighbours sit *around* the piece
-        // instead of beside it.
-        // Spread in depth as well as around: neighbours all at one distance
-        // read as a row of cut-outs behind the subject rather than as a room
-        // the subject is standing in.
-        const float ring = ringRadius * (0.85f + 0.5f * U(rng));
-        float a = 6.2831853f * (float(i) / std::max(1, count)) + (U(rng) - 0.5f) * 0.5f;
-        // Push out of the wedge the camera is looking through.
+    constexpr float kGoldenAngle = 2.39996323f;   // pi (3 - sqrt 5)
+    constexpr float kPi = 3.14159265f;
+    for (int k = 0; k < count; ++k) {
+        const Variation& v = variations_[size_t(k) % variations_.size()];
+        // Sunflower: the k-th seed at k golden angles round and sqrt(k+1)
+        // out, which packs structures evenly at any count -- spacing is the
+        // multiple of this structure's radius between neighbours. Turned so
+        // seed 0, the first to pop in and the nearest, stands directly
+        // *behind* the subject from the camera (keepClearAz is the camera's
+        // azimuth, i.e. where the eye is; +pi is the far side), where the
+        // Reveal's held camera can see it over the subject's shoulder rather
+        // than beside the lens.
+        float a = keepClearAz + kPi + float(k) * kGoldenAngle;
+        const float ring = std::max(0.5f, spacing) * structR * std::sqrt(float(k + 1));
+        // Keep out of the wedge the camera is looking through. The camera
+        // looks roughly horizontally at the hanging structure, so a structure
+        // behind the subject is fine and one in front of it is a wall across
+        // the frame. Rather than nudging such a placement sideways -- which
+        // at the near rings still leaves it a few units from the lens, out
+        // of frame until the orbit sweeps a wall through it -- it is put
+        // straight across to the far side, where it is one more structure
+        // standing behind the subject.
         float rel = a - keepClearAz;
-        while (rel >  3.14159265f) rel -= 6.2831853f;
-        while (rel < -3.14159265f) rel += 6.2831853f;
-        if (std::fabs(rel) < 0.6f) a += (rel < 0 ? -1.f : 1.f) * (0.6f - std::fabs(rel));
+        while (rel >  kPi) rel -= 2.f * kPi;
+        while (rel < -kPi) rel += 2.f * kPi;
+        if (std::fabs(rel) < 1.0f) a += kPi;
+
         MetalRootRenderer::InstancePlacement pl;
-        pl.translate[0] = centre[0] + std::sin(a) * ring;
-        pl.translate[1] = centre[1] * 0.15f + (U(rng) - 0.5f) * ringRadius * 0.25f;
-        pl.translate[2] = centre[2] + std::cos(a) * ring;
         pl.rotYaw = U(rng) * 6.2831853f;
-        pl.scale  = 0.75f + 0.5f * U(rng);
-        rr_->addInstance(nodes, segs, radii, pl);
-        neighbours.push_back({{pl.translate[0], pl.translate[1], pl.translate[2]},
-                              pl.rotYaw, pl.scale});
+        pl.scale  = 0.9f + 0.2f * U(rng);
+        // Land the variation's own centre on the ring point, on the plane of
+        // `centre`: the instance is scaled about the origin and yawed before
+        // it is translated, so the translation is the ring point less the
+        // centre put through those two.
+        const float cy = std::cos(pl.rotYaw), sy = std::sin(pl.rotYaw);
+        const float lx = v.centre[0] * pl.scale, ly = v.centre[1] * pl.scale,
+                    lz = v.centre[2] * pl.scale;
+        const float want[3] = {centre[0] + std::sin(a) * ring, centre[1],
+                               centre[2] + std::cos(a) * ring};
+        pl.translate[0] = want[0] - ( lx * cy + lz * sy);
+        pl.translate[1] = want[1] -   ly;
+        pl.translate[2] = want[2] - (-lx * sy + lz * cy);
+        const int inst = rr_->addInstance(v.nodes, v.segs, v.radii, pl);
+        if (inst < 0) continue;
+        rr_->setInstanceVisible(inst, false);
+        rr_->setInstanceLit(inst, 0.f);
+        NeighbourPlacement np;
+        for (int c = 0; c < 3; ++c) { np.translate[c] = pl.translate[c]; np.centre[c] = want[c]; }
+        np.rotYaw = pl.rotYaw; np.scale = pl.scale;
+        np.variation = int(size_t(k) % variations_.size());
+        np.instance = inst;
+        np.radius = v.radius * pl.scale;
+        np.visible = false; np.lit = false;
+        neighbours.push_back(np);
     }
+    rebuildFace();
+}
+
+void RootScene::setStructureVisible(int k, bool visible) {
+    if (k < 0 || k >= (int)neighbours.size()) return;
+    NeighbourPlacement& np = neighbours[size_t(k)];
+    if (np.visible == visible) return;
+    np.visible = visible;
+    if (rr_) rr_->setInstanceVisible(np.instance, visible);
+    rebuildFace();
+}
+
+void RootScene::setStructureLit(int k, bool lit) {
+    if (k < 0 || k >= (int)neighbours.size()) return;
+    NeighbourPlacement& np = neighbours[size_t(k)];
+    if (np.lit == lit) return;
+    np.lit = lit;
+    if (rr_) rr_->setInstanceLit(np.instance, lit ? 1.f : 0.f);
     rebuildFace();
 }
 
@@ -428,22 +534,18 @@ bool RootScene::growthTip(float out[3]) const {
 int  RootScene::currentMask() const { return sim_ ? sim_->currentMask() : -1; }
 bool RootScene::arrivedAtMask() const { return sim_ && sim_->arrivedAtMask(); }
 
-// Normalised lerp between two unit vectors, and the third axis of the frame.
-// Not a slerp: over the angles a mask turns through here the two are visually
-// identical, and this cannot produce a NaN when the vectors are near-parallel.
-static F3 nlerp3(const float a[3], const float b[3], float t) {
-    float v[3] = {a[0] + (b[0] - a[0]) * t,
-                  a[1] + (b[1] - a[1]) * t,
-                  a[2] + (b[2] - a[2]) * t};
-    const float l = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-    if (l < 1e-6f) return F3{b[0], b[1], b[2]};
-    return F3{v[0]/l, v[1]/l, v[2]/l};
+void RootScene::setMaskVisible(int i) {
+    if (i < 0) return;
+    if (i >= (int)maskFlagged_.size()) maskFlagged_.resize(size_t(i) + 1, 0);
+    maskFlagged_[size_t(i)] = 1;
 }
 
-static F3 orthonormal3(const F3& n, const F3& t) {
-    F3 c = {n.y*t.z - n.z*t.y, n.z*t.x - n.x*t.z, n.x*t.y - n.y*t.x};
-    const float l = std::sqrt(c.x*c.x + c.y*c.y + c.z*c.z);
-    return (l < 1e-6f) ? F3{0.f, 1.f, 0.f} : F3{c.x/l, c.y/l, c.z/l};
+// The sim reveals masks in hop order, so "reached" is a prefix of the planned
+// list (see root_sim.cpp's step()); anything past it is drawn only if flagged.
+bool RootScene::maskVisible(int i) const {
+    if (i < 0) return false;
+    if (i < (int)revealedMasks().size()) return true;
+    return i < (int)maskFlagged_.size() && maskFlagged_[size_t(i)];
 }
 
 void RootScene::uploadFaceFromMasks() {
@@ -452,39 +554,17 @@ void RootScene::uploadFaceFromMasks() {
     const float maskColor[3] = {0.86f, 0.83f, 0.78f};
     std::vector<float> data;
     int mi = -1;
-    const auto& masks = showPlannedMasks ? sim_->plannedMasks() : sim_->revealedMasks();
-    const float* origin = sim_->plannedMasks().empty() ? nullptr
-                                                       : sim_->plannedMasks().front().pos;
-    for (const auto& sm : masks) {
+    for (const auto& sm : sim_->plannedMasks()) {
         ++mi;
-        // Per-mask identity when there is one; otherwise every mask is the
-        // same face, which is the live case (one visitor at a time).
-        const std::vector<float>& verts =
-            (mi < (int)maskVerts_.size() && !maskVerts_[size_t(mi)].empty())
-                ? maskVerts_[size_t(mi)] : faceVerts_;
+        if (!maskVisible(mi)) continue;
+        // Mask 0 is the visitor; the rest of the chain wears the bank, or
+        // mask 0's face again where the bank ran out (see faceFor).
+        const FaceRef face = faceFor(-1, mi);
         Mask m;
-        const float d = std::clamp(maskDeal, 0.f, 1.f);
-        const bool dealing = showPlannedMasks && origin && d < 1.f;
-        const auto& first = sim_->plannedMasks().front();
-        // Before the deal starts there is one face, not nine stacked in the
-        // same place: the others are simply not drawn.
-        if (dealing && mi > 0 && d < 1e-3f) continue;
-        if (dealing) {
-            m.pos = {origin[0] + (sm.pos[0] - origin[0]) * d,
-                     origin[1] + (sm.pos[1] - origin[1]) * d,
-                     origin[2] + (sm.pos[2] - origin[2]) * d};
-            // ...and they turn as they travel, from the first mask's
-            // orientation into their own, so they peel off it rather than
-            // sliding out already facing the right way.
-            m.normal    = nlerp3(first.normal,    sm.normal,    d);
-            m.tangent   = nlerp3(first.tangent,   sm.tangent,   d);
-            m.bitangent = orthonormal3(m.normal, m.tangent);
-        } else {
-            m.pos = {sm.pos[0], sm.pos[1], sm.pos[2]};
-            m.normal = {sm.normal[0], sm.normal[1], sm.normal[2]};
-            m.tangent = {sm.tangent[0], sm.tangent[1], sm.tangent[2]};
-            m.bitangent = {sm.bitangent[0], sm.bitangent[1], sm.bitangent[2]};
-        }
+        m.pos = {sm.pos[0], sm.pos[1], sm.pos[2]};
+        m.normal = {sm.normal[0], sm.normal[1], sm.normal[2]};
+        m.tangent = {sm.tangent[0], sm.tangent[1], sm.tangent[2]};
+        m.bitangent = {sm.bitangent[0], sm.bitangent[1], sm.bitangent[2]};
         // The cloth press: while the anchor mask is still advancing through
         // the sheet (see advanceCloth), it is retracted behind its resting
         // position along its own -normal by clothPressOffset_, reaching 0 --
@@ -495,14 +575,22 @@ void RootScene::uploadFaceFromMasks() {
         if (mi == anchorMask && clothActive_ && clothPressOffset_ != 0.f)
             m.pos = sub(m.pos, mul(m.normal, clothPressOffset_));
         m.rDepth = sm.rDepth; m.rWidth = sm.rWidth; m.rHeight = sm.rHeight;
-        appendFaceVertexData(data, m, verts, faceTris_, faceScale, faceRecess, 3.0f,
-                             maskColor, faceColors_, rr_->face.smoothNormals);
+        appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
+                             maskColor, *face.colors, rr_->face.smoothNormals);
     }
 
-    // The same masks again for every neighbouring copy. Scale, yaw about Y,
-    // translate -- the order addInstance bakes its nodes with, so the faces
-    // land in the roots rather than beside them.
+    // Each placed structure's own masks -- its variation's planned layout,
+    // every one of them, the variation having grown to completion -- each
+    // wearing that structure's faces from the bank (structureFaces_;
+    // neighbour k is structure k), dark until the Reveal lights it. Scale,
+    // yaw about Y, translate -- the order addInstance bakes its nodes with,
+    // so the faces land in the roots rather than beside them.
+    int k = -1;
     for (const auto& pl : neighbours) {
+        ++k;
+        if (!pl.visible) continue;
+        if (pl.variation < 0 || pl.variation >= (int)variations_.size()) continue;
+        const float lit = pl.lit ? 1.f : 0.f;
         const float cy = std::cos(pl.rotYaw), sy = std::sin(pl.rotYaw);
         auto xf = [&](const float v[3], bool isPoint) {
             const float s = isPoint ? pl.scale : 1.f;
@@ -512,11 +600,9 @@ void RootScene::uploadFaceFromMasks() {
                      -lx * sy + lz * cy + (isPoint ? pl.translate[2] : 0.f)};
         };
         int ni = -1;
-        for (const auto& sm : sim_->plannedMasks()) {
+        for (const auto& sm : variations_[size_t(pl.variation)].masks) {
             ++ni;
-            const std::vector<float>& verts =
-                (ni < (int)maskVerts_.size() && !maskVerts_[size_t(ni)].empty())
-                    ? maskVerts_[size_t(ni)] : faceVerts_;
+            const FaceRef face = faceFor(k, ni);
             Mask m;
             m.pos       = xf(sm.pos, true);
             m.normal    = xf(sm.normal, false);
@@ -525,8 +611,8 @@ void RootScene::uploadFaceFromMasks() {
             m.rDepth = sm.rDepth * pl.scale;
             m.rWidth = sm.rWidth * pl.scale;
             m.rHeight = sm.rHeight * pl.scale;
-            appendFaceVertexData(data, m, verts, faceTris_, faceScale, faceRecess, 3.0f,
-                                 maskColor, faceColors_, rr_->face.smoothNormals);
+            appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
+                                 maskColor, *face.colors, rr_->face.smoothNormals, lit);
         }
     }
     rr_->uploadFaceMesh(data);
@@ -657,8 +743,8 @@ void RootScene::refreshClothAnchor() {
 //
 // The distance is measured to the sheet's plane along the anchor's normal
 // rather than taken as `radius` directly, so it stays correct if the camera is
-// ever off the anchor's axis; through beat 1 (which is the whole of the press)
-// RootCameraSequence puts it straight down that normal and the two agree.
+// ever off the anchor's axis; through the Face stage (which is the whole of
+// the press) RootSequence puts it straight down that normal and the two agree.
 //
 // Note `radius` here is a *half*-angle: MetalRootRenderer::render builds its
 // projection as 1/tan(fov), not 1/tan(fov/2). Halving it -- the more familiar
@@ -676,10 +762,10 @@ void RootScene::ensureClothSheet() {
     // pinned, then frozen when the press begins.
     //
     // Freezing on the very first frame (what this did before) trusts a camera
-    // that has usually not arrived yet: with the authored sequence off --
-    // which is the default -- applyFraming eases target and radius in from
-    // whatever the previous phase left, so frame one of the press sees a
-    // camera still travelling. Rebuilding costs nothing while the sheet is
+    // that may not have arrived yet: outside the show's own phases
+    // applyFraming eases target and radius in from whatever the previous
+    // phase left, so frame one of the press can see a camera still
+    // travelling. Rebuilding costs nothing while the sheet is
     // flat, because there is no simulated state to lose: every vertex is at
     // its rest position and every pin is fully held, so a rebuild is a no-op
     // the eye can see. Once the press starts there *is* state, and a rebuild
@@ -1113,9 +1199,100 @@ void RootScene::advanceCloth(double dt) {
     // this frame, so the sheet is always solved against the camera that draws it.
 }
 
+void RootScene::faceNormalisation(const std::vector<float>& verts, float centre[3],
+                                  float& scale) {
+    const size_t n = verts.size() / 3;
+    double c[3] = {0, 0, 0};
+    for (size_t i = 0; i < n; ++i)
+        for (int k = 0; k < 3; ++k) c[k] += verts[i * 3 + k];
+    for (int k = 0; k < 3; ++k) centre[k] = n ? float(c[k] / double(n)) : 0.f;
+    float m = 1e-9f;
+    for (size_t i = 0; i < n; ++i)
+        for (int k = 0; k < 3; ++k)
+            m = std::max(m, std::fabs(verts[i * 3 + k] - centre[k]));
+    scale = 1.0f / m;
+}
+
+RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
+    int idx = -1;
+    if (structure < 0) {
+        if (slot > 0 && slot < (int)chainFaces_.size()) idx = chainFaces_[size_t(slot)];
+    } else if (structure < (int)structureFaces_.size()) {
+        const auto& s = structureFaces_[size_t(structure)].captureIdx;
+        if (slot >= 0 && slot < (int)s.size()) idx = s[size_t(slot)];
+    }
+    if (idx >= 0 && idx < (int)bankFaces_.size()) {
+        const BankFace& b = bankFaces_[size_t(idx)];
+        if (!b.verts.empty() && !b.tris.empty()) return {&b.verts, &b.tris, &b.colors};
+    }
+    return {&faceVerts_, &faceTris_, &faceColors_};
+}
+
+void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
+                                int maxStructures, int minStructures) {
+    bankFaces_.clear();
+    chainFaces_.clear();
+    structureFaces_.clear();
+    for (const auto& c : bank) {
+        BankFace b;
+        if (c.valid()) {
+            b.verts = c.verts;
+            b.tris  = c.tris;
+            // Normalised on its own, by the rule the live face gets --
+            // see the header. Colours are per vertex and unaffected.
+            float centre[3], scale;
+            faceNormalisation(b.verts, centre, scale);
+            for (size_t i = 0; i < b.verts.size() / 3; ++i)
+                for (int k = 0; k < 3; ++k)
+                    b.verts[i * 3 + k] = (b.verts[i * 3 + k] - centre[k]) * scale;
+            if (c.colors.size() == c.verts.size()) b.colors = c.colors;
+        }
+        bankFaces_.push_back(std::move(b));   // an invalid one keeps its index
+    }
+
+    const int N = std::max(1, simParams_.N);
+    const int have = (int)bankFaces_.size();
+    // The chain: masks 1..N-1 take bank[0..N-2], newest first, wrapping when
+    // the bank is short. Nothing at all leaves every slot -1 = mask 0's face.
+    // TODO(face-bank): repeat is a placeholder until the bank is deep enough.
+    chainFaces_.assign(size_t(N), -1);
+    const int chainN = std::min(N - 1, have);
+    for (int i = 1; i < N; ++i)
+        if (chainN > 0) chainFaces_[size_t(i)] = (i - 1) % chainN;
+
+    // The other structures: what the chain did not use, N per structure,
+    // newest first. A bank too young for one whole structure shows
+    // minStructures placeholders repeating whatever faces exist.
+    // TODO(face-bank): repeat is a placeholder until the bank is deep enough.
+    const int first = N - 1;                       // where the older captures start
+    const int older = std::max(0, have - first);
+    int count = std::min(older / N, std::max(0, maxStructures));
+    bool placeholder = false;
+    if (count <= 0) { count = std::max(0, minStructures); placeholder = true; }
+    for (int s = 0; s < count; ++s) {
+        StructureFaces sf;
+        sf.captureIdx.assign(size_t(N), -1);
+        for (int j = 0; j < N; ++j) {
+            if (!placeholder) sf.captureIdx[size_t(j)] = first + s * N + j;
+            else if (have > 0) sf.captureIdx[size_t(j)] = (s * N + j) % have;
+        }
+        structureFaces_.push_back(std::move(sf));
+    }
+    rebuildFace();
+}
+
+void RootScene::clearBankFaces() {
+    bankFaces_.clear();
+    chainFaces_.clear();
+    structureFaces_.clear();
+    rebuildFace();
+}
+
 std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned seed,
                                                              float amount) {
-    maskVerts_.clear();
+    bankFaces_.clear();
+    chainFaces_.clear();
+    structureFaces_.clear();
     std::vector<std::vector<float>> alphas;
     mirror::FaceBasis basis;
     std::string err;
@@ -1137,18 +1314,7 @@ std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned see
     std::vector<float> neutral;
     basis.reconstruct(std::vector<float>(), noExpr, neutral);
     float centre[3] = {0, 0, 0}, scale = 1.f;
-    {
-        const size_t nv = neutral.size() / 3;
-        double c[3] = {0, 0, 0};
-        for (size_t i = 0; i < nv; ++i)
-            for (int k = 0; k < 3; ++k) c[k] += neutral[i * 3 + k];
-        for (int k = 0; k < 3; ++k) centre[k] = float(c[k] / double(nv));
-        float m = 1e-9f;
-        for (size_t i = 0; i < nv; ++i)
-            for (int k = 0; k < 3; ++k)
-                m = std::max(m, std::fabs(neutral[i * 3 + k] - centre[k]));
-        scale = 1.0f / m;
-    }
+    faceNormalisation(neutral, centre, scale);
 
     // The first modes carry most of the variance, so sampling them all at one
     // scale gives n caricatures. Falling off as 1/sqrt(i+1) is the shape a PCA
@@ -1174,18 +1340,19 @@ std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned see
         for (size_t v3 = 0; v3 < verts.size() / 3; ++v3)
             for (int k = 0; k < 3; ++k)
                 verts[v3 * 3 + k] = (verts[v3 * 3 + k] - centre[k]) * scale;
-        maskVerts_.push_back(verts);
+        bankFaces_.push_back({verts, faceTris_, {}});
         alphas.push_back(std::move(alpha));
     }
-    fitted_face_ = true;      // so clearTestIdentities restores the canonical mesh
-    faceVerts_ = maskVerts_.empty() ? faceVerts_ : maskVerts_.front();
+    // Identity 0 is mask 0 -- the live slot -- and the rest fill the chain
+    // in order, exactly as assignBankFaces deals a real bank.
+    if (!bankFaces_.empty()) {
+        fitted_face_ = true;
+        faceVerts_ = bankFaces_.front().verts;
+        chainFaces_.assign(size_t(std::max(n, 1)), -1);
+        for (int i = 1; i < n && i < (int)bankFaces_.size(); ++i) chainFaces_[size_t(i)] = i;
+    }
     rebuildFace();
     return alphas;
-}
-
-void RootScene::clearTestIdentities() {
-    maskVerts_.clear();
-    rebuildFace();
 }
 
 void RootScene::rebuildFace() {
@@ -1233,22 +1400,10 @@ void RootScene::setFittedFace(const std::vector<float>& verts,
     // the largest absolute coordinate, matching what normalizeMesh() does to
     // the canonical model -- so the placement code, faceScale, and every
     // material knob downstream keep the ranges they were tuned against.
+    // The bank's faces (assignBankFaces) are normalised by the same rule,
+    // each on its own, which is what keeps them the size of this one.
     if (!fit_norm_set_) {
-        const size_t n = verts.size() / 3;
-        double cx = 0, cy = 0, cz = 0;
-        for (size_t i = 0; i < n; i++) {
-            cx += verts[i * 3]; cy += verts[i * 3 + 1]; cz += verts[i * 3 + 2];
-        }
-        fit_centre_[0] = float(cx / n);
-        fit_centre_[1] = float(cy / n);
-        fit_centre_[2] = float(cz / n);
-        float m = 1e-9f;
-        for (size_t i = 0; i < n; i++) {
-            m = std::max({m, std::fabs(verts[i * 3]     - fit_centre_[0]),
-                             std::fabs(verts[i * 3 + 1] - fit_centre_[1]),
-                             std::fabs(verts[i * 3 + 2] - fit_centre_[2])});
-        }
-        fit_scale_ = 1.0f / m;
+        faceNormalisation(verts, fit_centre_, fit_scale_);
         fit_norm_set_ = true;
     }
 
@@ -1292,141 +1447,61 @@ void RootScene::updateBounds(const std::vector<float>& nodes) {
     idleExtent_ = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1.f});
 }
 
-// Centre and radius covering a set of revealed masks, in render space. Returns
-// false when the set is empty, which is the whole of the first frames of a grow
-// -- the caller falls back to the node bounds then, since there is nothing else
-// to look at yet.
-bool RootScene::maskBound(const std::vector<int>& idx, float centre[3], float& radius) const {
-    const auto& ms = frameOnPlanned && !plannedMasks().empty() ? plannedMasks()
-                                                              : revealedMasks();
-    int n = 0;
-    float c[3] = {0, 0, 0};
-    for (int i : idx) {
-        if (i < 0 || i >= (int)ms.size()) continue;
-        for (int k = 0; k < 3; ++k) c[k] += ms[size_t(i)].pos[k];
-        ++n;
-    }
-    if (!n) return false;
-    for (int k = 0; k < 3; ++k) c[k] /= float(n);
-
-    // Radius to the furthest mask, plus that mask's own size so the face is
-    // inside the frame rather than on its edge.
-    float r = 0.f;
-    for (int i : idx) {
-        if (i < 0 || i >= (int)ms.size()) continue;
-        const auto& m = ms[size_t(i)];
-        float d = std::sqrt((m.pos[0] - c[0]) * (m.pos[0] - c[0]) +
-                            (m.pos[1] - c[1]) * (m.pos[1] - c[1]) +
-                            (m.pos[2] - c[2]) * (m.pos[2] - c[2]));
-        r = std::max(r, d + std::max(m.rWidth, m.rHeight));
-    }
-    for (int k = 0; k < 3; ++k) centre[k] = c[k];
-    radius = std::max(r, 1.f);
-    return true;
-}
-
+// The fallback framing -- see the header's camera section. RootSequence owns
+// the camera in the show and turns autoFrame off; this is what the operator's
+// roots tab and the headless shots frame with.
 void RootScene::applyFraming(double dt) {
     // Held still for the whole pinned phase -- see clothPinned(). Deliberately
-    // here rather than left to the caller's camera mode: the authored sequence
-    // already holds beat 1 still, but auto-framing eases toward the layout
-    // every frame, and easing during the press is what magnified the pond into
-    // an unreadable close-up. A flat film's registration cannot survive a
-    // moving camera by any amount of sizing, so the camera is what gives way.
-    // camDesValid_ is cleared with it: there is no ease in flight to anticipate.
+    // here rather than left to the caller's camera mode: auto-framing eases
+    // toward the layout every frame, and easing during the press is what
+    // magnified the pond into an unreadable close-up. A flat film's
+    // registration cannot survive a moving camera by any amount of sizing, so
+    // the camera is what gives way. camDesValid_ is cleared with it: there is
+    // no ease in flight to anticipate.
     if (clothPinned()) { camDesValid_ = false; return; }
-    // The authored sequence assigns the camera outright, so there is no ease
-    // in flight and no future pose to anticipate -- see camDesValid_.
+    // The sequence assigns the camera outright, so there is no ease in flight
+    // and no future pose to anticipate -- see camDesValid_.
     if (!autoFrame) { camDesValid_ = false; return; }
     // The layout, not the reveals: a bound that grows a step per revealed mask
     // makes the camera climb a staircase, and easing a staircase is a pump.
-    const auto& ms = frameOnPlanned && !plannedMasks().empty() ? plannedMasks()
-                                                              : revealedMasks();
-
-    std::vector<int> shot;
-    if (focusMask >= 0 && focusMask < (int)ms.size()) {
-        shot.push_back(focusMask);
-    } else if (focusGroup >= 0) {
-        const int size = std::max(1, focusGroupSize);
-        for (int i = focusGroup * size; i < (focusGroup + 1) * size && i < (int)ms.size(); ++i)
-            shot.push_back(i);
-    } else if (frameOnMasks) {
-        for (int i = 0; i < (int)ms.size(); ++i) shot.push_back(i);
-    }
+    const auto& ms = plannedMasks();
 
     // Desired framing this frame; the camera is eased toward it below rather
     // than snapped, so a change of shot is a move and not a cut.
     float desTarget[3] = {target[0], target[1], target[2]};
     float desRadius = radius, desAz = azimuth, desEl = elevation;
 
-    float c[3], r;
-    if (!shot.empty() && maskBound(shot, c, r)) {
+    if (focusMask >= 0 && focusMask < (int)ms.size()) {
+        // One mask, tight to its own size -- proportional, with no additive
+        // term: a constant does not scale, so "tight on the face" stopped
+        // being tight the moment the mask size or the cone changed. At 2.6x
+        // the mask's half-height the head fills most of the frame at the
+        // default fov. And straight down its normal: eye = target + radius *
+        // (cosEl*sinAz, sinEl, cosEl*cosAz), so a direction inverts straight
+        // into the two angles.
+        const auto& m = ms[size_t(focusMask)];
+        desTarget[0] = m.pos[0]; desTarget[1] = m.pos[1]; desTarget[2] = m.pos[2];
+        desRadius = std::max(m.rWidth, m.rHeight) * 2.6f * zoom;
+        const float len = std::sqrt(m.normal[0] * m.normal[0] + m.normal[1] * m.normal[1] +
+                                    m.normal[2] * m.normal[2]);
+        if (len > 1e-5f) {
+            desEl = std::asin(std::clamp(m.normal[1] / len, -1.f, 1.f));
+            desAz = std::atan2(m.normal[0], m.normal[2]);
+        }
+    } else if (!ms.empty()) {
+        // The whole layout on its centroid, from whatever angles are set:
+        // radius to the furthest mask plus that mask's own size, so no face
+        // sits on the edge of frame, then the margin and the zoom.
+        float c[3] = {0, 0, 0};
+        for (const auto& m : ms)
+            for (int k = 0; k < 3; ++k) c[k] += m.pos[k] / float(ms.size());
+        float r = 1.f;
+        for (const auto& m : ms) {
+            const float dx = m.pos[0] - c[0], dy = m.pos[1] - c[1], dz = m.pos[2] - c[2];
+            r = std::max(r, std::sqrt(dx * dx + dy * dy + dz * dz) + std::max(m.rWidth, m.rHeight));
+        }
         desTarget[0] = c[0]; desTarget[1] = c[1]; desTarget[2] = c[2];
-        // A single mask is framed tight to its own size; anything wider is
-        // framed on the group's bound. Both then take the margin and the zoom.
-        if (shot.size() == 1) {
-            // Proportional, with no additive term: a constant does not scale,
-            // so "tight on the face" stopped being tight the moment the mask
-            // size or the cone changed. At 2.6x the mask's half-height the head
-            // fills most of the frame at the default fov.
-            const auto& m = ms[size_t(shot[0])];
-            desRadius = std::max(m.rWidth, m.rHeight) * 2.6f * zoom;
-        } else {
-            desRadius = r * (1.0f + frameMargin) * 1.9f * zoom;
-        }
-
-        // Anchored: the target does not move to the middle of the shot, it
-        // stays on one face. The radius then has to reach from that face to the
-        // furthest thing in the shot rather than from the shot's own centre.
-        // ...except when the shot *is* the anchor, where the tight framing
-        // above is already the right answer and recomputing it from the bound
-        // would only loosen it.
-        const bool anchorIsWholeShot = (shot.size() == 1 && shot[0] == anchorMask);
-        if (anchorMask >= 0 && anchorMask < (int)ms.size()) {
-            const auto& a = ms[size_t(anchorMask)];
-            desTarget[0] = a.pos[0]; desTarget[1] = a.pos[1]; desTarget[2] = a.pos[2];
-            float far = std::max(a.rWidth, a.rHeight) * 2.6f;
-            for (int i : shot) {
-                const auto& m = ms[size_t(i)];
-                const float dx = m.pos[0] - a.pos[0], dy = m.pos[1] - a.pos[1],
-                            dz = m.pos[2] - a.pos[2];
-                far = std::max(far, std::sqrt(dx * dx + dy * dy + dz * dz)
-                                        + std::max(m.rWidth, m.rHeight));
-            }
-            if (!anchorIsWholeShot) desRadius = far * (1.0f + frameMargin) * 1.4f * zoom;
-        }
-        // Stand in front of what is being framed, rather than inheriting
-        // whatever angle the whole-piece orbit was on -- which, on a cylinder or
-        // a sphere, routinely means looking at the back of a head through the
-        // far wall of the structure. For a group it is the mean of the masks'
-        // normals: the direction the cluster collectively faces.
-        //
-        // eye = target + radius * (cosEl*sinAz, sinEl, cosEl*cosAz), so a
-        // direction inverts straight into the two angles.
-        const bool focused = (focusMask >= 0 || focusGroup >= 0 || anchorMask >= 0);
-        if (faceOnFocus && focused) {
-            float nx = 0, ny = 0, nz = 0;
-            if (anchorMask >= 0 && anchorMask < (int)ms.size()) {
-                // Anchored shots keep the anchor facing us the whole way out.
-                nx = ms[size_t(anchorMask)].normal[0];
-                ny = ms[size_t(anchorMask)].normal[1];
-                nz = ms[size_t(anchorMask)].normal[2];
-            } else {
-                for (int i : shot) {
-                    nx += ms[size_t(i)].normal[0];
-                    ny += ms[size_t(i)].normal[1];
-                    nz += ms[size_t(i)].normal[2];
-                }
-            }
-            const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-            if (len > 1e-5f) {
-                desEl = std::asin(std::clamp(ny / len, -1.f, 1.f));
-                desAz = std::atan2(nx, nz);
-            }
-        }
-        // Its own angle, advanced independently: the whole-scene orbit is
-        // centred on the piece, so borrowing it would sweep this mask out of
-        // frame and eventually behind the camera.
-        if (autoOrbit && shot.size() == 1 && !faceOnFocus) azimuth = focusAngle_;
+        desRadius = r * (1.0f + frameMargin) * 1.9f * zoom;
     } else {
         desTarget[0] = idleCentre_[0];
         desTarget[1] = idleCentre_[1];
@@ -1462,14 +1537,6 @@ void RootScene::applyFraming(double dt) {
     easeAngle(azimuth, desAz);
     easeAngle(elevation, desEl);
     camPrimed_ = true;
-    // The fog's near clearing and its height gradient both follow the framing,
-    // so a zoom does not change how much fog sits in front of the subject or
-    // where the gradient crosses it. Both are opt-out (startAuto /
-    // heightRefAuto) for a fixed camera where a hand-set value is wanted.
-    if (rr_) {
-        if (rr_->fog.startAuto)      rr_->fog.startDist = radius * rr_->fog.startFrac;
-        if (rr_->fog.heightRefAuto)  rr_->fog.heightRef = target[1];
-    }
 }
 
 void RootScene::ensureSize(int w, int h) {
@@ -1558,11 +1625,6 @@ void RootScene::buildSyntheticRoots(uint32_t seed) {
 
 void RootScene::advance(double dt) {
     t_ += dt;
-    // The orbit is the other thing that moves the camera, and it moves it
-    // whether or not anything is framing -- so freezing applyFraming alone
-    // still left the azimuth drifting a radian through the press, which
-    // uncovers the film's edges just as surely. See clothPinned().
-    if (autoOrbit && !clothPinned()) azimuth += orbitRate * (float)dt;
     rr_->fog.driftTime += (float)dt * rr_->fog.driftSpeed;
     rr_->pulse.time    += (float)dt;
     rr_->postTime      += (float)dt;
@@ -1574,8 +1636,6 @@ void RootScene::advance(double dt) {
         rr_->env.keyIntensity = micBaseKeyIntensity * (1.f + micIntensityGain * ambientLevel_);
     }
 
-    focusAngle_ += orbitRate * (float)dt;
-
     // Ahead of the face upload below: clothPressOffset_ (the anchor mask's
     // current retraction while the cloth press is running) has to be current
     // before uploadFaceFromMasks reads it for the anchor's placement.
@@ -1586,9 +1646,9 @@ void RootScene::advance(double dt) {
     // while it is pinned. The roots must not exist at the same time as the
     // cloth, and the fall is the longest part of the cloth being on screen, so
     // gating on the pinned window alone had the plant growing up through a
-    // sheet that was still visibly falling off it. Relying on the caller's beat
-    // to have paused the sim is a weaker guarantee than saying so here, since
-    // auto-framing runs no beats at all.
+    // sheet that was still visibly falling off it. Relying on the caller's
+    // sequence to have paused the sim is a weaker guarantee than saying so
+    // here, since auto-framing runs no sequence at all.
     if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothActive_) {
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
             sim_->step();
@@ -1599,12 +1659,21 @@ void RootScene::advance(double dt) {
         uploadFaceFromMasks();
     }
     // The masks have to reach the renderer even while the growth is held --
-    // otherwise the opening beat is an empty frame, and the deal-out (which
-    // moves masks without growing anything) never updates. Rebuilt every frame
-    // rather than once: it is a handful of masks, and the alternative is a
-    // one-shot flag that has to know about every reason a mask might move.
+    // otherwise the opening stage is an empty frame, and the cloth press
+    // (which moves the anchor without growing anything) never updates.
+    // Rebuilt every frame rather than once: it is a handful of masks, and the
+    // alternative is a one-shot flag that has to know about every reason a
+    // mask might move.
     if (useSim_ && sim_ && (simPaused || clothActive_)) uploadFaceFromMasks();
     applyFraming(dt);
+    // The fog's near clearing and its height gradient both follow the camera,
+    // so a pull-back does not change how much fog sits in front of the subject
+    // or where the gradient crosses it. Whoever moved the camera -- the
+    // sequence or the fallback framing above -- this reads the result. Both
+    // are opt-out (startAuto / heightRefAuto) for a fixed camera where a
+    // hand-set value is wanted.
+    if (rr_->fog.startAuto)      rr_->fog.startDist = radius * rr_->fog.startFrac;
+    if (rr_->fog.heightRefAuto)  rr_->fog.heightRef = target[1];
 
     // After the framing, deliberately: CameraTarget focus and CameraRelative
     // aiming both read the camera, so this has to be the thing that runs last.
@@ -1616,9 +1685,8 @@ void RootScene::advance(double dt) {
     // with what it leaves behind -- so a sheet sized and centred at the top of
     // advance() is a sheet built for the previous frame's camera. That is
     // invisible on a camera standing still and obvious on one easing into
-    // position, which is exactly the live default (the authored sequence is
-    // off unless the operator turns it on, so applyFraming's exponential ease
-    // is what actually drives the press). Measured on a reproduction of that
+    // position, which is what the operator's roots tab does outside the show
+    // (applyFraming's exponential ease driving the press). Measured on a reproduction of that
     // configuration, building before the ease put the film 0.34 mean absolute
     // away from the pond it is supposed to be identical to; building after it
     // brings that back to 0.006.

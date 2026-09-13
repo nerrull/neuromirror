@@ -472,7 +472,7 @@ void MetalRootRenderer::uploadSegments(const std::vector<float>& nodesXYZ,
 }
 
 void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {
-    faceVertCount_ = (int)(interleaved.size() / 12);
+    faceVertCount_ = (int)(interleaved.size() / kFaceFloats);
     if (faceVertCount_ > 0)
         uploadBuffer(faceBuf_, faceCap_, interleaved.data(),
                      interleaved.size() * sizeof(float));
@@ -585,7 +585,30 @@ int MetalRootRenderer::addInstance(const std::vector<float>& nodesXYZ,
     return (int)instances_.size() - 1;
 }
 
-void MetalRootRenderer::clearInstances() { instances_.clear(); }
+void MetalRootRenderer::clearInstances() {
+    // No ARC here (see the buffer-capacity note above): every buffer an
+    // instance holds is a +1 reference from makeBuffer, and a plain clear()
+    // would drop them all on the floor. The Reveal rebuilds the hood once per
+    // visitor now, so this is the difference between a bounded working set
+    // and a dozen structures' worth of buffers leaked per sitting. Command
+    // buffers retain what they reference, so releasing here is safe against
+    // a frame still in flight.
+    for (auto& inst : instances_) {
+        [inst.node release];
+        [inst.dist release];
+        for (auto& lod : inst.lods) { [lod.seg release]; [lod.rad release]; }
+    }
+    instances_.clear();
+}
+
+void MetalRootRenderer::setInstanceVisible(int i, bool visible) {
+    if (i >= 0 && i < (int)instances_.size()) instances_[size_t(i)].visible = visible;
+}
+
+void MetalRootRenderer::setInstanceLit(int i, float lit) {
+    if (i >= 0 && i < (int)instances_.size())
+        instances_[size_t(i)].lit = std::clamp(lit, 0.f, 1.f);
+}
 
 // The glitch stage's three targets. Separate from buildTargets because they
 // depend on nothing it tracks (they are always output-sized) and because most
@@ -765,10 +788,16 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     lastVisibleInstances = 0; lastCulledInstances = 0; lastDrawnSegments = 0;
 
     // Bind one capsule set's buffers and draw it (6 verts x segc instances).
+    // `lit` is the set's RootDrawU: 1 for the live system, whatever the
+    // instance was set to for a cached one.
     auto drawSet = [&](id<MTLBuffer> node, id<MTLBuffer> seg, id<MTLBuffer> rad,
                        id<MTLBuffer> dist, id<MTLBuffer> grp, id<MTLBuffer> prim,
-                       id<MTLBuffer> frame, id<MTLBuffer> aux, int segc) {
+                       id<MTLBuffer> frame, id<MTLBuffer> aux, int segc, float lit) {
         if (segc <= 0) return;
+        RootDrawU du = {};
+        du.lit = lit;
+        du.unlitLevel = std::max(0.f, env.unlitLevel);
+        [ge setFragmentBytes:&du length:sizeof(du) atIndex:9];
         [ge setVertexBuffer:node  offset:0 atIndex:0];
         [ge setVertexBuffer:seg   offset:0 atIndex:1];
         [ge setVertexBuffer:rad   offset:0 atIndex:2];
@@ -789,7 +818,8 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
 
     // The live/dynamic system (re-uploaded each frame) draws in full, unculled.
     if (segCount_ > 0) {
-        drawSet(nodeBuf_, segBuf_, radBuf_, distBuf_, grpBuf_, primBuf_, frameBuf_, auxBuf_, segCount_);
+        drawSet(nodeBuf_, segBuf_, radBuf_, distBuf_, grpBuf_, primBuf_, frameBuf_, auxBuf_,
+                segCount_, 1.f);
         lastVisibleInstances++;
     }
 
@@ -811,6 +841,9 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         const float lodThresh[3] = {300.f, 120.f, 45.f};   // px boundaries between LODs
 
         for (auto& inst : instances_) {
+            // Held back by the caller (not yet popped in) -- not a cull, so
+            // it is counted as neither visible nor culled.
+            if (!inst.visible) continue;
             simd_float3 c = {inst.center[0], inst.center[1], inst.center[2]};
             if (cullInstances) {
                 bool out = false;
@@ -829,7 +862,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                 if (screenPx < lodThresh[k] * lodBias) lod = k + 1;
             const InstanceLod& L = inst.lods[lod];
             drawSet(inst.node, L.seg, L.rad, inst.dist,
-                    defGrp_, defPrim_, defFrame_, defAux_, L.segCount);
+                    defGrp_, defPrim_, defFrame_, defAux_, L.segCount, inst.lit);
             lastVisibleInstances++;
         }
     }
@@ -853,6 +886,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         ffu.reliefScale = face.reliefScale;
         ffu.keyColor = gu.keyColor;
         ffu.spotLightDist = face.spotLightDist;
+        ffu.unlitLevel = std::max(0.f, env.unlitLevel);
         // 90 degrees or wider means "no cone"; the shader takes < -1 as the
         // disable sentinel so it can skip the work entirely.
         if (face.spotOuterDeg >= 89.9f) {

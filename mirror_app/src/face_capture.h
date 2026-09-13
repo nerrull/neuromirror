@@ -20,7 +20,11 @@
 // with the other two and stored anyway, because the root scene wears the mask
 // as vertex colour rather than as a texture (RootScene::setFaceColors), so the
 // common case of "load this person onto the masks" is then a read and an
-// upload with no resampling and no film in memory at all.
+// upload with no resampling and no film in memory at all. They are *linear*
+// -- the same values the live path samples off the mirror (g_face_colors)
+// and mask 0 wears through the press -- and meta says so (`colours =
+// linear`). A capture whose meta does not say so predates the convention and
+// stored the film's own 1/2.2-encoded values; LoadCapture brings it in line.
 
 #pragma once
 
@@ -39,7 +43,7 @@ struct FaceCapture {
     std::vector<float> verts;         // 3/vertex, fitter model units
     std::vector<int>   tris;          // 3/triangle, indices into verts
     std::vector<float> uv;            // 2/vertex, normalised film coords, y-down
-    std::vector<float> colors;        // 3/vertex, [0,1], film sampled at uv
+    std::vector<float> colors;        // 3/vertex, [0,1] linear, film sampled at uv
 
     bool valid() const {
         return !verts.empty() && !tris.empty() && uv.size() * 3 == verts.size() * 2;
@@ -63,9 +67,10 @@ bool SaveCapture(const FaceCapture& c, std::string& err);
 bool LoadCapture(const std::string& id, FaceCapture& c, std::string& err);
 bool DeleteCapture(const std::string& id, std::string& err);
 
-// Bilinear sample of `film` at every uv, into 3 floats/vertex. Clamped at the
-// edges, the way every other sampler here is: a vertex whose projection lands
-// outside the film takes the nearest pixel rather than black.
+// Bilinear sample of `film` at every uv, into 3 floats/vertex, decoded to
+// linear (the film is 1/2.2-encoded). Clamped at the edges, the way every
+// other sampler here is: a vertex whose projection lands outside the film
+// takes the nearest pixel rather than black.
 void BakeCaptureColors(FaceCapture& c);
 
 }  // namespace mirror

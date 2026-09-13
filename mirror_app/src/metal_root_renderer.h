@@ -206,6 +206,12 @@ public:
         // so warming the key meant warming every material.
         float keyColor[3]    = {1.00f, 0.93f, 0.82f};
         float keyIntensity   = 1.0f;
+        // What a structure drawn *dark* keeps of its radiance (see
+        // setInstanceLit and the face mesh's per-vertex lit): a fraction of
+        // everything, key and environment alike, rather than a separate
+        // material. Small but not zero -- a silhouette the fog can still
+        // find is the point, and true black reads as a hole in the frame.
+        float unlitLevel     = 0.035f;
     };
     // Fibre detail on the capsules and blades. Anisotropic on purpose -- see
     // root_geom.metal; isotropic noise here reads as grit on the surface rather
@@ -383,10 +389,13 @@ public:
                         const std::vector<float>* frames = nullptr,
                         const std::vector<float>* aux    = nullptr);
 
-    // Face mid-geometry mesh: flat interleaved triangles, 12 floats/vertex
-    // (pos3, normal3, color3, lightPos3) — same layout as FaceGL's VBO. Drawn
-    // into the shared colour+depth target between the capsules and the fog.
-    // Empty data clears the face pass.
+    // Face mid-geometry mesh: flat interleaved triangles, kFaceFloats (13)
+    // floats/vertex (pos3, normal3, color3, lightPos3, lit) — FaceGL's VBO
+    // layout plus the lit flag, 1 for a mask shaded as normal and 0 for one
+    // standing dark (env.unlitLevel of its radiance). Drawn into the shared
+    // colour+depth target between the capsules and the fog. Empty data clears
+    // the face pass.
+    static constexpr int kFaceFloats = 13;
     void uploadFaceMesh(const std::vector<float>& interleaved);
 
     // Leaf mid-geometry mesh: same 12-floats/vertex layout, but the last three
@@ -426,6 +435,14 @@ public:
                      const InstancePlacement&  place);
     void clearInstances();
     int  instanceCount() const { return (int)instances_.size(); }
+    // Per-instance state for the Reveal: an instance can be held back from
+    // the draw entirely, or drawn dark -- present and occluding but keeping
+    // only env.unlitLevel of its radiance -- and then lit. `lit` is 0..1, so
+    // a caller may ramp it; the two are independent (visible and unlit is
+    // the "popped in dark" state). Both default to visible and lit, which is
+    // what buildField's instances want. Out-of-range indices are ignored.
+    void setInstanceVisible(int i, bool visible);
+    void setInstanceLit(int i, float lit);
 
     // Culling / LOD tuning.
     bool  cullInstances = true;    // frustum-cull whole systems
@@ -609,6 +626,8 @@ private:
         std::vector<InstanceLod> lods;    // lods[0] = full detail
         float center[3] = {0, 0, 0};
         float radius = 0.f;               // world-space bounding-sphere radius
+        bool  visible = true;             // see setInstanceVisible
+        float lit = 1.f;                  // see setInstanceLit
     };
     std::vector<Instance> instances_;
     id<MTLBuffer> defPrim_ = nil, defAux_ = nil, defGrp_ = nil, defFrame_ = nil;

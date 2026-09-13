@@ -1,8 +1,8 @@
 // dev_tools.h — the headless CLI dev tools main.mm's --flag dispatch calls
 // into: benchmarks (bench/rootbench/fieldbench), smoke tests (selftest/
 // roottest), and render/diagnostic capture tools (rootshot, growshot,
-// leafshot, abshot, rootmovie, maskshot, mirrorclip, transhot, orientshot,
-// fieldshot, facetest, taptest, audiotest, textshot).
+// leafshot, abshot, maskshot, mirrorclip, transhot, orientshot,
+// fieldshot, facetest, taptest, audiotest, textshot, clothshot, seqshot).
 //
 // None of these touch the live app's per-frame state -- each opens its own
 // MetalContext (or none at all) and runs to completion, so they carry no
@@ -34,17 +34,7 @@ int  growshot(const char* path, int steps, float az, float el, float rad,
               float faceRecess = 1e9f, int W = 960, int H = 540,
               const std::vector<std::pair<std::string, std::string>>& fields = {},
               float zoom = 1.f, float faces = 0.f, unsigned faceSeed = 7u,
-              int focus = -1, int group = -1, int groupOf = 3);
-int  rootmovie(const char* outPath, double seconds, int fps, int W, int H,
-               const std::vector<std::pair<std::string, std::string>>& fields,
-               float faces, unsigned faceSeed);
-// The grown system, orbited at a chosen framing -- the shot --rootmovie's beat
-// sequence cannot give, since its first beats are held tight on one mask. See
-// the definition for the key=value knobs.
-int  rootorbit(const char* outPath, double seconds, int fps, int W, int H,
-               const std::vector<std::pair<std::string, std::string>>& fields,
-               int steps, float zoom, float el, float rate,
-               float faces, unsigned faceSeed, double moshAt, float moshFor);
+              int focus = -1);
 int  leafshot(const char* path, int W, int H, float az, float el, float radius);
 int  abshot(const char* path, int tranche, int W, int H,
             int focusMask, float zoom, float az, float el, int steps);
@@ -71,3 +61,8 @@ int  textshot(const char* path, const char* str, float warp,
 // and is it still flat" -- a photograph hides both.
 int  clothshot(const char* prefix, int frames, int W, int H, float fps,
                const char* photo);
+// The timeline from Grow to Orbit, offscreen, retimed short, with stills of
+// the Reveal: before anything pops in, half-way (dark and lit structures in
+// one frame), all lit, and into the Orbit. Reports the variation bake time.
+int  seqshot(const char* prefix, int W, int H,
+             const std::vector<std::pair<std::string, std::string>>& fields);

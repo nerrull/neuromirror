@@ -154,7 +154,11 @@ bool SaveCapture(const FaceCapture& c, std::string& err) {
     if (!ok) { err = "short write on mesh.bin"; return false; }
 
     if (FILE* m = fopen((dir + "/meta").c_str(), "wb")) {
-        fprintf(m, "id = %s\ncreated = %s\nvertices = %u\ntriangles = %u\nfilm = %dx%d\n",
+        // `colours = linear` marks the convention the baked colours are stored
+        // in (see BakeCaptureColors); a meta without the line predates it and
+        // holds the film's encoded values, which LoadCapture decodes.
+        fprintf(m, "id = %s\ncreated = %s\nvertices = %u\ntriangles = %u\nfilm = %dx%d\n"
+                   "colours = linear\n",
                 c.id.c_str(), c.created.c_str(), nv, ni / 3, c.filmW, c.filmH);
         fclose(m);
     }
@@ -200,15 +204,24 @@ bool LoadCapture(const std::string& id, FaceCapture& c, std::string& err) {
         c.film.clear();
         c.filmW = c.filmH = 0;
     }
-    if (c.colors.size() != c.verts.size()) BakeCaptureColors(c);
-
+    bool linear = false;
     if (FILE* m = fopen((dir + "/meta").c_str(), "rb")) {
         char line[256];
         while (fgets(line, sizeof line, m)) {
             char v[128];
             if (sscanf(line, "created = %127[^\n]", v) == 1) c.created = v;
+            else if (sscanf(line, "colours = %127s", v) == 1) linear = std::strcmp(v, "linear") == 0;
         }
         fclose(m);
+    }
+    // The colours are linear (what the masks wear, see BakeCaptureColors).
+    // A capture from before the meta said so stored the film's own encoded
+    // values: re-bake from the film where it is still there, else decode the
+    // stored ones in place -- either way the caller sees one convention.
+    if (c.colors.size() != c.verts.size() || (!linear && !c.film.empty())) {
+        BakeCaptureColors(c);
+    } else if (!linear) {
+        for (float& v : c.colors) v = std::pow(std::clamp(v, 0.f, 1.f), 2.2f);
     }
     return true;
 }
@@ -229,10 +242,16 @@ void BakeCaptureColors(FaceCapture& c) {
     if (c.filmW <= 0 || c.filmH <= 0 || c.film.empty() || c.uv.size() < n * 2) return;
 
     const int W = c.filmW, H = c.filmH;
+    // Decoded to linear per texel before the bilinear blend: the film is the
+    // mirror's linear output encoded with 1/2.2 for 8 bits (freezeFilm /
+    // autoCaptureAtCut), and the masks wear these as the same linear values
+    // the live path samples straight off the mirror (g_face_colors).
+    float lut[256];
+    for (int i = 0; i < 256; ++i) lut[i] = std::pow(float(i) / 255.f, 2.2f);
     auto at = [&](int x, int y, int ch) -> float {
         x = std::clamp(x, 0, W - 1);
         y = std::clamp(y, 0, H - 1);
-        return c.film[(size_t(y) * size_t(W) + size_t(x)) * 3 + size_t(ch)] / 255.f;
+        return lut[c.film[(size_t(y) * size_t(W) + size_t(x)) * 3 + size_t(ch)]];
     };
     for (size_t i = 0; i < n; ++i) {
         const float fx = c.uv[i * 2] * float(W) - 0.5f;

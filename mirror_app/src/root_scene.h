@@ -12,6 +12,7 @@
 #include "metal_root_renderer.h"
 #include "root_sim.h"
 #include "cloth.h"
+#include "face_capture.h"
 
 #include <algorithm>
 #include <cmath>
@@ -57,21 +58,12 @@ public:
     // re-normalising per frame would rescale the mask every time the person
     // opened their mouth, since an expression changes the mesh's extent. So the
     // mask holds still and the face moves inside it, which is the intent.
+    //
+    // This, setFaceColors and clearFittedFace only ever touch mask 0 -- the
+    // anchor, the current visitor. Every other mask wears a face from the
+    // bank (below), or mask 0's face when its slot is empty.
     void setFittedFace(const std::vector<float>& verts, const std::vector<int>& tris);
 
-    // A different face on every mask, sampled from the morphable basis.
-    //
-    // Test data, and there is no photo set in the repo to fit instead -- but
-    // sampling the basis is the better test anyway: it is the same generator
-    // the fitter projects onto, the identities are reproducible from a seed,
-    // and nobody's face is in the repository. `amount` scales the sampled
-    // coefficients: 0 is twelve copies of the neutral mask, 1 is about the
-    // spread a room of strangers covers.
-    //
-    // Returns the per-face identity coefficients, so a layout that places by
-    // resemblance can be driven by the same numbers the faces were built from.
-    std::vector<std::vector<float>> setTestIdentities(int n, unsigned seed, float amount);
-    void clearTestIdentities();
     void clearFittedFace();
     bool usingFittedFace() const { return fitted_face_; }
 
@@ -87,59 +79,88 @@ public:
     void setFaceColors(const std::vector<float>& rgb);
     bool hasFaceColors() const { return !faceColors_.empty(); }
 
-    // --- camera ------------------------------------------------------------
-    // Frame the scene from its own bounds rather than from constants: the cone
-    // is sized by R0/Hh, so any change to those left hardcoded framing pointing
-    // at the wrong part of it. `focusMask` >= 0 centres on one revealed mask
-    // and frames tight to its radius, orbiting on its own angle -- reusing the
-    // whole-scene arc would swing a mask out of frame, since that arc is
-    // centred on the piece and not on the mask.
-    bool  autoFrame = true;
-    int   focusMask = -1;      // -1 = whole scene
-    // A cluster of masks rather than one: masks [g*size, (g+1)*size) of the
-    // rosette/lobe grouping. The middle shot between a face and the whole piece.
-    int   focusGroup = -1;
-    int   focusGroupSize = 3;
-    float zoom      = 1.0f;
+    // --- the face bank -----------------------------------------------------
+    // Previous visitors, on the other masks. `bank` is what main.mm loaded
+    // from captures/ (face_capture.h), *newest first* and without the sitting
+    // now on mask 0. It is dealt out per the plan's "face bank":
+    //
+    //   - masks 1..N-1 (the chain the root grows through) wear bank[0..N-2];
+    //   - what is left is dealt N per structure, newest first, to the other
+    //     structures Reveal stands around this one: floor(older / N) of
+    //     them, at most `maxStructures`. A bank too young for even one is
+    //     shown `minStructures` structures instead, repeating what there is.
+    //
+    // A slot the bank cannot fill repeats what exists -- and with an empty
+    // bank that is mask 0's own face, which is also how the operator tests
+    // with no bank at all. Each capture is normalised on its own, by the
+    // same rule setFittedFace applies to a visitor's first mesh (centroid,
+    // largest absolute coordinate), so a bank face and the live one come out
+    // the same size without the live normalisation having to exist yet --
+    // this is called from the Transition edge, before the visitor is tracked.
+    // N is simParams().N, the masks the plant will place.
+    // TODO(face-bank): repeat is a placeholder until the bank is deep enough.
+    void assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
+                         int maxStructures, int minStructures);
+    void clearBankFaces();
+    // Which bank face each of the other structures' masks wears: structure k,
+    // mask j -> structureFaces()[k].captureIdx[j], an index into the `bank`
+    // passed to assignBankFaces (-1 = none, draw mask 0's face). The
+    // assignment is independent of how the structures' geometry is made --
+    // today the neighbour copies, later baked variations -- and stays the
+    // same data either way.
+    struct StructureFaces { std::vector<int> captureIdx; };
+    const std::vector<StructureFaces>& structureFaces() const { return structureFaces_; }
+    // How many other structures the bank says to show; 0 until
+    // assignBankFaces has run (RootSequence then falls back to its own cap).
+    int structureCount() const { return (int)structureFaces_.size(); }
+    // The chain's slots, same indexing: mask i -> chainFaces()[i] (-1 = mask
+    // 0's face; slot 0 is always -1, it is the live face).
+    const std::vector<int>& chainFaces() const { return chainFaces_; }
 
-    // Frame on the masks, not on every root node.
+    // A different face on every mask, sampled from the morphable basis.
     //
-    // The roots trail: a couple of laterals hanging a long way below the last
-    // nest drag the bounding box down and the whole piece shrinks into the
-    // middle of the frame to accommodate two threads nobody is looking at. The
-    // masks are what the shot is about, so they are what it is framed on --
-    // their centroid, and an extent that covers them with a margin. Roots
-    // outside that are allowed to leave the frame.
-    // On a single mask, put the camera on that mask's own normal.
+    // Test data, and there is no photo set in the repo to fit instead -- but
+    // sampling the basis is the better test anyway: it is the same generator
+    // the fitter projects onto, the identities are reproducible from a seed,
+    // and nobody's face is in the repository. `amount` scales the sampled
+    // coefficients: 0 is twelve copies of the neutral mask, 1 is about the
+    // spread a room of strangers covers.
     //
-    // Without it the "face alone" shot inherits whatever azimuth the whole-piece
-    // orbit was on, which on a cylinder or a sphere routinely means looking at
-    // the back of the head through the far wall of the structure. A face is a
-    // thing with a front; framing it means standing in front of it.
-    // The face the shot is built around. While it is set the camera target
-    // stays on that mask and only the radius changes, so a pull-back expands
-    // the world around a face that never leaves the centre of frame -- which is
-    // the move the piece is made of, and not something a cut between framings
-    // can imitate.
-    // Defaults to 0: RootSim now places mask 0 at one fixed, known transform
-    // (see root_sim.cpp's anchor-first placement in reset()) specifically so
-    // there is always an unambiguous "the anchor" to build a camera -- and,
-    // per the cloth work, a collider frame -- against. -1 still opts back out
-    // to the old "whole scene" framing for callers that want it.
+    // Fills the bank the same way assignBankFaces does (mask 0 gets the
+    // first identity, masks 1..n-1 the rest), with no colours, so the
+    // devtools shots exercise exactly the per-mask path the show uses.
+    // Returns the per-face identity coefficients, so a layout that places by
+    // resemblance can be driven by the same numbers the faces were built from.
+    std::vector<std::vector<float>> setTestIdentities(int n, unsigned seed, float amount);
+    void clearTestIdentities() { clearBankFaces(); }
+
+    // --- camera ------------------------------------------------------------
+    // In the show, RootSequence (root_sequence.h) owns the camera outright and
+    // turns autoFrame off. What is left here is the one fallback framing the
+    // operator/devtools paths (the roots tab outside Transition/Roots,
+    // --growshot, --abshot, --clothshot) still need: the whole planned layout
+    // from the current angles, or one mask tight and square to its normal.
+    // Off, the camera is whatever azimuth/elevation/radius/target say.
+    bool  autoFrame = true;
+    // >= 0 frames that planned mask alone -- tight to its own extent, camera
+    // straight down its normal: a face is a thing with a front, and framing
+    // it means standing in front of it. -1 frames the whole planned layout
+    // on its centroid (the masks, not every root node: a couple of laterals
+    // trailing below the last nest would otherwise drag the bound down and
+    // shrink the piece into the middle of the frame).
+    int   focusMask = -1;
+    float zoom      = 1.0f;
+    // The mask the cloth presses against and the key can aim at. RootSim
+    // places mask 0 at one fixed, known transform (see root_sim.cpp's
+    // anchor-first placement in reset()) specifically so there is always an
+    // unambiguous "the anchor" to build a collider frame against.
     int   anchorMask   = 0;
-    // Seconds for the camera to converge on a new shot. 0 snaps, which is what
+    // Seconds for autoFrame to converge on a new shot. 0 snaps, which is what
     // the stills want; anything above about 0.3 reads as a move.
     float camEase      = 0.f;
-    bool  faceOnFocus  = true;
-    bool  frameOnMasks = true;
-    // Frame on the layout rather than on what has been revealed so far.
-    bool  frameOnPlanned = true;
-    // Margin around the mask bound, as a fraction of its extent.
+    // Margin around the whole-layout bound, as a fraction of its extent.
     float frameMargin  = 0.35f;
     int   maskCount() const { return (int)revealedMasks().size(); }
-    // Centre/radius covering a set of revealed masks; false when none of them
-    // have been revealed yet.
-    bool  maskBound(const std::vector<int>& idx, float centre[3], float& radius) const;
 
     // Restart the live CPlantBox growth (no-op if the sim failed to load).
     void regrow();
@@ -157,16 +178,16 @@ public:
     rootsim::SimParams& simParams() { return simParams_; }
     const rootsim::SimParams& simParams() const { return simParams_; }
     // How many sim steps a full growth run takes for the current simParams_,
-    // for pacing the live beat schedule against (see RootCameraSequence::
-    // begin()). Computed once by actually growing a throwaway sim to
-    // completion, then cached -- it used to be recomputed the same way on
+    // for pacing the live timeline against (see RootSequence::begin()).
+    // Computed once by actually growing a throwaway sim to completion, then
+    // cached -- it used to be recomputed the same way on
     // every entry into the Roots phase (i.e. every visitor), which meant
     // paying for an entire extra full growth simulation, discarded, once per
     // show loop. Invalidated by regrow(), the only thing that changes what
     // this number should be.
     int growthStepEstimate() const;
     // Bumped by regrow(); the plant's geometry (and therefore anything
-    // derived from it, e.g. RootCameraSequence's neighbour hood) is only
+    // derived from it, e.g. RootSequence's neighbour hood) is only
     // actually different after that. Callers that cache work keyed on the
     // current growth can skip redoing it while this hasn't changed instead of
     // redoing it on every visitor.
@@ -193,28 +214,48 @@ public:
     const std::vector<rootsim::SimMask>& plannedMasks() const;
     bool simDone()   const;
 
-    // Grow one system, then cache it and tile a gridN x gridN field of instances
-    // (varied yaw/scale) to exercise LOD + frustum culling. Stops the live path.
     // Hold the growth where it is without tearing anything down: the opening
-    // beat of the pull-back is a face that has not grown yet.
+    // stage of the piece is a face that has not grown yet.
     bool  simPaused = false;
 
-    // --- the mask deal-out --------------------------------------------------
-    // Draw every mask the layout will place, not only the ones a root has
-    // reached, and slide them out of the first mask into position.
-    //
-    // The piece opens on one face; the rest of the structure arriving is a
-    // move in its own right, before anything grows. `maskDeal` is how far out
-    // they have travelled: 0 puts all of them on top of the first mask, 1 puts
-    // each at its own place. Position only -- each mask keeps its own frame the
-    // whole way, so they face outward as they arrive rather than swinging round.
-    bool  showPlannedMasks = false;
-    float maskDeal = 1.f;
-    // Copies of the structure standing around this one need faces too: the
-    // instance path carries capsules only, so the masks have to be emitted into
-    // the shared face mesh, transformed the same way the geometry was.
-    struct NeighbourPlacement { float translate[3]; float rotYaw; float scale; };
+    // --- which planned masks are drawn --------------------------------------
+    // A mask is drawn once the root has reached it (the sim's own reveal), or
+    // once something has flagged it visible -- RootSequence's WhenFramed
+    // reveal mode does that the first frame a planned mask's bound is inside
+    // the frustum. A flag never clears on its own; replant() drops them all
+    // with the rest of the last visitor.
+    void setMaskVisible(int i);
+    bool maskVisible(int i) const;   // reached *or* flagged
+
+    // --- the other structures (Reveal) ---------------------------------------
+    // "Variations": throwaway growths of the current simParams_ at seeds
+    // seed+1..seed+K, run to completion and kept as geometry + planned masks,
+    // so the structures standing around this one are previous plants rather
+    // than copies of it. Baked synchronously the first time they are asked
+    // for -- a stall of a few seconds, once per parameter change and never in
+    // the installed show -- and cached like growthStepEstimate(): regrow()
+    // drops them, replant() keeps them.
+    void ensureVariations(int K);
+    int  variationCount() const { return (int)variations_.size(); }
+    // One placed structure. The instance path carries capsules only, so its
+    // masks are emitted into the shared face mesh, transformed the same way
+    // its geometry was (scale, yaw about Y, translate -- addInstance's order).
+    // `centre`/`radius` are its masks' bound in world space, for framing.
+    struct NeighbourPlacement {
+        float translate[3]; float rotYaw; float scale;
+        int   variation;      // index into the baked variations
+        int   instance;       // the renderer's instance index
+        float centre[3]; float radius;
+        bool  visible;        // drawn at all (capsules and masks)
+        bool  lit;            // shaded as normal, else dark (env.unlitLevel)
+    };
     std::vector<NeighbourPlacement> neighbours;
+    // The Reveal steps a structure in dark and then lights it. Structure k is
+    // neighbours[k]; the live structure and its chain are always drawn and
+    // lit. Each call re-emits the face mesh, so call on a change, not per
+    // frame. Out-of-range k is ignored.
+    void setStructureVisible(int k, bool visible);
+    void setStructureLit(int k, bool lit);
 
     // Where the growth currently is, in render space; false when nothing is
     // growing. For a camera that follows the tip instead of the structure.
@@ -222,16 +263,25 @@ public:
     // The hop in flight: the mask it is heading for, and whether it got there.
     int   currentMask() const;
     bool  arrivedAtMask() const;
+    // Grow one system, then cache it and tile a gridN x gridN field of instances
+    // (varied yaw/scale) to exercise LOD + frustum culling. Stops the live path.
     void buildField(int gridN, float spacing);
-    // Copies of the grown system standing around this one, as cached instances.
-    // Unlike buildField this keeps the live system and its faces -- it is the
-    // last beat of the pull-back, where the piece turns out to be one of many.
-    // `centre` is the middle of the ring in world space -- the structure hangs
-    // below the origin, so a ring about the origin puts neighbours level with
-    // nothing. `keepClearAz` is the camera's azimuth: placements within a wedge
-    // of it are skipped, or a neighbour lands between the camera and the piece
-    // and fills the frame with a wall.
-    void addNeighbours(int count, float ringRadius, unsigned seed,
+    // The other structures standing around this one, as cached instances of
+    // the baked variations (structure k wears variation k % K and, through
+    // the face mesh, structureFaces()[k]). Unlike buildField this keeps the
+    // live system and its faces -- it is the Reveal stage of the piece, where
+    // it turns out to be one of many. Placed on a phyllotaxis: structure k at
+    // k x the golden angle, `spacing` x `structR` x sqrt(k+1) out, on the
+    // plane of `centre` (this structure's own centre -- it hangs below the
+    // origin, so a ring about the origin would put neighbours level with
+    // nothing). `keepClearAz` is the camera's azimuth: the pattern is turned
+    // so structure 0 stands directly behind the subject from there, and a
+    // placement that lands inside the wedge in front of the camera is put
+    // across to the far side, or a structure lands between the camera and
+    // the piece and fills the frame with a wall. Every structure starts
+    // hidden and dark; setStructureVisible/Lit bring them in. Bakes the
+    // variations first if they are not there yet.
+    void addNeighbours(int count, int variations, float spacing, float structR,
                        const float centre[3], float keepClearAz);
 
     // --- the cloth: pond -> face press/release, ported from TransitionScene ---
@@ -400,8 +450,6 @@ public:
     // it differs from what actually reaches the renderer once room
     // responsivity is on.
     float lightDir[3] = {0.4f, 0.8f, 0.35f};
-    bool  autoOrbit = true;
-    float orbitRate = 0.15f;   // rad/s
 
     // --- room responsivity ---------------------------------------------------
     // The key light stops being purely authored once these are on: its
@@ -418,6 +466,11 @@ public:
     // straight through with no remapping.
     void setTrackedPosition(float x, float y, bool valid) {
         trackedX_ = x; trackedY_ = y; trackedValid_ = valid;
+    }
+    // ...and read back, for RootSequence's head pan -- the same position the
+    // key light swings on, so the two agree on where the visitor is.
+    bool trackedPosition(float& x, float& y) const {
+        x = trackedX_; y = trackedY_; return trackedValid_;
     }
     bool  micLightResponsive  = true;
     // The key's intensity at silence; at ambientLevel==1 it reaches
@@ -509,10 +562,10 @@ private:
     // camera is actually looking through, not the anchor's position.
     //
     // These are the same point only when the camera has settled on the anchor,
-    // and live it routinely has not: g_root_authored_camera is off by default,
-    // so applyFraming drives the camera, and applyFraming *eases* -- target
-    // converges exponentially from wherever the previous phase left it (the
-    // default is {0,-8,0}). A sheet centred on the anchor while the camera is
+    // and live it may not have: outside the show's own phases applyFraming
+    // drives the camera, and applyFraming *eases* -- target converges
+    // exponentially from wherever the previous phase left it (the default is
+    // {0,-8,0}). A sheet centred on the anchor while the camera is
     // still looking below and beside it reads as the film sitting up and to
     // one side, with the far corner running off the end of its own uv and
     // smearing the film's edge pixels. Following the view axis instead makes
@@ -555,6 +608,15 @@ private:
     std::unique_ptr<rootsim::RootSim>  sim_;
     rootsim::SimParams simParams_;
     mutable int growthStepEstimate_ = -1;   // -1 = not computed yet; see growthStepEstimate()
+    // The baked variations -- see ensureVariations. Emptied by regrow().
+    struct Variation {
+        std::vector<float> nodes, radii;
+        std::vector<int>   segs;
+        std::vector<rootsim::SimMask> masks;   // its planned layout
+        float centre[3] = {0.f, 0.f, 0.f};     // the masks' bound, local
+        float radius = 1.f;
+    };
+    std::vector<Variation> variations_;
     int growGeneration_ = 0;                // see growGeneration()
     bool useSim_ = false;
     // Whether CPlantBox is usable at all. Distinct from useSim_, which also
@@ -566,12 +628,37 @@ private:
     // The canonical model, kept so clearFittedFace() can go back to it without
     // re-reading the .obj.
     std::vector<float> canonVerts_;
-    // Per-mask meshes, when the masks are not all the same face. Empty means
-    // every mask draws faceVerts_, which is the live/fitted case.
-    std::vector<std::vector<float>> maskVerts_;
+    // The face bank, as uploaded: one normalised mesh + its own colours per
+    // capture handed to assignBankFaces, in the bank's own order. Its own
+    // triangles too -- every capture is fitter-basis topology, and the live
+    // face (faceTris_) may still be the canonical model's when nobody has
+    // been tracked yet.
+    struct BankFace {
+        std::vector<float> verts;
+        std::vector<int>   tris;
+        std::vector<float> colors;   // 3/vertex, empty = flat material
+    };
+    std::vector<BankFace> bankFaces_;
+    // Which bank face each planned mask draws; see chainFaces().
+    std::vector<int> chainFaces_;
+    std::vector<StructureFaces> structureFaces_;
+    // Mask `slot` of structure `structure` (-1 = this one, the live chain)
+    // resolved to the face it draws: a bank face, or mask 0's when the slot
+    // is empty or out of range.
+    struct FaceRef {
+        const std::vector<float>* verts;
+        const std::vector<int>*   tris;
+        const std::vector<float>* colors;
+    };
+    FaceRef faceFor(int structure, int slot) const;
+    // The fitted-mesh normalisation rule (see setFittedFace): centroid and
+    // 1 / largest absolute coordinate about it.
+    static void faceNormalisation(const std::vector<float>& verts, float centre[3], float& scale);
+    // Planned masks flagged visible ahead of the root reaching them -- see
+    // setMaskVisible. Indexed like plannedMasks(); shorter means "not flagged".
+    std::vector<char> maskFlagged_;
     float idleCentre_[3] = {0.f, 0.f, 0.f};
     float idleExtent_ = 10.f;
-    float focusAngle_ = 0.f;
     void  updateBounds(const std::vector<float>& nodes);
     void  applyFraming(double dt = 0.0);
     bool  camPrimed_ = false;   // false until the first frame has snapped

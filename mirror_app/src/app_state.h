@@ -24,7 +24,7 @@
 #include "midi_in.h"
 #include "screen_layout.h"
 #include "show_timeline.h"
-#include "root_camera_sequence.h"
+#include "root_sequence.h"
 #include "presence.h"
 #include "chord.h"
 #include "wwise_audio.h"
@@ -119,7 +119,6 @@ extern mirror::FaceFitter  g_fitter;
 extern bool  g_track_on;
 extern bool  g_mask_fit;
 extern bool  g_drive_roots;
-extern bool  g_root_authored_camera;
 extern int   g_track_w;
 extern int   g_track_h;
 extern int   g_track_px;
@@ -142,7 +141,7 @@ extern int g_show_scene[(int)show::Phase::Count];
 extern float g_show_min[(int)show::Phase::Count];
 extern float g_show_max[(int)show::Phase::Count];
 extern float g_show_hold[(int)show::Phase::Count][show::kMaxEdges];
-extern RootBeatParams g_root_beats;
+extern RootSequenceParams g_root_seq;
 extern float g_phase_fog_intensity[(int)show::Phase::Count];
 extern float g_screen_fade;
 extern float g_idle_intro_seconds;

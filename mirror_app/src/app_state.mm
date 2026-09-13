@@ -110,15 +110,6 @@ mirror::FaceFitter  g_fitter;
 bool  g_track_on     = false;   // run the tracker at all
 bool  g_mask_fit     = true;    // crop the live fit to the face when there is one
 bool  g_drive_roots  = true;    // fitted mesh -> the root scene's face masks
-// The --rootmovie beat sequence, played live instead of the manual/auto-frame
-// camera whenever the show is in Phase::Roots.
-//
-// On by default. Off, the show ran on auto-framing, which eases toward the
-// whole layout every frame -- so the press happened on a camera in mid-flight,
-// and beat 1's "hold on the face while the world grows around it" never
-// happened live at all. The authored sequence is the one the piece was cut to;
-// auto-framing is the fallback for looking at a scene, not for playing one.
-bool  g_root_authored_camera = true;
 // The tracker's input frame.
 //
 // Its *aspect must be the composition's*, and the size is derived per frame to
@@ -187,24 +178,24 @@ float g_show_min[(int)show::Phase::Count] = {};
 float g_show_max[(int)show::Phase::Count] = {};
 float g_show_hold[(int)show::Phase::Count][show::kMaxEdges] = {};
 
-// The Roots phase's beat schedule (durations, growth-rate ranges, beat-4
-// camera speed/angular cap, outro length) -- panel-declared under
-// `show/roots/beat N`, see the "show" tab. Passed fresh to RootCameraSequence
-// every frame, so a slider dragged mid-shot retimes what is running rather
-// than requiring a restart.
-RootBeatParams g_root_beats;
+// The Roots timeline's knobs (stage durations, growth-rate range, camera
+// angles and easing, reveal, orbit, outro, head pan) -- panel-declared under
+// `show/roots`, see the "show" tab. Passed fresh to RootSequence every
+// frame, so a slider dragged mid-shot retimes what is running rather than
+// requiring a restart.
+RootSequenceParams g_root_seq;
 
 // Per-phase fog visibility (world units -- lower is thicker), see
 // MetalRootRenderer::Fog::visibility. Only the Roots renderer ever draws fog,
 // but it is kept one-per-phase as asked rather than one global, so a look
 // dialled in for Roots does not silently apply if fog is ever added to
-// another scene. `beat1_fog_fade_seconds` on g_root_beats is not here: it is
-// a Roots-beat duration, so it lives with the rest of the beat schedule.
+// another scene. `fog_fade_seconds` on g_root_seq is not here: it is a Roots
+// stage duration, so it lives with the rest of the timeline.
 float g_phase_fog_intensity[(int)show::Phase::Count] = {45.f, 45.f, 45.f, 45.f};
 
 // Screen-wide fade to black (0 = clear, 1 = black), applied in present.metal
 // after everything else is composited. Two things drive it, never at once:
-// RootCameraSequence's outro beat ramps it up as the room empties, and Idle's
+// RootSequence's outro stage ramps it up as the room empties, and Idle's
 // own intro timer ramps it back down when the mirror resumes. See the
 // entries()-diff block and the Roots render branch below.
 float g_screen_fade = 0.f;

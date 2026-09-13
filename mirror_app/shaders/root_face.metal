@@ -4,7 +4,10 @@
 // into the SAME colour + depth targets as the root capsules, between the capsule
 // pass and the fog pass, so they depth-composite against the sphere-traced roots
 // and are included in the fog. Marble veining + a per-face point light. Vertices
-// arrive interleaved (pos3, normal3, color3, lightPos3) exactly as the GL VBO.
+// arrive interleaved (pos3, normal3, color3, lightPos3, lit) -- the GL VBO's
+// layout plus one float: whether the mask is lit (1) or standing dark (0). One
+// mesh holds every structure's masks, so a per-structure state has to ride on
+// the vertices; see RootScene::uploadFaceFromMasks.
 //
 // Depth: the capsule pass writes custom depth = (clip.z/clip.w)*0.5+0.5 (GL
 // convention). These triangles use the hardware rasterizer's depth, so the vertex
@@ -21,6 +24,7 @@ struct FaceVertex {
     packed_float3 normal;
     packed_float3 color;
     packed_float3 lightPos;
+    float         lit;
 };
 
 struct FaceVOut {
@@ -29,6 +33,7 @@ struct FaceVOut {
     float3 normal;
     float3 color;
     float3 lightPos;
+    float  lit;
 };
 
 vertex FaceVOut root_face_vs(uint vid [[vertex_id]],
@@ -40,6 +45,7 @@ vertex FaceVOut root_face_vs(uint vid [[vertex_id]],
     o.normal   = float3(v.normal);
     o.color    = float3(v.color);
     o.lightPos = float3(v.lightPos);
+    o.lit      = v.lit;
     float4 c = U.viewProj * float4(float3(v.pos), 1.0);
     c.z = (c.z + c.w) * 0.5;   // GL [-1,1] clip-z -> Metal [0,1], matches capsule depth
     o.pos = c;
@@ -51,5 +57,10 @@ fragment float4 root_face_fs(FaceVOut in [[stage_in]],
     // World position doubles as the marble's coordinate here: the root scene is
     // where veinScale was tuned, so it is the scene that defines what the
     // pattern's world size means.
-    return shadeFace(in.worldPos, in.normal, in.color, in.lightPos, U);
+    float4 c = shadeFace(in.worldPos, in.normal, in.color, in.lightPos, U);
+    // A dark mask keeps a sliver of its radiance and nothing else -- the same
+    // rule as the capsules' RootDrawU::lit, and like there the alpha (the
+    // indirect share) is a ratio and stays as it was.
+    c.rgb *= mix(U.unlitLevel, 1.0, saturate(in.lit));
+    return c;
 }

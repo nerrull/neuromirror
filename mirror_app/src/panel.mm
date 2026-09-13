@@ -522,6 +522,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     const show::Phase p = (show::Phase)pi;
                     const show::PhaseGraph& g = show::Graph(p);
                     ui::Section sec(show::PhaseName(p));
+                    // The phases are named "roots" and "transition", which are
+                    // also bank rules -- and a section matching a rule takes
+                    // that bank at any depth (see kBankRules). These are the
+                    // running order, not the root scene's look, so say so:
+                    // everything under show/<phase> is saved with the show.
+                    ui::SetBank(ui::Bank::Show);
                     ui::BeginHeader(show::PhaseName(p), /*default_open=*/false);
                     {
                         ui::SliderFloat("min", &g_show_min[pi], 0.f, 120.f, "%.1fs");
@@ -549,111 +555,180 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         }
 
                         if (p == show::Phase::Roots) {
-                            struct BeatUI { const char* label; float* dur; float* rmin;
-                                            float* rmax; };
-                            const BeatUI beats[] = {
-                                {"beat 1  face alone", &g_root_beats.beat1_seconds,
-                                 nullptr, nullptr},
-                                {"beat 2  masks deal", &g_root_beats.beat2_seconds,
-                                 &g_root_beats.beat2_rate_min, &g_root_beats.beat2_rate_max},
-                                {"beat 3  growth follows", &g_root_beats.beat3_seconds,
-                                 &g_root_beats.beat3_rate_min, &g_root_beats.beat3_rate_max},
-                            };
-                            for (const BeatUI& b : beats) {
-                                ui::Section bsec(b.label);
-                                ui::BeginHeader(b.label, false);
-                                {
-                                    ui::SliderFloat("duration", b.dur, 0.2f, 20.f, "%.1fs");
-                                    if (b.rmin) {
-                                        ui::SliderFloat("growth rate min (steps/s)", b.rmin,
-                                                        1.f, 2000.f, "%.0f",
-                                                        ImGuiSliderFlags_Logarithmic);
-                                        ui::SliderFloat("growth rate max (steps/s)", b.rmax,
-                                                        1.f, 2000.f, "%.0f",
-                                                        ImGuiSliderFlags_Logarithmic);
-                                    }
-                                }
-                                ui::EndHeader();
-                            }
-                            ui::PushSection("beat 1  clearance");
-                            ui::BeginHeader("beat 1  clearance", false);
+                            // The Roots timeline (RootSequence, root_sequence.h):
+                            // one stage after another, every duration and angle
+                            // authored here. Sub-headers are presentation only
+                            // (BeginHeader adds no path level), so every key is
+                            // a flat `show/roots/<label>`.
+                            RootSequenceParams& S = g_root_seq;
+                            ui::BeginHeader("face", false);
                             {
-                                ui::SliderFloat("clear-tail (s)",
-                                                &g_root_beats.beat1_clear_tail_seconds,
+                                ui::SliderFloat("face seconds", &S.face_seconds, 0.2f, 20.f, "%.1f");
+                                ui::SliderFloat("face clear-tail seconds", &S.face_clear_tail_seconds,
                                                 0.f, 30.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Beat 1 also waits on the transition's own\n"
-                                        "cloth-clearance signal: it holds \"duration\"\n"
-                                        "above as a floor, then this many seconds more\n"
-                                        "once the cloth has actually fallen clear, so\n"
-                                        "beat 2 never starts while the film is still\n"
-                                        "visibly falling.");
+                                        "Face also waits on the cloth's own clearance\n"
+                                        "signal: it holds \"face seconds\" as a floor, then\n"
+                                        "this many seconds more once the film has\n"
+                                        "actually fallen clear, so growth never starts\n"
+                                        "while it is still visibly falling.");
                                 }
-                            }
-                            ui::EndHeader();
-                            ui::PopSection();   // "beat 1  clearance"
-                            ui::PushSection("beat 3  markers");
-                            ui::BeginHeader("beat 3  fire reverb drops", false);
-                            {
-                                ui::SliderFloat("focus fallback (s)",
-                                                &g_root_beats.beat3_focus_fallback_seconds,
-                                                0.5f, 30.f, "%.1f");
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "Beats 3 and 4 are paced by FirePlucker's own\n"
-                                        "markers now, not a flat duration: arriving at a\n"
-                                        "mask holds the camera there until a drop -- once\n"
-                                        "it has actually settled -- sends it on to grow\n"
-                                        "the next one. This is only the fallback: how\n"
-                                        "long a hold waits with no marker at all before\n"
-                                        "advancing anyway (audio off, or no SDK).");
-                                }
-                            }
-                            ui::EndHeader();
-                            ui::PopSection();   // "beat 3  markers"
-                            ui::PushSection("beat 4  meander");
-                            ui::BeginHeader("beat 4  meander", false);
-                            {
-                                ui::SliderFloat("dwell fallback (s)",
-                                                &g_root_beats.beat4_dwell_seconds,
-                                                0.5f, 20.f, "%.1f");
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "Each waypoint now switches on a settled fire\n"
-                                        "reverb drop marker; this is only the fallback\n"
-                                        "duration used when no marker arrives at all.");
-                                }
-                                ui::SliderFloat("camera speed min", &g_root_beats.beat4_cam_speed_min,
-                                                0.02f, 3.f, "%.2f");
-                                ui::SliderFloat("camera speed max", &g_root_beats.beat4_cam_speed_max,
-                                                0.02f, 3.f, "%.2f");
-                                ui::SliderFloat("max angular speed (rad/s)",
-                                                &g_root_beats.beat4_max_angular_speed,
-                                                0.05f, 4.f, "%.2f");
-                            }
-                            ui::EndHeader();
-                            ui::PopSection();   // "beat 4  meander"
-
-                            ui::PushSection("outro");
-                            ui::BeginHeader("outro  fade to black", false);
-                            {
-                                ui::SliderFloat("fade duration (s)", &g_root_beats.outro_seconds,
-                                                0.2f, 10.f, "%.1f");
-                                ui::SliderFloat("fog fade-in over beat 1 (s)",
-                                                &g_root_beats.beat1_fog_fade_seconds,
-                                                0.f, 20.f, "%.1f");
+                                ui::SliderFloat("fog fade seconds", &S.fog_fade_seconds, 0.f, 20.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
                                         "Fog only exists in the Roots renderer, so it\n"
-                                        "would otherwise pop on the instant the\n"
-                                        "transition's cloth falls away. This ramps\n"
-                                        "visibility from clear down to the phase's fog\n"
-                                        "intensity over the start of beat 1 instead.");
+                                        "would otherwise pop on the instant the cloth\n"
+                                        "falls away. This ramps visibility from clear\n"
+                                        "down to the phase's fog intensity over the\n"
+                                        "start of Face instead.");
                                 }
                             }
                             ui::EndHeader();
-                            ui::PopSection();   // "outro"
+                            ui::BeginHeader("grow", false);
+                            {
+                                ui::SliderFloat("grow face seconds", &S.grow_face_seconds, 0.5f, 30.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Seconds per target face. The growth rate is\n"
+                                        "derived from the plant's own step count so it\n"
+                                        "lands on time whatever the layout, then clamped\n"
+                                        "into the rate range below.");
+                                }
+                                ui::SliderFloat("grow rate min (steps-s)", &S.grow_rate_min, 1.f, 2000.f,
+                                                "%.0f", ImGuiSliderFlags_Logarithmic);
+                                ui::SliderFloat("grow rate max (steps-s)", &S.grow_rate_max, 1.f, 2000.f,
+                                                "%.0f", ImGuiSliderFlags_Logarithmic);
+                                ui::SliderFloat("grow view tilt (deg)", &S.grow_view_tilt_deg, 0.f, 90.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The camera swings off the anchor's normal\n"
+                                        "toward the structure's axis by this much: at 0\n"
+                                        "the chain grows straight away from the lens, at\n"
+                                        "90 toward it with the faces edge-on.");
+                                }
+                                ui::SliderFloat("grow swing seconds", &S.grow_swing_seconds, 0.f, 10.f, "%.1f");
+                                ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Margin around the anchor / growth tip / target\n"
+                                        "mask when the tip pushes the camera back, as a\n"
+                                        "fraction of their extent. The radius only ever\n"
+                                        "grows.");
+                                }
+                                ui::SliderFloat("grow timeout mult", &S.grow_timeout_mult, 1.f, 4.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Guard: Grow ends at face seconds x (N-1) x this\n"
+                                        "even if the sim has not reported done.");
+                                }
+                                const char* kReveal[] = {"on arrival", "when framed"};
+                                ImGui::SetNextItemWidth(140);
+                                ImGui::Combo("reveal mode", &S.reveal_mode, kReveal, IM_ARRAYSIZE(kReveal));
+                                ui::DeclareInt("reveal mode", &S.reveal_mode, 0, IM_ARRAYSIZE(kReveal) - 1);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "on arrival: a mask appears when the root\n"
+                                        "reaches it. when framed: a planned mask is\n"
+                                        "drawn as soon as it is inside the frustum, and\n"
+                                        "stays drawn.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("camera easing", false);
+                            {
+                                ui::SliderFloat("cam ease seconds", &S.cam_ease_seconds, 0.05f, 5.f, "%.2f");
+                                ui::SliderFloat("cam max angular speed (rad-s)",
+                                                &S.cam_max_angular_speed, 0.05f, 4.f, "%.2f");
+                                ui::Checkbox("head pan", &S.head_pan_enabled);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The tracked face's place in frame nudges the\n"
+                                        "camera's angles, Grow onward. Off during Face,\n"
+                                        "where the viewer drives the mask instead.");
+                                }
+                                ui::BeginGate(S.head_pan_enabled);
+                                ui::SliderFloat("head pan (deg)", &S.head_pan_deg, -30.f, 30.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Positive: the camera's azimuth follows the\n"
+                                        "visitor across the tracker frame, the same sign\n"
+                                        "the key light swings with. Negative flips it, for\n"
+                                        "a sensor that is not mirrored the way the screen is.");
+                                }
+                                ui::SliderFloat("head pan tau (s)", &S.head_pan_tau, 0.05f, 3.f, "%.2f");
+                                ui::EndGate();
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("turn", false);
+                            {
+                                ui::SliderFloat("turn seconds", &S.turn_seconds, 0.5f, 20.f, "%.1f");
+                                ui::SliderFloat("turn end elevation (deg)", &S.turn_end_elevation_deg,
+                                                -60.f, 60.f, "%.0f");
+                                ui::SliderFloat("frame margin", &S.frame_margin, 0.f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Margin around the whole structure (Turn) and\n"
+                                        "around every structure (Orbit), as a fraction\n"
+                                        "of the bound's extent.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("reveal", false);
+                            {
+                                ui::SliderFloat("reveal spacing", &S.reveal_spacing, 0.5f, 6.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How far the other structures stand from this\n"
+                                        "one, as a multiple of its radius.");
+                                }
+                                ui::SliderFloat("reveal fallback seconds", &S.reveal_fallback_seconds,
+                                                0.2f, 20.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Each structure pops in on a FirePlucker marker;\n"
+                                        "this is the fallback used when no marker\n"
+                                        "arrives (audio off, or no SDK).");
+                                }
+                                ui::SliderInt("reveal min structures", &S.reveal_min_structures, 0, 32);
+                                ui::SliderInt("reveal max structures", &S.reveal_max_structures, 1, 32);
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("orbit", false);
+                            {
+                                ui::SliderFloat("orbit rate (rad-s)", &S.orbit_rate, -1.f, 1.f, "%.3f");
+                                ui::SliderFloat("orbit elevation (deg)", &S.orbit_elevation_deg,
+                                                -60.f, 80.f, "%.0f");
+                                ui::SliderFloat("orbit seconds", &S.orbit_seconds, 1.f, 300.f, "%.0f");
+                                ui::SliderFloat("orbit bound frac", &S.orbit_bound_frac, 0.1f, 1.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The orbit frames the bound of every structure\n"
+                                        "shrunk to this fraction of its radius: the\n"
+                                        "outermost are allowed to leave the frame.");
+                                }
+                                ui::SliderFloat("orbit max radius", &S.orbit_max_radius, 20.f, 400.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The camera never stands further than this from\n"
+                                        "the hood's centre, whatever the bound asks. World\n"
+                                        "units, because the fog is: past about three\n"
+                                        "visibilities nothing reads at all.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("outro", false);
+                            {
+                                ui::SliderFloat("datamosh seconds", &S.datamosh_seconds, 0.f, 10.f, "%.1f");
+                                ui::SliderFloat("fade seconds", &S.fade_seconds, 0.2f, 10.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The datamosh fires on the outro's entry; after\n"
+                                        "its time the screen fades to black over this,\n"
+                                        "and the show moves to Idle when it lands.");
+                                }
+                            }
+                            ui::EndHeader();
                         }
                     }
                     ui::EndHeader();
@@ -2976,27 +3051,23 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ui::PushSection("camera");
                 ui::BeginHeader("camera", /*default_open=*/true);
                 {
-                    ui::Checkbox("authored camera (rootmovie beats)", &g_root_authored_camera);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Play the --rootmovie pull-back live: face alone,\n"
-                            "masks deal out, follow the tip, then meander among\n"
-                            "the neighbours for as long as the phase runs. Reseeds\n"
-                            "on every entry into the roots phase.\n\n"
-                            "The controls below are inert while this is on.");
-                    }
-                    ui::BeginGate(!g_root_authored_camera);
+                    // In the show the timeline (show tab, show/roots) owns the
+                    // camera and these are inert. They drive the fallback
+                    // framing outside Transition/Roots -- looking at the scene
+                    // rather than playing it.
+                    ImGui::TextDisabled("in Transition/Roots the show's timeline drives the camera");
                     ui::Checkbox("frame automatically", &pf.roots.autoFrame);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Derive the target and distance from the scene's own\n"
-                            "bounds. The constants this replaced were tuned to\n"
-                            "one cone size and pointed at the wrong part of any\n"
-                            "other.");
+                            "Derive the target and distance from the layout's\n"
+                            "own bounds -- the whole planned layout, or one\n"
+                            "mask square to its normal. The constants this\n"
+                            "replaced were tuned to one cone size and pointed\n"
+                            "at the wrong part of any other.");
                     }
                     ui::BeginGate(pf.roots.autoFrame);
                     {
-                        const int nm = pf.roots.maskCount();
+                        const int nm = (int)pf.roots.plannedMasks().size();
                         std::string label = pf.roots.focusMask >= 0 && pf.roots.focusMask < nm
                                                 ? ("mask " + std::to_string(pf.roots.focusMask))
                                                 : std::string("whole scene");
@@ -3016,44 +3087,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ui::SliderFloat("zoom", &pf.roots.zoom, 0.15f, 5.f, "%.2fx");
                         ImGui::SameLine();
                         if (ImGui::SmallButton("reset zoom")) pf.roots.zoom = 1.f;
-
-                        // The middle shot: one cluster rather than one face or
-                        // the whole piece. -1 is off, so the focus combo above
-                        // keeps its meaning.
-                        ImGui::SetNextItemWidth(110);
-                        ui::SliderInt("focus group", &pf.roots.focusGroup, -1, 7);
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(90);
-                        ui::SliderInt("group of", &pf.roots.focusGroupSize, 1, 9);
-
-                        ui::Checkbox("frame on masks", &pf.roots.frameOnMasks);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "Frame on the masks rather than on every root\n"
-                                "node.\n\n"
-                                "The roots trail: a couple of laterals hanging a\n"
-                                "long way below the last nest drag the bounding\n"
-                                "box down, and the piece shrinks into the middle\n"
-                                "of the frame to accommodate two threads nobody\n"
-                                "is looking at.");
-                        }
-                        ui::BeginGate(pf.roots.frameOnMasks);
-                        ImGui::SameLine();
                         ImGui::SetNextItemWidth(90);
                         ui::SliderFloat("margin", &pf.roots.frameMargin, 0.f, 1.5f, "%.2f");
-                        ui::EndGate();
                     }
                     ui::EndGate();
-                    ui::Checkbox("auto-orbit", &pf.roots.autoOrbit); ImGui::SameLine();
-                    ImGui::SetNextItemWidth(120);
-                    ui::SliderFloat("orbit rate", &pf.roots.orbitRate, -1.0f, 1.0f);
                     ImGui::BeginDisabled(pf.roots.autoFrame);
                     ui::SliderFloat("radius", &pf.roots.radius, 5.0f, 120.0f);
                     ImGui::EndDisabled();
                     ui::SliderFloat("azimuth", &pf.roots.azimuth, -(float)M_PI, (float)M_PI);
                     ui::SliderFloat("elevation", &pf.roots.elevation, -1.5f, 1.5f);
                     ui::SliderFloat("fov", &pf.roots.fov, 0.2f, 1.2f);
-                    ui::EndGate();
                 }
                 ui::EndHeader();
                 ui::PopSection();
@@ -3154,6 +3197,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SameLine();
                         ImGui::TextDisabled("(live -- set by the mic below)");
                     }
+                    // What a structure the Reveal has popped in but not yet lit
+                    // keeps of its radiance (see MetalRootRenderer::EnvParams).
+                    ui::SliderFloat("unlit level", &R.env.unlitLevel, 0.0f, 0.3f);
                     ui::SliderFloat("key direction X", &pf.roots.lightDir[0], -1.0f, 1.0f);
                     ui::SliderFloat("key direction Y", &pf.roots.lightDir[1], -1.0f, 1.0f);
                     ui::SliderFloat("key direction Z", &pf.roots.lightDir[2], -1.0f, 1.0f);

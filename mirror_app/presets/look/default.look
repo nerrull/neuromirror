@@ -1,0 +1,15 @@
+# mirror_app settings -- bank: look
+p text/edge softness = 1
+p text/inversion = 1
+p text/raster px = 256
+p text/reveal = 1
+p text/show text = 0
+p text/size = 0.16
+p text/stroke weight = 0
+p text/text refraction = 0.08
+p text/tracking = 0.02
+p text/turb drift = 0.15
+p text/turb scale = 12
+p text/turbulence = 0.8
+p text/x = 0
+p text/y = 0

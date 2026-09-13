@@ -332,6 +332,7 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
                                device const float4*        primF  [[buffer(6)]],
                                device const float4*        primA  [[buffer(7)]],
                                constant RootGeomU&         U      [[buffer(8)]],
+                               constant RootDrawU&         D      [[buffer(9)]],
                                texture3d<float>            noiseTex [[texture(0)]]) {
     constexpr sampler noiseSmp(mag_filter::linear, min_filter::linear,
                                address::repeat, mip_filter::linear);
@@ -506,6 +507,15 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
         band = band * band * (3.0 - 2.0 * band);
         color += U.pulseColor.xyz * (band * U.pulseIntensity);
     }
+
+    // A dark set: present and occluding, but keeping only a sliver of its
+    // radiance. Applied to everything including the pulses -- an unlit
+    // structure with light travelling along it would not read as unlit --
+    // and to both sides of the indirect/total split, so the alpha below is
+    // unchanged and the fog treats it as it would any surface.
+    const float litScale = mix(D.unlitLevel, 1.0, saturate(D.lit));
+    color    *= litScale;
+    indirect *= litScale;
 
     // Alpha carries the fraction of this pixel's radiance that came from the
     // environment rather than from a light. The fog pass multiplies exactly

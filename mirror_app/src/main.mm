@@ -30,7 +30,7 @@
 #include "kinect_target.h"
 #endif
 #include "root_scene.h"
-#include "root_camera_sequence.h"
+#include "root_sequence.h"
 #include "root_face_sequence.h"
 #include "transition_scene.h"
 #include "fit_view_scene.h"
@@ -62,6 +62,7 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // Headless check of the MLX→Metal texture path (no window): render a few mirror
@@ -786,57 +787,6 @@ int main(int argc, char** argv) {
             int bh = (i + 4 < argc) ? atoi(argv[i + 4]) : 1080;
             return rootbench(ds, fr, bw, bh);
         }
-        if (a == "--rootmovie") {
-            std::vector<std::string> pos;
-            std::vector<std::pair<std::string, std::string>> fields;
-            float faces = 0.f; unsigned faceSeed = 7u;
-            for (int j = i + 1; j < argc; ++j) {
-                std::string t = argv[j];
-                const size_t eq = t.find('=');
-                if (eq == std::string::npos) { pos.push_back(t); continue; }
-                std::string k = t.substr(0, eq), v = t.substr(eq + 1);
-                if (k == "faces") faces = (float)atof(v.c_str());
-                else if (k == "facesSeed") faceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
-                else fields.emplace_back(k, v);
-            }
-            auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
-            return rootmovie(at(0) ? at(0) : "roots.mp4",
-                             at(1) ? atof(at(1)) : 18.0,
-                             at(2) ? atoi(at(2)) : 30,
-                             at(3) ? atoi(at(3)) : 900,
-                             at(4) ? atoi(at(4)) : 900,
-                             fields, faces, faceSeed);
-        }
-        if (a == "--rootorbit") {
-            std::vector<std::string> pos;
-            std::vector<std::pair<std::string, std::string>> fields;
-            int steps = 0; float zoom = 0.55f, el = 0.28f, rate = 0.18f;
-            float faces = 0.f; unsigned faceSeed = 7u;
-            double moshAt = -1.0; float moshFor = 0.f;
-            for (int j = i + 1; j < argc; ++j) {
-                std::string t = argv[j];
-                const size_t eq = t.find('=');
-                if (eq == std::string::npos) { pos.push_back(t); continue; }
-                std::string k = t.substr(0, eq), v = t.substr(eq + 1);
-                if      (k == "steps")   steps = atoi(v.c_str());
-                else if (k == "zoom")    zoom = (float)atof(v.c_str());
-                else if (k == "el")      el = (float)atof(v.c_str());
-                else if (k == "rate")    rate = (float)atof(v.c_str());
-                else if (k == "faces")   faces = (float)atof(v.c_str());
-                else if (k == "facesSeed") faceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
-                else if (k == "moshAt")  moshAt = atof(v.c_str());
-                else if (k == "moshFor") moshFor = (float)atof(v.c_str());
-                else fields.emplace_back(k, v);
-            }
-            auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
-            return rootorbit(at(0) ? at(0) : "roots_orbit.mp4",
-                             at(1) ? atof(at(1)) : 10.0,
-                             at(2) ? atoi(at(2)) : 30,
-                             at(3) ? atoi(at(3)) : 900,
-                             at(4) ? atoi(at(4)) : 900,
-                             fields, steps, zoom, el, rate, faces, faceSeed,
-                             moshAt, moshFor);
-        }
         if (a == "--growshot") {
             // Positional args stop at the first key=value: the growth fields
             // are optional and there are twenty-odd of them, so they are named
@@ -846,7 +796,7 @@ int main(int argc, char** argv) {
             int gw = 960, gh = 540;
             float gzoom = 1.f, gfaces = 0.f;
             unsigned gfaceSeed = 7u;
-            int gfocus = -1, ggroup = -1, ggroupOf = 3;
+            int gfocus = -1;
             for (int j = i + 1; j < argc; ++j) {
                 std::string t = argv[j];
                 const size_t eq = t.find('=');
@@ -858,8 +808,6 @@ int main(int argc, char** argv) {
                 else if (k == "faces") gfaces = (float)atof(v.c_str());
                 else if (k == "facesSeed") gfaceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
                 else if (k == "focus") gfocus = atoi(v.c_str());
-                else if (k == "group") ggroup = atoi(v.c_str());
-                else if (k == "groupOf") ggroupOf = atoi(v.c_str());
                 else fields.emplace_back(k, v);
             }
             auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
@@ -872,7 +820,7 @@ int main(int argc, char** argv) {
             float ty2 = at(6) ? atof(at(6)) : -1e9f;
             float rc2 = at(7) ? atof(at(7)) : 1e9f;
             return growshot(path, steps, az, el, rad, fs2, ty2, rc2, gw, gh,
-                            fields, gzoom, gfaces, gfaceSeed, gfocus, ggroup, ggroupOf);
+                            fields, gzoom, gfaces, gfaceSeed, gfocus);
         }
         if (a == "--leafshot") {
             const char* path = (i + 1 < argc) ? argv[i + 1] : "leaf.ppm";
@@ -1188,6 +1136,22 @@ int main(int argc, char** argv) {
             const char* photo = (i + 6 < argc) ? argv[i + 6] : "";
             return clothshot(prefix, n, cw, ch, fp, photo);
         }
+        if (a == "--seqshot") {
+            // Positional prefix/W/H, then growth fields as key=value, the way
+            // --growshot takes them.
+            std::vector<std::string> pos;
+            std::vector<std::pair<std::string, std::string>> fields;
+            for (int j = i + 1; j < argc; ++j) {
+                std::string t = argv[j];
+                const size_t eq = t.find('=');
+                if (eq == std::string::npos) pos.push_back(t);
+                else fields.emplace_back(t.substr(0, eq), t.substr(eq + 1));
+            }
+            const char* prefix = pos.size() > 0 ? pos[0].c_str() : "seq_";
+            int cw = pos.size() > 1 ? atoi(pos[1].c_str()) : 960;
+            int ch = pos.size() > 2 ? atoi(pos[2].c_str()) : 540;
+            return seqshot(prefix, cw, ch, fields);
+        }
         if (a == "--bench") {
             int ds = (i + 1 < argc) ? atoi(argv[i + 1]) : 4;
             int fr = (i + 2 < argc) ? atoi(argv[i + 2]) : 200;
@@ -1410,11 +1374,11 @@ int main(int argc, char** argv) {
     // Scenes / presenter.
     MirrorScene mirror(ctx);
     RootScene roots(ctx, W, H);
-    // The rootmovie beat sequence, played live: begin() reseeds whenever the
-    // show (re-)enters Phase::Roots (below), step() drives the camera each
-    // frame while g_root_authored_camera is on.
-    RootCameraSequence rootCamSeq;
-    bool rootCamSeqActive = false;
+    // The root scene's timeline (root_sequence.h): begin() reseeds whenever
+    // the show (re-)enters Transition/Roots (below), step() drives the camera
+    // and the growth pacing each frame the scene is up in those phases.
+    RootSequence rootSeq;
+    bool rootSeqActive = false;
     // The visitor's own head movement, recorded through Transition and
     // played back once Roots takes over -- see face_track.h/root_face_sequence.h.
     // Recorder accumulates through one Transition; the sequence plays
@@ -1429,8 +1393,8 @@ int main(int argc, char** argv) {
     // off g_track_absent_t, not the lock instant -- see the phase-agnostic
     // absence block below).
     bool faceTrackRecActive = false;
-    // The capture id this sitting's track belongs to, stashed at the lock
-    // instant (same moment buildCapture() assigns cap.id) rather than read
+    // The capture id this sitting's track belongs to, stashed at the cut
+    // (same moment autoCaptureAtCut assigns cap.id) rather than read
     // back from g_capture_last at finish() time, which could in principle
     // have been overwritten by an unrelated manual capture in the many
     // seconds between the two.
@@ -1449,11 +1413,11 @@ int main(int argc, char** argv) {
     // grows the roots around. There is no more "pre-warm": RootScene simply
     // runs from the moment Transition is entered, and the literal Roots phase
     // is not a hand-off between two scenes any more, just the same one
-    // continuing. rootCamSeqBegunForSitting guards against RootCameraSequence
-    // being reseeded twice for one sitting (once at Transition entry, again
-    // at the literal Roots entry) -- see the entries()-diff block below.
-    bool rootCamSeqBegunForSitting = false;
-    double rootsClock = 0.0;          // seconds since Transition entry; RootCameraSequence's own clock
+    // continuing. rootSeqBegunForSitting guards against RootSequence being
+    // reseeded twice for one sitting (once at Transition entry, again at the
+    // literal Roots entry) -- see the entries()-diff block below.
+    bool rootSeqBegunForSitting = false;
+    double rootsClock = 0.0;          // seconds since Transition entry; RootSequence's own clock
     double clothClearAtPreWarm = -1.0;
     bool clothClearHoldElapsed = false;
     // The last g_show.phaseTime() seen while still in Transition -- captured
@@ -1465,10 +1429,116 @@ int main(int argc, char** argv) {
     // entry" once past the cut, which is what a FaceTrack's timestamps need
     // to stay monotonic).
     double transitionExitPhaseTime = 0.0;
+    // Whether RootScene's faceTris_ currently holds the fitter basis's
+    // topology (as opposed to the canonical mesh's) -- setFittedFace() is
+    // only ever given the (large, unchanging) triangle list once per sitting,
+    // relying on RootScene to keep holding onto it. replant() overwrites
+    // faceTris_ back to the canonical mesh's topology as part of clearing the
+    // last visitor's face (see RootScene::replant), which leaves it mismatched
+    // against the fitter's vertex count until this flag says the triangles
+    // are due for a resend -- omitting them then, as a stale process-lifetime
+    // "already sent" latch used to, is exactly the mismatch that renders the
+    // mask mesh as scrambled shrapnel on every sitting after the first.
+    bool rootFaceTrisUploaded = false;
     TransitionScene trans(ctx, W, H);
     // What is already on disk, so the picker is populated before anything
     // has been captured this run.
     g_capture_ids = mirror::ListCaptures();
+
+    // --- the face bank (see plans/ROOT_TIMELINE.md, "The face bank") ------
+    // Captures loaded once per id and kept for the life of the process:
+    // LoadCapture reads the film as well, and a hood of a dozen structures
+    // wears getting on for eighty captures, which is too many full-frame
+    // PPMs to re-read on every visitor. The film is dropped once read -- the
+    // masks wear the baked colours, and the film only serves the panel's
+    // "load into the transition", which loads its own.
+    std::unordered_map<std::string, mirror::FaceCapture> bankCache;
+    // Deal the bank onto the masks: the most recent captures, newest first,
+    // as many as the chain and the capped hood can wear, minus `excludeId`
+    // (the sitting now on mask 0, once it has been saved). RootScene does
+    // the dealing; this only decides which files to open.
+    auto dealBankFaces = [&](const std::string& excludeId) {
+        if (!roots.valid()) return;
+        const int N = std::max(1, roots.simParams().N);
+        const int want = (N - 1) + std::max(0, g_root_seq.reveal_max_structures) * N;
+        std::vector<mirror::FaceCapture> bank;
+        // g_capture_ids is oldest first (ListCaptures); the bank is newest first.
+        for (auto it = g_capture_ids.rbegin();
+             it != g_capture_ids.rend() && (int)bank.size() < want; ++it) {
+            if (*it == excludeId) continue;
+            auto c = bankCache.find(*it);
+            if (c == bankCache.end()) {
+                mirror::FaceCapture cap;
+                std::string err;
+                if (!mirror::LoadCapture(*it, cap, err)) {
+                    // An unreadable capture is skipped, not fatal: the bank is
+                    // a directory anyone can leave a half-written entry in.
+                    fprintf(stderr, "face bank: %s\n", err.c_str());
+                    continue;
+                }
+                cap.film.clear();
+                cap.film.shrink_to_fit();
+                cap.filmW = cap.filmH = 0;
+                c = bankCache.emplace(*it, std::move(cap)).first;
+            }
+            bank.push_back(c->second);
+        }
+        roots.assignBankFaces(bank, g_root_seq.reveal_max_structures,
+                              g_root_seq.reveal_min_structures);
+    };
+    // The auto-capture, at the Transition -> Roots cut: the live fit, its
+    // colours as sampled off the mirror (what mask 0 has been wearing through
+    // the press), the mirror's last frame as the film, and the uv that
+    // projects the fit into it -- the same pieces TransitionScene::
+    // buildCapture assembled from its own lock, assembled here from the
+    // live state instead, since the press no longer has a lock instant.
+    // This is what grows the bank. Once per sitting: thisSittingCaptureId is
+    // cleared at Transition entry and set here, and the face track's own
+    // save keys off the same id.
+    auto autoCaptureAtCut = [&]() {
+        if (!g_capture_auto || !thisSittingCaptureId.empty()) return;
+        if (!(g_fitter.valid() && g_track_on && g_face.valid)) return;
+        const std::vector<float>& verts = g_fitter.vertices();
+        if (verts.size() < 9 || g_face_colors.size() != verts.size()) return;
+        mirror::FaceCapture cap;
+        cap.id = mirror::NewCaptureId();
+        cap.created = cap.id;
+        cap.verts = verts;
+        cap.tris  = g_fitter.basis().triangles();
+        cap.colors = g_face_colors;
+        float ps = 1.f, uo = 0.f, vo = 0.f;
+        PinTransform(ps, uo, vo);
+        g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, cap.uv);
+        // The film, gamma-encoded to 8 bits the way freezeFilm did it, so a
+        // capture from here and one from the transition decode alike.
+        const std::vector<float>& img = mirror.lastImageRGB();
+        const int fw = mirror.lowW(), fh = mirror.lowH();
+        if (fw > 0 && fh > 0 && img.size() == size_t(fw) * size_t(fh) * 3) {
+            cap.filmW = fw; cap.filmH = fh;
+            cap.film.resize(img.size());
+            for (size_t i = 0; i < img.size(); ++i)
+                cap.film[i] = (unsigned char)(std::pow(std::clamp(img[i], 0.f, 1.f), 1.f / 2.2f) * 255.f + 0.5f);
+        }
+        std::string cerr;
+        if (!cap.valid()) return;
+        if (mirror::SaveCapture(cap, cerr)) {
+            g_capture_last = cap.id;
+            thisSittingCaptureId = cap.id;
+            g_capture_msg = "saved " + cap.id;
+            g_capture_ids = mirror::ListCaptures();
+            printf("capture: saved %s (%zu verts, film %dx%d)\n",
+                   cap.id.c_str(), cap.vertexCount(), cap.filmW, cap.filmH);
+            // Into the cache too, film-less, so the next visitor's deal does
+            // not go back to disk for the one capture this process just wrote.
+            cap.film.clear();
+            cap.film.shrink_to_fit();
+            cap.filmW = cap.filmH = 0;
+            bankCache[cap.id] = std::move(cap);
+        } else {
+            g_capture_msg = "save failed: " + cerr;
+            fprintf(stderr, "capture: %s\n", g_capture_msg.c_str());
+        }
+    };
     FitViewScene fitview(ctx, std::string(MIRROR_APP_SHADER_DIR) + "/fit_view.metal", W, H);
     FullscreenPresent present(ctx, std::string(MIRROR_APP_SHADER_DIR) + "/present.metal",
                               layer.pixelFormat);
@@ -1846,9 +1916,9 @@ int main(int argc, char** argv) {
                 // debounce, reused rather than duplicated) -- deliberately
                 // decoupled from trans.capturePending()/the lock instant, so
                 // the whole press/settle/release/fall and early Roots gets
-                // recorded, not just the ~0.5s hold stage. buildCapture()'s
-                // own single-instant snapshot is untouched, still taken at
-                // the lock (see the Scene::Transition branch below).
+                // recorded, not just the ~0.5s hold stage. The capture's
+                // own single-instant snapshot is separate, taken at the
+                // Transition -> Roots cut (autoCaptureAtCut, above).
                 if (faceTrackRecActive) {
                     const float absentHold = g_show.hold(show::Phase::Roots, 0);
                     if ((float)g_track_absent_t >= absentHold) {
@@ -2059,8 +2129,16 @@ int main(int argc, char** argv) {
                             // system that was already fully grown before their
                             // press had even started.
                             if (roots.valid()) { roots.replant(); roots.restartCloth(); }
-                            rootCamSeq.begin(roots, g_root_beats);
-                            rootCamSeqBegunForSitting = true;
+                            rootFaceTrisUploaded = false;
+                            // Previous visitors onto the other masks, now
+                            // rather than at the cut: they are not seen
+                            // until Grow, but Grow can start straight off
+                            // Face without going through the cut. This
+                            // sitting's own capture does not exist yet, so
+                            // nothing is excluded.
+                            dealBankFaces(std::string());
+                            rootSeq.begin(roots, g_root_seq);
+                            rootSeqBegunForSitting = true;
                             faceTrackRec.begin();
                             faceTrackRecActive = true;
                             thisSittingCaptureId.clear();
@@ -2074,24 +2152,21 @@ int main(int argc, char** argv) {
                             break;
                     }
 
-                    // The authored camera reseeds on every entry into Roots or
+                    // The sequence reseeds on every entry into Roots or
                     // Transition -- new anchor, new neighbour hood -- and is
                     // off everywhere else, so a phase left with the sequence
-                    // mid-beat doesn't come back to a stale one. Seeded
-                    // unconditionally (not just when g_root_authored_camera is
-                    // on) so switching the toggle on mid-phase has a ready
-                    // sequence to switch to.
-                    rootCamSeqActive = (p == show::Phase::Roots || p == show::Phase::Transition);
+                    // mid-stage doesn't come back to a stale one.
+                    rootSeqActive = (p == show::Phase::Roots || p == show::Phase::Transition);
                     // Transition's own entry (above) already called begin() --
                     // RootScene has been rendering, and the sequence running,
                     // since that edge. Calling begin() again here on the
-                    // literal Roots entry would restart beat 1 from scratch
+                    // literal Roots entry would restart Face from scratch
                     // right at the moment it is supposed to hand off
                     // seamlessly; only do it when Roots is reached without
                     // having gone through Transition first (a manual phase
                     // jump from the operator's navigator).
                     if (p == show::Phase::Roots) {
-                        if (!rootCamSeqBegunForSitting) {
+                        if (!rootSeqBegunForSitting) {
                             // Reached without going through Transition -- the
                             // operator's phase navigator. Since the press now
                             // lives in this same scene, "Roots" has to mean
@@ -2100,26 +2175,47 @@ int main(int argc, char** argv) {
                             // face. Replaying the press here would make the
                             // two buttons do the same thing a second apart.
                             if (roots.valid()) { roots.replant(); roots.skipCloth(); }
+                            rootFaceTrisUploaded = false;
                             rootsClock = 0.0;
                             clothClearAtPreWarm = 0.0;
                             clothClearHoldElapsed = true;
-                            rootCamSeq.begin(roots, g_root_beats);
+                            // The bank on the other masks, as at Transition
+                            // entry; minus this sitting's capture if the
+                            // jump came *back* to Roots after one was saved.
+                            dealBankFaces(thisSittingCaptureId);
+                            rootSeq.begin(roots, g_root_seq);
+                        } else {
+                            // The cut proper, arrived at through Transition:
+                            // the sitting on mask 0 joins the bank. Not on
+                            // the navigator path above -- there was no
+                            // press, and whoever is in front of the sensor
+                            // is not a sitting.
+                            autoCaptureAtCut();
                         }
-                        rootCamSeqBegunForSitting = false;
-                        // The press's tight framing (set in the Transition
-                        // branch when the authored sequence is not driving)
-                        // ends with the press: from here the shot is the
-                        // whole piece opening out, not one face.
-                        roots.focusMask = -1;
+                        rootSeqBegunForSitting = false;
+                    } else if (p != show::Phase::Transition) {
+                        // A Transition the navigator abandoned (to Idle, say)
+                        // must not leave "begun" latched: the next jump to
+                        // Roots would then skip its own begin()/replant and
+                        // auto-capture whoever is at the sensor as a sitting.
+                        rootSeqBegunForSitting = false;
                     }
-                    // The face sequence reseeds on every entry too, off
-                    // whatever track the most recent Transition lock
-                    // produced (pendingFaceTrack) -- pendingFaceTrack itself
-                    // is not cleared here, so re-entering Roots without an
-                    // intervening Transition (e.g. toggling the phase by
-                    // hand) just replays the same sitting again.
-                    if (p == show::Phase::Roots)
-                        rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis());
+                    // The face sequence reseeds on every entry too, off the
+                    // recorded track -- but only the track of the sitting now
+                    // on mask 0. pendingFaceTrack is whatever the most recent
+                    // finish() produced, and in the show that is the
+                    // *previous* visitor's (a recording ends when its visitor
+                    // has left, which is after their Roots); playing it here
+                    // put the last visitor's identity on this one's mask from
+                    // the first frame of Roots. It is not cleared, so
+                    // re-entering Roots for the same sitting (toggling the
+                    // phase by hand) still replays that sitting.
+                    if (p == show::Phase::Roots) {
+                        const bool ownTrack = !thisSittingCaptureId.empty() &&
+                                              pendingFaceTrack.id == thisSittingCaptureId;
+                        rootFaceSeq.begin(ownTrack ? pendingFaceTrack : mirror::FaceTrack{},
+                                          g_fitter.basis());
+                    }
                     // The absence timer that times the outro (see the Roots
                     // render branch below) starts fresh on every entry too.
                     g_roots_absent_t = 0.0;
@@ -2184,8 +2280,8 @@ int main(int argc, char** argv) {
                                 // FirePlucker is left running (still at the
                                 // Transition hand-off's low register, below)
                                 // rather than stopped: its markers are the
-                                // "fire reverb drop" cues RootCameraSequence
-                                // listens for to switch masks in beats 3/4.
+                                // "fire reverb drop" cues RootSequence's
+                                // Reveal stage steps on.
                                 // Stopped only on the way back to Idle, which
                                 // re-posts Play_FirePlucker fresh for the next
                                 // visitor.
@@ -2527,8 +2623,8 @@ int main(int argc, char** argv) {
 
             // Pluck-bed crackle onsets -> raindrops, and (now that the pluck
             // rings all the way through Roots too, see the Phase::Roots audio
-            // case) the same cue stream doubling as RootCameraSequence's
-            // "fire reverb drop" markers for beats 3/4 -- see rootMarkerHit
+            // case) the same cue stream doubling as RootSequence's "fire
+            // reverb drop" markers for the Reveal stage -- see rootMarkerHit
             // below. Drained here, once per frame, regardless of scene: the
             // tap is a live input and letting it back up while another scene
             // is showing would land the whole backlog at once on return.
@@ -2614,14 +2710,14 @@ int main(int argc, char** argv) {
             };
 
             // Fog only exists in the Roots renderer -- TransitionScene has
-            // none -- so it fades in over beat 1 instead of snapping on, or
-            // the instant the cloth falls away/the composite window ends
-            // would read as a pop. Flat at the phase's own intensity from
-            // beat 2 on. `clock` is rootsClock during pre-warm and during
+            // none -- so it fades in over the Face stage instead of snapping
+            // on, or the instant the cloth falls away/the composite window
+            // ends would read as a pop. Flat at the phase's own intensity
+            // after that. `clock` is rootsClock during pre-warm and during
             // the literal Roots phase alike, so the fade starts counting the
             // moment compositing begins, not just at the phase cut.
             auto applyFogFade = [&](double clock) {
-                const float fadeSecs = std::max(1e-3f, g_root_beats.beat1_fog_fade_seconds);
+                const float fadeSecs = std::max(1e-3f, g_root_seq.fog_fade_seconds);
                 const float ft = std::clamp((float)(clock / fadeSecs), 0.f, 1.f);
                 const float target = g_phase_fog_intensity[(int)show::Phase::Roots];
                 roots.renderer().fog.visibility =
@@ -2720,54 +2816,55 @@ int main(int argc, char** argv) {
                 // this architecture. See root_scene.h's cloth section for
                 // what that trades away (pixel-exact film registration during
                 // the press) against what it gains (no second mask).
+                //
+                // Only while the sequence is still on Face: the viewer stops
+                // driving the mask the moment Grow starts (the recording keeps
+                // going -- RootFaceSequence plays it back later).
+                const bool viewerDrivesMask =
+                    !rootSeq.valid() || rootSeq.stage() == RootSequence::Stage::Face;
                 if (g_fitter.valid() && g_track_on && g_face.valid) {
-                    static bool uploaded_tris = false;
-                    roots.setFittedFace(g_fitter.vertices(),
-                                        uploaded_tris ? std::vector<int>()
-                                                      : g_fitter.basis().triangles());
-                    uploaded_tris = true;
+                    if (viewerDrivesMask) {
+                        roots.setFittedFace(g_fitter.vertices(),
+                                            rootFaceTrisUploaded ? std::vector<int>()
+                                                                 : g_fitter.basis().triangles());
+                        rootFaceTrisUploaded = true;
+                    }
                     // Same live fit, kept rather than thrown away this time --
                     // see faceTrackRec's declaration above.
                     faceTrackRec.record(g_show.phaseTime(), g_fitter);
                     transitionExitPhaseTime = g_show.phaseTime();
                 }
                 // The mask the cloth is about to uncover has to already be
-                // wearing the face -- see the lambda's own comment.
-                uploadFaceColorsIfFresh();
-                // Deferred: TransitionScene's lock/capture mechanism (freezing
-                // the film + mesh into a mirror::FaceCapture the instant the
-                // press begins, for g_capture_auto to save) has not been
-                // re-homed onto RootScene's cloth timeline. Auto-capture does
-                // not fire in the live show any more until that is done --
-                // see the plan doc's "what's left" for where to pick this up
-                // (RootScene::clothPress() reaching 1.0 is the equivalent
-                // instant). Manual capture (the panel's own button, off
-                // TransitionScene's still-live devtools path) is unaffected.
+                // wearing the face -- see the lambda's own comment. Gated
+                // like the mesh above: the mirror keeps sampling colours
+                // every frame it renders, and once the mesh has frozen for
+                // Grow the colours freeze with it.
+                if (viewerDrivesMask) uploadFaceColorsIfFresh();
+                // The capture of this sitting (g_capture_auto) is not taken
+                // here but at the Transition -> Roots cut -- autoCaptureAtCut,
+                // called from the phase-entry block -- from the same live fit
+                // and colours this branch has been sending to mask 0. There
+                // is no lock instant to hang it on any more: the press is
+                // RootScene's own, and the mask stays live-driven through it.
 
-                // Frame the press on the face it is happening to.
-                //
-                // The press is choreographed against beat 1 of the authored
-                // camera sequence, which sits at 2.6x the anchor's own extent
-                // -- close enough that the film tents visibly over a brow and
-                // a nose. But g_root_authored_camera is off unless an operator
-                // turns it on, and with it off applyFraming frames the *whole
-                // planned layout* instead: the same drape then happens on a
-                // face a fifth of the frame wide, where the tenting is a few
-                // pixels and the press reads as nothing happening to a flat
-                // pond. focusMask gives applyFraming the same single-mask
-                // framing the sequence would have used, so the gesture is the
-                // same shot either way; when the sequence *is* driving it sets
-                // autoFrame false and this is simply ignored.
-                if (!g_root_authored_camera) roots.focusMask = roots.anchorMask;
-
+                // The press is choreographed against the sequence's Face
+                // stage, which sits at 2.6x the anchor's own extent -- close
+                // enough that the film tents visibly over a brow and a nose.
+                // The sequence is always what drives the camera here; only a
+                // layout with no masks at all (the synthetic stand-in) leaves
+                // it invalid and the fallback framing in charge.
                 rootsClock += dt;
                 const bool cleared = roots.clothCleared();
                 if (cleared && clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
                 clothClearHoldElapsed = clothClearAtPreWarm >= 0.0 &&
-                    rootsClock >= clothClearAtPreWarm + g_root_beats.beat1_clear_tail_seconds;
-                if (g_root_authored_camera)
-                    rootCamSeq.step(roots, rootsClock, dt, g_root_beats,
-                                    /*wantOutro=*/false, cleared, rootMarkerHit);
+                    rootsClock >= clothClearAtPreWarm + g_root_seq.face_clear_tail_seconds;
+                {
+                    RootSequence::Inputs in;
+                    in.clothCleared = cleared;
+                    in.markerHit    = rootMarkerHit;
+                    in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
+                    rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
+                }
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
                                  compH / std::max(1, rootDownscale));
@@ -2797,6 +2894,9 @@ int main(int argc, char** argv) {
                 // whoever happens to be in front of the sensor now would
                 // overwrite the face that was just carried in on the mask, one
                 // frame after the transition handed it over.
+                const bool viewerDrivesMask =
+                    !rootSeqActive || !rootSeq.valid() ||
+                    rootSeq.stage() == RootSequence::Stage::Face;
                 if (!g_capture_loaded.empty()) {
                     // Already uploaded when it was loaded; nothing per frame.
                 } else if (rootFaceSeq.valid()) {
@@ -2807,44 +2907,69 @@ int main(int argc, char** argv) {
                     // the sensor now would overwrite the face this phase is
                     // actually about. rootFaceSeq.step() below does the
                     // per-frame upload.
-                } else if (g_drive_roots && g_track_on && g_fitter.valid() && g_face.valid) {
-                    static bool uploaded_tris = false;
+                } else if (g_drive_roots && g_track_on && g_fitter.valid() && g_face.valid &&
+                           viewerDrivesMask) {
+                    // ...and the live tracker only while the sequence is
+                    // still on Face: from Grow on the mask is the sitting's,
+                    // not whoever is in front of the sensor now.
                     roots.setFittedFace(g_fitter.vertices(),
-                                        uploaded_tris ? std::vector<int>()
-                                                      : g_fitter.basis().triangles());
-                    uploaded_tris = true;
+                                        rootFaceTrisUploaded ? std::vector<int>()
+                                                             : g_fitter.basis().triangles());
+                    rootFaceTrisUploaded = true;
                 } else if (!g_drive_roots && roots.usingFittedFace()) {
                     roots.clearFittedFace();
+                    // clearFittedFace() puts faceTris_ back to the canonical
+                    // mesh's topology; the next setFittedFace() has to send
+                    // the fitter basis's triangles again or they mismatch its
+                    // (differently-sized) vertex array -- see rootFaceTrisUploaded's
+                    // declaration.
+                    rootFaceTrisUploaded = false;
                 }
 
-                uploadFaceColorsIfFresh();
+                // Same gate as the mesh: a "fresh" flag left over from the
+                // Transition branch (which stops uploading once Grow starts)
+                // must not land the sensor's colours on a frozen mask.
+                if (viewerDrivesMask) uploadFaceColorsIfFresh();
                 roots.ensureSize(compW / effDs, compH / effDs);
                 // rootsClock keeps counting seconds since Transition entry,
                 // continuous across the pre-warm -> literal-Roots cut -- the
-                // same clock RootCameraSequence and (while it is still
-                // active) faceTrackRec.record() use below.
+                // same clock RootSequence and (while it is still active)
+                // faceTrackRec.record() use below.
                 rootsClock += dt;
-                if (rootCamSeqActive && g_root_authored_camera) {
+                if (rootSeqActive) {
                     // Timed to land the outro's fade-to-black exactly when
                     // Timeline's own FaceAbsent+absent_hold edge would fire
                     // (g_roots_absent_t is kept in lockstep with it above),
                     // clamped so an outro authored longer than the hold
                     // itself cannot outrun the phase change it is supposed
-                    // to hide.
+                    // to hide. The outro is the datamosh and then the fade,
+                    // so it is the two together that have to fit.
                     const float absentHold = g_show.hold(show::Phase::Roots, 0);
-                    const float effOutro = std::min(g_root_beats.outro_seconds,
-                                                    std::max(0.f, absentHold));
+                    const float outroLen = std::max(0.f, g_root_seq.datamosh_seconds) +
+                                           std::max(0.f, g_root_seq.fade_seconds);
+                    const float effOutro = std::min(outroLen, std::max(0.f, absentHold));
                     const float outroStart = std::max(0.f, absentHold - effOutro);
-                    const bool wantOutro = (float)g_roots_absent_t >= outroStart;
+                    RootSequence::Inputs in;
+                    in.wantOutro = (float)g_roots_absent_t >= outroStart;
                     // clothCleared is definitionally true by the time Roots
                     // is literally entered (sceneDone() itself waited on
                     // clothClearHoldElapsed), but passed live rather than
                     // hardcoded so a manually-navigated phase jump (no
                     // Transition having run first) still behaves sanely.
-                    rootCamSeq.step(roots, rootsClock, dt, g_root_beats, wantOutro,
-                                    roots.clothCleared(), rootMarkerHit);
-                    if (rootCamSeq.beat() == RootCameraSequence::Beat::Outro)
-                        g_screen_fade = rootCamSeq.outroFade();
+                    in.clothCleared = roots.clothCleared();
+                    in.markerHit    = rootMarkerHit;
+                    in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
+                    rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
+                    if (rootSeq.stage() == RootSequence::Stage::Outro ||
+                        rootSeq.stage() == RootSequence::Stage::Done)
+                        g_screen_fade = rootSeq.fade();
+                    // The sequence has run its whole arc -- the orbit timed
+                    // out, or the visitor left and the fade has landed. Move
+                    // the show on if its own timeline has not already: the
+                    // piece does not sit on a black screen waiting for a
+                    // FaceAbsent edge that may never come.
+                    if (rootSeq.done() && g_show.phase() == show::Phase::Roots)
+                        g_show.goTo(show::Phase::Idle);
                 }
                 if (rootFaceSeq.valid())
                     rootFaceSeq.step(roots, g_show.phaseTime(), dt);
@@ -2854,7 +2979,7 @@ int main(int argc, char** argv) {
                 // transitionExitPhaseTime + g_show.phaseTime() picks up
                 // exactly where Transition's own g_show.phaseTime()-based
                 // timestamps left off, not rootsClock (which is
-                // RootCameraSequence's own clock, zeroed at pre-warm entry).
+                // RootSequence's own clock, zeroed at pre-warm entry).
                 if (faceTrackRecActive && g_track_on && g_face.valid && g_fitter.valid())
                     faceTrackRec.record(transitionExitPhaseTime + g_show.phaseTime(), g_fitter);
 

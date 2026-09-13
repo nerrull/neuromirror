@@ -1,6 +1,7 @@
 # which preset each bank comes up in
 fit = default
 show = default
+look = default
 mirror = default
 roots = default
 debug = debug

@@ -13,7 +13,7 @@
 #include "face_capture.h"
 #include "face_fit.h"
 #include "root_scene.h"
-#include "root_camera_sequence.h"
+#include "root_sequence.h"
 #include "transition_scene.h"
 #include "fit_view_scene.h"
 #include "screen_layout.h"
@@ -130,7 +130,7 @@ int rootshot(const char* path, float az, float el, float rad, int mode, bool ove
     const int W = 960, H = 540;
     RootScene roots(ctx, W, H);
     if (!roots.valid()) { fprintf(stderr, "rootshot: root scene invalid\n"); return 1; }
-    roots.autoOrbit = false;
+    roots.autoFrame = false;
     roots.azimuth = az; roots.elevation = el; roots.radius = rad;
     roots.renderer().shaderMode = (MetalRootRenderer::ShaderMode)mode;
     if (overlays) {
@@ -184,8 +184,7 @@ int growshot(const char* path, int steps, float az, float el, float rad,
                     float faceScale, float targetY,
                     float faceRecess, int W, int H,
                     const std::vector<std::pair<std::string, std::string>>& fields,
-                    float zoom, float faces, unsigned faceSeed,
-                    int focus, int group, int groupOf) {
+                    float zoom, float faces, unsigned faceSeed, int focus) {
     MetalContext ctx;
     if (!ctx.device()) { fprintf(stderr, "growshot: no Metal device\n"); return 1; }
     RootScene roots(ctx, W, H);
@@ -214,11 +213,8 @@ int growshot(const char* path, int steps, float az, float el, float rad,
         }
         roots.regrow();
     }
-    roots.autoOrbit = false;
     roots.zoom = zoom;
     roots.focusMask = focus;
-    roots.focusGroup = group;
-    roots.focusGroupSize = groupOf;
     // Same post-processing door --abshot uses, so a shot meant for looking at
     // rather than diffing can lift the fog off the subject.
     applyPostOverride(roots, getenv("GROWSHOT_POST"));
@@ -273,7 +269,7 @@ int growshot(const char* path, int steps, float az, float el, float rad,
 
 
 
-// Growth fields by name, shared by --growshot, --rootpreset and --rootmovie.
+// Growth fields by name, shared by --growshot and --rootpreset.
 // The names are visitSimParams', plus "species" for the one the panel spells
 // differently.
 static void applyGrowthFields(RootScene& roots,
@@ -327,230 +323,6 @@ static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
         }
     fclose(fp);
     return true;
-}
-
-// The pull-back, as a moving camera rather than five stills.
-//
-//   --rootmovie <out.mp4> [seconds] [fps] [W] [H] [field=value ...]
-//
-// Four beats, and the anchor face is the centre of frame in every one of them:
-//
-//   1  the face alone      nothing has grown yet, tight on the mask
-//   2  the roots arrive    growth runs; the camera does not move, so the beat
-//                          ends framed exactly where beat 1 began
-//   3  the structure       the pull-back: the other masks come into frame while
-//                          the anchor face stays put
-//   4  the others          copies of the piece standing around this one
-//
-// Beats 1 and 2 share a framing on purpose. The move is beat 3, and it reads as
-// a move only because the anchor keeps one face nailed to the centre while the
-// radius grows around it -- a cut between framings cannot do that.
-int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
-                     const std::vector<std::pair<std::string, std::string>>& fields,
-                     float faces, unsigned faceSeed) {
-    MetalContext ctx;
-    if (!ctx.device()) { fprintf(stderr, "rootmovie: no Metal device\n"); return 1; }
-    RootScene roots(ctx, W, H);
-    if (!roots.valid()) { fprintf(stderr, "rootmovie: root scene invalid\n"); return 1; }
-
-    applyGrowthFields(roots, fields);
-    applyPostOverride(roots, getenv("GROWSHOT_POST"));
-    if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
-
-    // The camera and its beat schedule now live in RootCameraSequence, shared
-    // with the live app -- begin() reads the layout once, step() drives the
-    // camera/growth-pacing fields each frame. Beats 1-3 split `seconds` in
-    // the same proportions the sequence always has (13% / 17% / 48%); beat 4
-    // (the meander) would keep going past it if asked to, but the frame loop
-    // below stops at `frames` regardless. Growth-rate/camera-speed ranges and
-    // the outro are left at RootBeatParams' defaults -- an export has no
-    // panel and no outro to fade into.
-    RootBeatParams bp;
-    bp.beat1_seconds = float(seconds * 0.13);
-    bp.beat2_seconds = float(seconds * 0.17);
-    bp.beat3_seconds = float(seconds * 0.48);
-    RootCameraSequence seq;
-    seq.begin(roots, bp);
-    if (!seq.valid()) { fprintf(stderr, "rootmovie: no masks\n"); return 1; }
-
-    const int frames = std::max(2, (int)std::lround(seconds * fps));
-    const double dt = 1.0 / fps;
-
-    // The datamosh cue, offline. GROWSHOT_POST can only set steady state, and
-    // the whole point of this effect is the moment it starts -- the motion
-    // field freezes there, so it has to be started while something is moving
-    // for it to show anything at all. ROOTMOVIE_MOSH_AT=<s> fires the same
-    // trigger the panel button does, at that point in the export.
-    //   ROOTMOVIE_MOSH_AT=6 ROOTMOVIE_MOSH_FOR=3 mirror_app --rootmovie out.mp4
-    const char* moshAtEnv = getenv("ROOTMOVIE_MOSH_AT");
-    const double moshAt = moshAtEnv ? atof(moshAtEnv) : -1.0;
-    const char* moshForEnv = getenv("ROOTMOVIE_MOSH_FOR");
-    bool moshFired = false;
-
-    // Free camera, for look-dev rather than for the piece. The beat sequence
-    // owns the camera and every one of its framings stands a long way off the
-    // structure -- which is right for the show and useless for judging
-    // anything that lives *in* the volume between the lens and the roots. Fog
-    // read at those distances is nearly opaque, so a shot meant to show, say,
-    // light coming through the lattice cannot be set up through the beats at
-    // all. With this on, the sequence is skipped and the camera is whatever
-    // GROWSHOT_POST's az/el/radius/targetY/orbitRate leave on the scene.
-    //
-    // The growth is run to completion up front, because there are no beats to
-    // pace it any more and a free-cam shot wants the finished structure.
-    //   ROOTMOVIE_FREECAM=1 GROWSHOT_POST="autoFrame=0,az=3.14,el=-0.9,\
-    //   radius=30,targetY=-14,autoOrbit=1,orbitRate=0.12" mirror_app --rootmovie out.mp4
-    const bool freeCam = getenv("ROOTMOVIE_FREECAM") &&
-                         atoi(getenv("ROOTMOVIE_FREECAM")) != 0;
-    if (freeCam) {
-        const int keepSteps = roots.simStepsPerFrame;
-        roots.simStepsPerFrame = 64;
-        for (int i = 0; i < 4000 && !roots.simDone(); ++i) roots.advance(dt);
-        roots.simStepsPerFrame = keepSteps;
-        roots.simPaused = true;
-        // applyPostOverride ran before the growth, and updateBounds() has been
-        // moving the framing the whole way through it -- so re-apply, or the
-        // authored camera is the one the last growth frame auto-framed.
-        applyPostOverride(roots, getenv("GROWSHOT_POST"));
-    }
-
-    char dirTemplate[] = "/tmp/rootmovie.XXXXXX";
-    const char* dir = mkdtemp(dirTemplate);
-    if (!dir) { fprintf(stderr, "rootmovie: no temp dir\n"); return 1; }
-
-    for (int f = 0; f < frames; ++f) {
-        const double ts = double(f) / (frames - 1) * seconds;
-
-        // No cloth in this offline export -- clothCleared=true from frame 0
-        // so beat 1 just runs its authored beat1_seconds, unaffected by the
-        // live app's cloth-clearance gating. No live Wwise marker stream
-        // either, so beats 3/4 fall back to their plain timers (see
-        // RootBeatParams::beat3_focus_fallback_seconds / beat4_dwell_seconds)
-        // -- exactly what those exist for.
-        if (!freeCam)
-            seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true,
-                     /*markerHit=*/false);
-        roots.advance(dt);
-        if (moshAt >= 0.0 && !moshFired && ts >= moshAt) {
-            roots.renderer().triggerDatamosh(
-                moshForEnv ? (float)atof(moshForEnv) : roots.renderer().post.moshTrigger);
-            moshFired = true;
-        }
-
-        id<MTLTexture> tex = nil;
-        @autoreleasepool {
-            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
-            tex = roots.render(cb);
-            [cb commit]; [cb waitUntilCompleted];
-        }
-        if (!tex) { fprintf(stderr, "rootmovie: no texture\n"); return 1; }
-        char path[512];
-        snprintf(path, sizeof(path), "%s/f%05d.ppm", dir, f);
-        if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
-            return 1;
-        if ((f % 25) == 0) { printf("rootmovie: %d/%d\n", f, frames); fflush(stdout); }
-    }
-
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "ffmpeg -y -loglevel error -framerate %d -i %s/f%%05d.ppm "
-             "-c:v libx264 -pix_fmt yuv420p -crf 18 %s",
-             fps, dir, outPath);
-    const int rc = system(cmd);
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-    system(cmd);
-    if (rc != 0) { fprintf(stderr, "rootmovie: ffmpeg failed (%d)\n", rc); return 1; }
-    printf("rootmovie: wrote %s (%d frames, %dx%d @ %d fps)\n", outPath, frames, W, H, fps);
-    return 0;
-}
-
-// The finished tangle, orbited.
-//
-//   --rootorbit <out.mp4> [seconds] [fps] [W] [H] [key=value ...]
-//
-// --rootmovie is the show's own beat sequence, and that sequence spends its
-// first two beats tight on one mask -- which is the right shot for the piece
-// and the wrong one for judging anything about the *roots*. A ten-second
-// rootmovie never leaves the face. This grows the system to completion first
-// and then simply orbits it, framed on its own bounds, which is the shot that
-// answers "what does this look like on the root scene".
-//
-// It is also the shot a frame effect needs: the datamosh reads camera motion,
-// and there is very little of it in the beat sequence's held framings.
-//   steps=  growth steps to run before the first frame (default: to completion)
-//   zoom=   framing tightness, RootScene::zoom (1 = whole piece)
-//   el=     elevation, radians
-//   rate=   orbit speed, rad/s
-//   moshAt= / moshFor=   fire the datamosh cue at this point in the export
-int rootorbit(const char* outPath, double seconds, int fps, int W, int H,
-              const std::vector<std::pair<std::string, std::string>>& fields,
-              int steps, float zoom, float el, float rate,
-              float faces, unsigned faceSeed, double moshAt, float moshFor) {
-    MetalContext ctx;
-    if (!ctx.device()) { fprintf(stderr, "rootorbit: no Metal device\n"); return 1; }
-    RootScene roots(ctx, W, H);
-    if (!roots.valid()) { fprintf(stderr, "rootorbit: root scene invalid\n"); return 1; }
-
-    applyGrowthFields(roots, fields);
-    applyPostOverride(roots, getenv("GROWSHOT_POST"));
-    if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
-
-    roots.autoFrame = true;
-    roots.autoOrbit = false;   // the orbit is driven here, at a chosen rate
-    roots.zoom = zoom;
-    roots.elevation = el;
-    roots.showPlannedMasks = true;
-
-    // Grow first, off the clock. `steps` <= 0 means "until the sim says it is
-    // done", with a ceiling so a parameter set that never finishes still
-    // produces a file.
-    const int cap = (steps > 0) ? steps : 20000;
-    for (int i = 0; i < cap && !(steps <= 0 && roots.simDone()); ++i)
-        roots.advance(1.0 / 60.0);
-    roots.simPaused = true;   // the shot is of the finished structure
-    printf("rootorbit: grown (done=%d)\n", roots.simDone() ? 1 : 0);
-
-    const int frames = std::max(2, (int)std::lround(seconds * fps));
-    const double dt = 1.0 / fps;
-    char dirTemplate[] = "/tmp/rootorbit.XXXXXX";
-    const char* dir = mkdtemp(dirTemplate);
-    if (!dir) { fprintf(stderr, "rootorbit: no temp dir\n"); return 1; }
-
-    bool moshFired = false;
-    for (int f = 0; f < frames; ++f) {
-        const double ts = double(f) * dt;
-        roots.azimuth = 0.6f + rate * (float)ts;
-        roots.advance(dt);
-        if (moshAt >= 0.0 && !moshFired && ts >= moshAt) {
-            roots.renderer().triggerDatamosh(moshFor > 0.f ? moshFor
-                                                           : roots.renderer().post.moshTrigger);
-            moshFired = true;
-        }
-        id<MTLTexture> tex = nil;
-        @autoreleasepool {
-            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
-            tex = roots.render(cb);
-            [cb commit]; [cb waitUntilCompleted];
-        }
-        if (!tex) { fprintf(stderr, "rootorbit: no texture\n"); return 1; }
-        char path[512];
-        snprintf(path, sizeof(path), "%s/f%05d.ppm", dir, f);
-        if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
-            return 1;
-        if ((f % 60) == 0) { printf("rootorbit: %d/%d\n", f, frames); fflush(stdout); }
-    }
-
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "ffmpeg -y -loglevel error -framerate %d -i %s/f%%05d.ppm "
-             "-c:v libx264 -pix_fmt yuv420p -crf 18 %s",
-             fps, dir, outPath);
-    const int rc = system(cmd);
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-    system(cmd);
-    if (rc != 0) { fprintf(stderr, "rootorbit: ffmpeg failed (%d)\n", rc); return 1; }
-    printf("rootorbit: wrote %s (%d frames, %dx%d @ %d fps)\n", outPath, frames, W, H, fps);
-    return 0;
 }
 
 // Post-tranche overrides, so a single knob can be isolated without a rebuild:
@@ -670,8 +442,6 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         // (keyIntensity collapsing to the silence value) and aimed by a
         // tracker with no visitor in front of it.
         else if (k == "autoFrame")  roots.autoFrame = v != 0.f;
-        else if (k == "autoOrbit")  roots.autoOrbit = v != 0.f;
-        else if (k == "orbitRate")  roots.orbitRate = v;
         else if (k == "az")         roots.azimuth = v;
         else if (k == "el")         roots.elevation = v;
         else if (k == "radius")     roots.radius = v;
@@ -848,7 +618,6 @@ int abshot(const char* path, int tranche, int W, int H,
     // ABSHOT_POST="pulse=1" when the pulses themselves are the subject.
     roots.renderer().pulse.enabled = false;
     applyPostOverride(roots, getenv("ABSHOT_POST"));
-    roots.autoOrbit = false;
     roots.azimuth = az; roots.elevation = el;
     roots.focusMask = focusMask;
     roots.zoom = zoom;
@@ -905,7 +674,6 @@ int rootbench(int downscale, int frames, int baseW, int baseH) {
     const int W = baseW / std::max(1, downscale), H = baseH / std::max(1, downscale);
     RootScene roots(ctx, W, H);
     if (!roots.valid()) { fprintf(stderr, "rootbench: invalid\n"); return 1; }
-    roots.autoOrbit = false;
     if (const char* t = getenv("ROOTBENCH_TRANCHE")) roots.renderer().setTranche(atoi(t));
     applyPostOverride(roots, getenv("ROOTBENCH_POST"));
     if (const char* m = getenv("ROOTBENCH_MODE"))
@@ -978,7 +746,7 @@ int fieldshot(const char* path, int grid, float az, float el) {
     if (!roots.valid()) { fprintf(stderr, "fieldshot: invalid\n"); return 1; }
     const float spacing = 30.f;
     roots.buildField(grid, spacing);
-    roots.autoOrbit = false;
+    roots.autoFrame = false;
     roots.azimuth = az; roots.elevation = el;
     roots.target[0] = 0; roots.target[1] = -10; roots.target[2] = 0;
     roots.radius = grid * spacing * 0.85f;
@@ -1005,7 +773,7 @@ int fieldbench(int grid, int frames) {
     if (!roots.valid()) { fprintf(stderr, "fieldbench: invalid\n"); return 1; }
     const float spacing = 30.f;
     roots.buildField(grid, spacing);
-    roots.autoOrbit = false;
+    roots.autoFrame = false;
     // Immersive viewpoint: camera low and near the field edge looking across it,
     // so a good share of systems fall off-screen (culling) and the rest recede
     // into the distance (LOD) — the target end-goal viewing condition.
@@ -1671,7 +1439,7 @@ int orientshot(const char* prefix, int dw, int dh, int orient) {
         if (!roots.valid()) {
             fprintf(stderr, "orientshot: root scene invalid\n"); return 1;
         }
-        roots.autoOrbit = false;
+        roots.autoFrame = false;
         // The same camera --rootshot uses, and enough steps for the growth to
         // be worth looking at: one frame in, the system is a single capsule and
         // says nothing about how the scene frames up in a tall window.
@@ -2128,18 +1896,16 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
         }
     }
 
-    RootBeatParams bp;
-    RootCameraSequence seq;
-    seq.begin(roots, bp);
+    RootSequenceParams sp;
+    RootSequence seq;
+    seq.begin(roots, sp);
     if (!seq.valid()) { fprintf(stderr, "clothshot: no masks\n"); return 1; }
 
-    // CLOTHSHOT_AUTOFRAME=1 reproduces the show's *default* camera, which is
-    // not the authored sequence at all: g_root_authored_camera is off unless
-    // the operator turns it on, so applyFraming is what actually drives the
-    // live press -- and applyFraming eases, converging target and radius in
-    // from wherever the previous phase left them. That is the configuration
-    // the sheet was reported off-centre in, so it is the one worth being able
-    // to render.
+    // CLOTHSHOT_AUTOFRAME=1 drives the press from applyFraming instead of the
+    // sequence -- the operator's fallback camera, which eases, converging
+    // target and radius in from wherever the previous phase left them. That
+    // is the configuration the sheet was once reported off-centre in, so it
+    // stays worth being able to render.
     const bool autoframe = getenv("CLOTHSHOT_AUTOFRAME") &&
                            atoi(getenv("CLOTHSHOT_AUTOFRAME")) != 0;
     if (autoframe) {
@@ -2233,9 +1999,11 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                 }
             }
             clock += dt;
-            if (!autoframe)
-                seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared(),
-                         /*markerHit=*/false);
+            if (!autoframe) {
+                RootSequence::Inputs in;
+                in.clothCleared = roots.clothCleared();
+                seq.step(roots, clock, dt, sp, in);
+            }
             roots.advance(dt);
             id<MTLTexture> tex = roots.render(cb);
             [cb commit]; [cb waitUntilCompleted];
@@ -2348,5 +2116,185 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
            worstUncovered * 100.0, worstFrame, coverageFrames);
     printf("clothshot: wrote %d frames %s0000.ppm.. (%dx%d @ %.0f fps)\n",
            frames, prefix, W, H, fps);
+    return 0;
+}
+
+// --seqshot <prefix> [W H] [growth fields...]
+//
+// The root timeline from Grow to Orbit, offscreen, with stills at the moments
+// the Reveal is about: the Turn's end pose before anything has popped in,
+// the hood half-way (some structures dark, some lit), all of it lit, and a
+// frame into the Orbit. The live path needs a visitor and the show clock;
+// this runs the same RootSequence against the canonical mask with no film
+// (skipCloth), the stages retimed short so the growth is a few hundred sim
+// frames rather than a minute, and a marker fed in every `markerEvery`
+// frames of Reveal in place of the pluck track's cues. Growth fields are
+// --growshot's key=value ones, so the bake can be timed against the show's
+// own preset (N=6, hopDays=60 ...) rather than the constructor's defaults.
+// SEQSHOT_POST takes the same keys as GROWSHOT_POST, SEQSHOT_FACES=<amount>
+// deals test identities out so the structures wear different faces,
+// SEQSHOT_STRUCTURES=<n> is how many stand around (the placeholder minimum,
+// there being no bank), and SEQSHOT_SEQ overrides the sequence's framing
+// knobs (see below). Also reports how long the variations took to bake, which
+// is the one-off stall the plan accepts on the first Reveal.
+int seqshot(const char* prefix, int W, int H,
+            const std::vector<std::pair<std::string, std::string>>& fields) {
+    MetalContext ctx;
+    if (!ctx.device()) { fprintf(stderr, "seqshot: no Metal device\n"); return 1; }
+    RootScene roots(ctx, W, H);
+    if (!roots.valid()) { fprintf(stderr, "seqshot: root scene invalid\n"); return 1; }
+    applyGrowthFields(roots, fields);
+    applyPostOverride(roots, getenv("SEQSHOT_POST"));
+    if (const char* f = getenv("SEQSHOT_FACES"))
+        roots.setTestIdentities(roots.simParams().N, 7u, (float)atof(f));
+    roots.skipCloth();
+
+    RootSequenceParams sp;
+    sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
+    sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f; sp.grow_swing_seconds = 0.5f;
+    sp.turn_seconds = 1.0f;
+    sp.reveal_fallback_seconds = 1e9f;   // markers only, so the stills are deterministic
+    // No bank here, so the count is the placeholder minimum; SEQSHOT_STRUCTURES
+    // sets it, up to reveal_max_structures' worth of variations.
+    if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_min_structures = atoi(n);
+    sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
+    // SEQSHOT_SEQ="tilt=45,spacing=1.3,margin=0.3,orbitEl=15,orbitFrac=0.85,
+    // orbitMax=130,growMargin=0.35" overrides the framing knobs being tuned,
+    // so a still can be re-shot without a rebuild.
+    if (const char* spec = getenv("SEQSHOT_SEQ")) {
+        std::string t;
+        for (const char* c = spec;; ++c) {
+            if (*c && *c != ',') { t += *c; continue; }
+            const size_t eq = t.find('=');
+            if (eq != std::string::npos) {
+                const std::string k = t.substr(0, eq);
+                const float v = (float)atof(t.c_str() + eq + 1);
+                if      (k == "tilt")       sp.grow_view_tilt_deg = v;
+                else if (k == "spacing")    sp.reveal_spacing = v;
+                else if (k == "margin")     sp.frame_margin = v;
+                else if (k == "growMargin") sp.grow_margin = v;
+                else if (k == "turnEl")     sp.turn_end_elevation_deg = v;
+                else if (k == "orbitEl")    sp.orbit_elevation_deg = v;
+                else if (k == "orbitFrac")  sp.orbit_bound_frac = v;
+                else if (k == "orbitMax")   sp.orbit_max_radius = v;
+                else fprintf(stderr, "seqshot: unknown SEQSHOT_SEQ key '%s'\n", k.c_str());
+            }
+            t.clear();
+            if (!*c) break;
+        }
+    }
+    RootSequence seq;
+    seq.begin(roots, sp);
+    if (!seq.valid()) { fprintf(stderr, "seqshot: no masks\n"); return 1; }
+
+    const double dt = 1.0 / 30.0;
+    const int markerEvery = 6;
+    double clock = 0.0;
+    int frame = 0, shot = 0, revealFrames = 0;
+    RootSequence::Stage last = seq.stage();
+    double bakeSeconds = 0.0, orbitT0 = -1.0;
+    bool placedShot = false, halfShot = false, growShot = false;
+    auto snap = [&](const char* tag) {
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            id<MTLTexture> tex = roots.render(cb);
+            [cb commit]; [cb waitUntilCompleted];
+            if (!tex) return false;
+            char path[512];
+            snprintf(path, sizeof(path), "%s%02d_%s.ppm", prefix, shot++, tag);
+            const bool ok = writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded());
+            int vis = 0, lit = 0;
+            for (const auto& n : roots.neighbours) { vis += n.visible; lit += n.lit; }
+            printf("seqshot: %s  frame %d  %s  structures %zu visible %d lit %d  cam r=%.1f az=%.2f el=%.2f\n",
+                   path, frame, RootSequence::stageName(seq.stage()), roots.neighbours.size(),
+                   vis, lit, roots.radius, roots.azimuth, roots.elevation);
+            return ok;
+        }
+    };
+    for (; frame < 6000; ++frame) {
+        clock += dt;
+        RootSequence::Inputs in;
+        in.clothCleared = roots.clothCleared();
+        in.markerHit = seq.stage() == RootSequence::Stage::Reveal && revealFrames > 0 &&
+                       (revealFrames % markerEvery) == 0;
+        // The Reveal's first step is the one that bakes and places, and it is
+        // the frame after the stage is entered; the longest step seen in the
+        // stage is that one.
+        const auto t0 = std::chrono::steady_clock::now();
+        seq.step(roots, clock, dt, sp, in);
+        const double stepSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        roots.advance(dt);
+        if (seq.stage() != last) {
+            printf("seqshot: frame %d  %s -> %s\n", frame, RootSequence::stageName(last),
+                   RootSequence::stageName(seq.stage()));
+            // The Face pose as Grow takes over, and the Grow pose as the
+            // Turn takes over (the whole chain grown, the camera as far back
+            // as the tip pushed it).
+            if (seq.stage() == RootSequence::Stage::Grow && !snap("face_end")) return 1;
+            if (seq.stage() == RootSequence::Stage::Turn && !snap("grow_end")) return 1;
+            // Into Orbit means the last structure has just been lit; the
+            // camera has not moved off the Turn pose yet.
+            if (seq.stage() == RootSequence::Stage::Orbit && !snap("reveal_all_lit")) return 1;
+            last = seq.stage();
+        }
+        // Half-way through the chain: the growth heading for the middle
+        // target, so the still shows the anchor, the tip and the target mask
+        // the pushed-back radius is fitting.
+        if (seq.stage() == RootSequence::Stage::Grow && !growShot &&
+            roots.currentMask() >= std::max(1, roots.simParams().N / 2)) {
+            growShot = true;
+            printf("seqshot: grow  current mask %d  tip pushed r=%.1f\n", roots.currentMask(), roots.radius);
+            if (!snap("grow_mid")) return 1;
+        }
+        if (seq.stage() == RootSequence::Stage::Reveal) {
+            ++revealFrames;
+            if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;
+            int vis = 0, lit = 0;
+            for (const auto& n : roots.neighbours) { vis += n.visible; lit += n.lit; }
+            if (!placedShot && !roots.neighbours.empty()) {
+                placedShot = true;
+                printf("seqshot: variations baked + placed in %.2f s (%d variations, %zu placed)\n",
+                       stepSecs, roots.variationCount(), roots.neighbours.size());
+                for (size_t k = 0; k < roots.neighbours.size(); ++k) {
+                    const auto& n = roots.neighbours[k];
+                    const float dx = n.centre[0] - roots.target[0], dz = n.centre[2] - roots.target[2];
+                    printf("seqshot:   structure %zu  variation %d  at az %.2f  %.1f out  y %.1f  r %.1f\n",
+                           k, n.variation, std::atan2(dx, dz), std::sqrt(dx * dx + dz * dz),
+                           n.centre[1], n.radius);
+                }
+                if (!snap("reveal_placed")) return 1;
+            }
+            // Half-way: the first frame with at least one dark and one lit.
+            if (!halfShot && lit > 0 && vis > lit) {
+                halfShot = true;
+                if (!snap("reveal_half")) return 1;
+            }
+        }
+        if (seq.stage() == RootSequence::Stage::Orbit) {
+            // A few seconds into the orbit, then done.
+            if (orbitT0 < 0.0) orbitT0 = clock;
+            if (clock - orbitT0 > 4.0) {
+                // Where the lens is against the hood, for judging the framing
+                // numbers rather than the picture alone.
+                const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
+                const float eye[3] = {roots.target[0] + roots.radius * ce * std::sin(roots.azimuth),
+                                      roots.target[1] + roots.radius * se,
+                                      roots.target[2] + roots.radius * ce * std::cos(roots.azimuth)};
+                float nearest = 1e9f; int ni = -1;
+                for (size_t k = 0; k < roots.neighbours.size(); ++k) {
+                    const auto& n = roots.neighbours[k];
+                    const float dx = n.centre[0] - eye[0], dy = n.centre[1] - eye[1], dz = n.centre[2] - eye[2];
+                    const float d = std::sqrt(dx * dx + dy * dy + dz * dz) - n.radius;
+                    if (d < nearest) { nearest = d; ni = (int)k; }
+                }
+                printf("seqshot: orbit eye (%.1f %.1f %.1f) target (%.1f %.1f %.1f)  nearest structure %d at %.1f (bound surface)\n",
+                       eye[0], eye[1], eye[2], roots.target[0], roots.target[1], roots.target[2], ni, nearest);
+                if (!snap("orbit")) return 1;
+                break;
+            }
+        }
+        if (seq.stage() == RootSequence::Stage::Outro || seq.done()) break;
+    }
+    printf("seqshot: %d shots, %d frames, bake %.2f s\n", shot, frame, bakeSeconds);
     return 0;
 }

@@ -89,6 +89,20 @@ struct RootGeomU {
     RS_F4   paletteTip[ROOT_MAX_GROUPS];
 };
 
+// Per-draw companion to RootGeomU (buffer 9 of the geometry pass): the one
+// thing that differs between the capsule sets a frame draws. RootGeomU is
+// bound once per frame; this is bound once per set -- the live system and
+// then each cached instance -- so an instance can stand in the scene dark.
+struct RootDrawU {
+    // 0 = dark: the set is drawn, occludes, and takes the fog, but keeps only
+    // unlitLevel of its radiance -- no key, no fill, no pulse to speak of.
+    // 1 = lit as normal. Anything between is a ramp between the two.
+    float   lit;
+    float   unlitLevel;
+    float   _pad0;
+    float   _pad1;
+};
+
 // Face mid-geometry pass (root_face.metal): mask meshes rasterized into the
 // shared colour+depth target between the capsule pass and fog.
 struct RootFaceU {
@@ -121,7 +135,10 @@ struct RootFaceU {
     float   spotCosInner;
     float   spotLightDist;   // the offset the mesh builder used, so the shader
                              // can recover the off-axis angle from the distance
-    float   _pad1;
+    // What a mask drawn dark keeps of its radiance -- the face mesh carries
+    // `lit` per vertex (FaceVertex in root_face.metal), since one mesh holds
+    // every structure's masks; same meaning as RootDrawU::unlitLevel.
+    float   unlitLevel;
     RS_F4   keyColor;     // xyz, the directional key's colour x intensity
 };
 
