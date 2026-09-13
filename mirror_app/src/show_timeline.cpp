@@ -31,9 +31,14 @@ const Edge kRootsEdges[] = {
 };
 
 const PhaseGraph kGraph[(int)Phase::Count] = {
-    // edges,          n, timeout,       min,  max
-    {kIdleEdges,       1, Phase::Idle,    8.f,  0.f},
-    {kFittingEdges,    2, Phase::Idle,    2.f, 30.f},
+    // edges,          n, timeout,          min,  max
+    {kIdleEdges,       1, Phase::Idle,       8.f,  0.f},
+    // A fit that never converges still has to go somewhere: 30s in, the
+    // visitor has had a fair try, and sending them to Idle would throw away
+    // the sitting and reset the room out from under someone still standing
+    // there. Transition (same as FitConverged) carries them on with whatever
+    // fit was captured instead.
+    {kFittingEdges,    2, Phase::Transition, 2.f, 30.f},
     // 30s, not 12: the merged Transition/Roots composite (see main.mm's
     // pre-warm block) now retimes SceneDone to fire off the cloth-clearance
     // signal plus its clear-tail, which can run well past the old fixed

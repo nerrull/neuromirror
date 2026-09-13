@@ -1867,11 +1867,20 @@ int main(int argc, char** argv) {
                                 mirror.params().color_mix = g_colour_idle;
                             g_colour_idle = -1.f;
                             g_colour_now = 0.f;
-                            // The harmony is the third thing that has to be
-                            // forgotten. Without this the next person walks in
-                            // on the last one's resolved major and the whole
-                            // arc has already happened.
-                            g_chord.reset();
+                            // The harmony gets its resolution here too, not
+                            // just on a converged fit: a visitor who walks off
+                            // mid-fit still gets a chord that closes rather
+                            // than one stranded wherever the fit happened to
+                            // be when they left. Deliberately not reset() here
+                            // as well -- that would erase the resolution in
+                            // the same frame it is posted, before Wwise ever
+                            // sees it (stageChanged() is only read once, later
+                            // this same frame). The forgetting -- "the next
+                            // person walks in on the last one's resolved
+                            // major" -- happens instead at the next Fitting
+                            // entry below, which is also the earliest a new
+                            // visitor's own arc can begin.
+                            g_chord.resolve();
                             // The shepherd glissando forgets its position too --
                             // otherwise the next visitor's rise starts wherever
                             // the last one's left off.
@@ -1885,6 +1894,13 @@ int main(int argc, char** argv) {
                             g_idle_intro_t0 = nowT;
                             break;
                         case show::Phase::Fitting:
+                            // The harmony forgets the last sitting here, not
+                            // on the way into Idle: resolve() (see the Idle
+                            // case above) needs to survive at least until
+                            // Wwise reads it, and the new visitor's own arc
+                            // has to start from the dark opening chord anyway,
+                            // so this is the natural place for both.
+                            g_chord.reset();
                             // Start collecting the moment the phase opens, so
                             // the `min` and the collection window overlap
                             // rather than running back to back.
@@ -1926,6 +1942,18 @@ int main(int argc, char** argv) {
                             }
                             break;
                         case show::Phase::Transition:
+                            // The harmony resolves here unconditionally, not
+                            // just when the fit actually earned it: a fit that
+                            // hit the time limit and is being carried into
+                            // Transition anyway (see kFittingEdges' timeout in
+                            // show_timeline.cpp) still deserves a chord that
+                            // closes, not one left wherever it happened to be
+                            // sitting at the 30s mark. Harmless on the
+                            // converged path too -- fit_level is usually
+                            // already close to the top by the time fit_hold
+                            // has elapsed, and pinning it the rest of the way
+                            // is exactly the arc's own ending.
+                            g_chord.resolve();
                             // From the top, with whatever face the fitting
                             // phase ended up with. RootScene now renders
                             // continuously from here on -- see the

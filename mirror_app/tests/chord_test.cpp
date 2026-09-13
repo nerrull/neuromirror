@@ -304,6 +304,36 @@ int main() {
                   "reset puts the voices there rather than gliding them back");
     }
 
+    // --- resolve() forces the ending and holds it against the fit -----------
+    //
+    // The two ways a sitting ends without earning the final chord on its own:
+    // the fit times out partway, or the visitor leaves mid-fit. Either way the
+    // piece still has to close, and the pond's fit level dropping back to 0
+    // right afterwards (see main.mm's Idle entry) must not immediately drag
+    // the chord back down with it.
+    {
+        mirror::Chord c;
+        hold(c, 0.6f, 0.f, 2.f);
+        check(c.voicing().stage == 2, "stalled short of the final checkpoint");
+        c.resolve();
+        check(c.stageChanged() && c.stage() == mirror::Chord::kStages - 1,
+              "resolve() jumps straight to the final checkpoint and fires the edge");
+        const float* o = mirror::Chord::StageOffsets(mirror::Chord::kStages - 1);
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            check(std::fabs(c.voicing().note[i] - (36.f + o[i])) < 1e-3f,
+                  "resolve() lands the voicing on the final chord immediately");
+        // The fit collapsing to 0, as it does the instant the pond stops
+        // training, must not retreat a resolved chord.
+        hold(c, 0.f, 0.f, 5.f);
+        check(c.voicing().stage == mirror::Chord::kStages - 1,
+              "a resolved chord holds against the fit dropping to 0");
+        // Only reset() lets the fit drive the checkpoint again.
+        c.reset();
+        check(c.voicing().stage == 0, "reset() clears the resolved hold too");
+        c.update(0.6f, 0.f, kDt);
+        check(c.stage() >= 1, "and the checkpoint tracks the fit again after reset()");
+    }
+
     if (failures == 0) std::printf("chord_test: OK\n");
     return failures == 0 ? 0 : 1;
 }

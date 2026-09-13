@@ -139,16 +139,35 @@ public:
     // person gets the piece unresolved, not wearing the last one's ending.
     void reset();
 
+    // Jump straight to the final checkpoint (wide, open, done) and hold it
+    // there regardless of what `update()` is fed afterwards -- until the next
+    // `reset()`. For the two ways a sitting can end without the fit ever
+    // earning that chord on its own: the fit timing out before it converges,
+    // and the visitor leaving mid-fit. Either way the piece still closes with
+    // a resolution instead of leaving the harmony stranded wherever the fit
+    // happened to be, or silently forgotten.
+    void resolve();
+
     // One frame. `fit` is 0..1 (AudioParams::fit_level), `movement` is 0..1.
+    // A no-op on the checkpoint itself after `resolve()`, until `reset()`.
     void update(float fit, float movement, float dt);
 
     const ChordVoicing& voicing() const { return v_; }
 
-    // The current checkpoint, and whether `update()` just advanced it -- lets
-    // the caller post SetState("ChordStage", ...) only on the edge, the same
-    // Moved()-gated pattern every other push to Wwise already uses.
+    // The current checkpoint, and whether the stage moved since this was last
+    // checked -- lets the caller post SetState("ChordStage", ...) only on the
+    // edge. Consuming, not a level read: it clears on every call (even a
+    // false one), because reset()/resolve()/update() can each touch the
+    // stage within the same on-screen frame (an entry-point call followed by
+    // that frame's own update()), and only the *first* of those to be read
+    // should count as "changed" -- see the OR-not-overwrite comment on each
+    // of their `stage_changed_` assignments in chord.cpp.
     int stage() const { return v_.stage; }
-    bool stageChanged() const { return stage_changed_; }
+    bool stageChanged() {
+        const bool changed = stage_changed_;
+        stage_changed_ = false;
+        return changed;
+    }
 
     // The stage table, for the panel and the test.
     static const float* StageOffsets(int stage);
@@ -159,6 +178,9 @@ private:
     ChordVoicing v_;
     int  stage_ = 0;
     bool stage_changed_ = false;
+    // Set by resolve(), cleared by reset(): while true, update() holds the
+    // final checkpoint instead of tracking `fit`.
+    bool resolved_ = false;
 };
 
 }  // namespace mirror

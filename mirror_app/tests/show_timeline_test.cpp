@@ -68,7 +68,8 @@ int main() {
         check(Graph(Phase::Fitting).edges[0].event == Event::FitConverged &&
                   Graph(Phase::Fitting).edges[1].event == Event::FaceAbsent,
               "fitting prefers the capture");
-        check(Graph(Phase::Fitting).timeout == Phase::Idle, "a failed fit goes home");
+        check(Graph(Phase::Fitting).timeout == Phase::Transition,
+              "a fit that never converges is carried on rather than reset");
     }
 
     // --- a fresh timeline is the designed piece ------------------------------
@@ -146,7 +147,8 @@ int main() {
         tl.setHold(Phase::Fitting, 0, 0.f);
         tl.goTo(Phase::Fitting);
         run(tl, 12.0, kFace);
-        check(tl.phase() == Phase::Idle, "timeout sends a failed fit home");
+        check(tl.phase() == Phase::Transition,
+              "timeout carries a failed fit into transition rather than resetting");
 
         Timeline tl2;
         tl2.setTiming(Phase::Fitting, 0.f, 10.f);

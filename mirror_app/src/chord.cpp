@@ -67,8 +67,17 @@ float Chord::StageThreshold(int stage) {
 }
 
 void Chord::reset() {
+    const int prev_stage = stage_;
     stage_ = 0;
-    stage_changed_ = false;
+    // OR, not overwrite: see stageChanged()'s comment in chord.h. A reset()
+    // called right after a resolve() (the Idle -> Fitting handoff, both
+    // within the same on-screen frame) must not lose resolve()'s edge, and a
+    // reset() that itself moves the stage (the usual case: undoing a
+    // resolved Stage4 back to Stage0 for the next visitor) must post its own
+    // edge too, or Wwise is left holding the old chord's ChordStage state
+    // forever with no SetState ever telling it otherwise.
+    stage_changed_ = stage_changed_ || (stage_ != prev_stage);
+    resolved_ = false;
     for (int i = 0; i < kChordVoices; ++i) {
         const float tgt = cfg_.root + cfg_.octave + kOffsets[0][i];
         v_.note[i] = tgt;
@@ -77,6 +86,22 @@ void Chord::reset() {
     v_.stage = 0;
     v_.pluck_note = cfg_.root + cfg_.pluck_high;
     v_.comb_hz = NoteToHz(v_.pluck_note);
+}
+
+void Chord::resolve() {
+    const int prev_stage = stage_;
+    stage_ = kStages - 1;
+    resolved_ = true;
+    // OR, not overwrite -- see stageChanged()'s comment in chord.h.
+    stage_changed_ = stage_changed_ || (stage_ != prev_stage);
+
+    const float base = cfg_.root + cfg_.octave;
+    for (int i = 0; i < kChordVoices; ++i) {
+        const float tgt = base + kOffsets[stage_][i];
+        v_.target[i] = tgt;
+        v_.note[i] = tgt;
+    }
+    v_.stage = stage_;
 }
 
 void Chord::update(float fit, float movement, float dt) {
@@ -97,12 +122,25 @@ void Chord::update(float fit, float movement, float dt) {
     // allowed and deliberate: a fit that lands all at once should land on the
     // chord it earned, and Wwise's own transition is what keeps that from
     // being a jump.
+    //
+    // Unless resolve() has already declared the sitting over: the fit level
+    // fed in after that (typically dropping to 0 as the pond stops training)
+    // would otherwise retreat the chord straight back to the dark opening the
+    // instant the checkpoint was supposed to be holding its resolution.
     const int prev_stage = stage_;
-    while (stage_ < kStages - 1 && fit >= kThresholds[stage_ + 1] + cfg_.hysteresis)
-        ++stage_;
-    while (stage_ > 0 && fit < kThresholds[stage_] - cfg_.hysteresis)
-        --stage_;
-    stage_changed_ = (stage_ != prev_stage);
+    if (!resolved_) {
+        while (stage_ < kStages - 1 && fit >= kThresholds[stage_ + 1] + cfg_.hysteresis)
+            ++stage_;
+        while (stage_ > 0 && fit < kThresholds[stage_] - cfg_.hysteresis)
+            --stage_;
+    }
+    // OR, not overwrite -- see stageChanged()'s comment in chord.h. Without
+    // the OR, a resolve()/reset() call earlier this same on-screen frame
+    // (main.mm's phase-entry switch runs before this update()) would have
+    // its edge silently overwritten back to false here, since by the time
+    // update() runs `stage_` already *is* the post-resolve/reset value and
+    // so looks unchanged from this call's own point of view.
+    stage_changed_ = stage_changed_ || (stage_ != prev_stage);
 
     // --- the voicing (diagnostics only) -------------------------------------
     //
