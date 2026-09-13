@@ -1,6 +1,6 @@
 # which preset each bank comes up in
-fit = new_color
+fit = default
 show = default
-mirror = mirror_bw
+mirror = default
 roots = default
 debug = debug
