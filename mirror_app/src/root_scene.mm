@@ -200,6 +200,17 @@ RootScene::RootScene(const MetalContext& ctx, int w, int h) {
     rr_->mat.diffuse = 0.55f;
     rr_->fog.visibility = 45.0f;
     rr_->fog.noiseStrength = 0.55f;
+    // The struct default (noiseContrast 1.20, 14 march steps) reads as
+    // either a flat, barely-there haze or a solid wall with almost nothing
+    // wispy in between: high contrast makes the noise swing hard between
+    // "clear" and "opaque" rather than through a graded middle, and few march
+    // steps under-integrate that swing into visible banding rather than a
+    // soft density gradient. Softer contrast plus more steps trades a little
+    // march cost (still well under the fog pass's own downscale budget -- see
+    // Fog::downscale's comment) for the graded, wispy density that was
+    // missing.
+    rr_->fog.noiseContrast = 0.80f;
+    rr_->fog.steps = 20;
 
     rr_->pulse.enabled = true;
 

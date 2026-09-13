@@ -114,9 +114,12 @@ static float4 marchFog(float3 ro, float3 rd, float t0, float t1, float jitter,
     const int N = clamp(U.fogSteps, 4, 32);
     const float stepSize = (t1 - t0) / float(N);
 
-    // Light travels along -lightDir (lightDir points from a surface towards the
-    // light), so a view ray parallel to that is looking straight down the beam.
-    const float cosT = dot(rd, -normalize(U.lightDir.xyz));
+    // lightDir points from a surface towards the light -- the same convention
+    // root_geom.metal's dot(n, U.lightDir.xyz) uses for direct lighting. A view
+    // ray parallel to lightDir is looking towards the light source, which is
+    // where forward scattering should peak (looking into the sun, not away
+    // from it).
+    const float cosT = dot(rd, normalize(U.lightDir.xyz));
     // Normalised so that isotropic scattering is exactly 1: the value is then
     // "how many times more light comes from this direction than from an average
     // one", which is the number the anisotropy slider should be moving. At
