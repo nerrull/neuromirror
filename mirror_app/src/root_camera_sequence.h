@@ -88,7 +88,20 @@ struct RootBeatParams {
     // the chosen speed, so a waypoint change can never read as a whip-pan.
     float beat4_cam_speed_min = 0.25f, beat4_cam_speed_max = 0.9f;
     float beat4_max_angular_speed = 0.9f;
-    // How long the camera holds at each waypoint before flying to the next.
+    // Beats 3 and 4 are now paced by Wwise's "fire reverb drop" markers (the
+    // FirePlucker bed's own cue stream, rung through into Roots -- see
+    // main.mm's Phase::Roots audio case) rather than a flat duration: beat 3
+    // holds on each arrived mask until a marker switches it back to growing
+    // the next one, and beat 4 holds at each waypoint until a marker sends it
+    // to the next. Both still fall back to a plain timer if no marker shows
+    // up for this long -- markers require Wwise's SDK and a bank actually
+    // built with cue-carrying source audio, neither of which is guaranteed
+    // on every dev machine (see wwise_audio.h's "Without the SDK"), and a
+    // beat that can never advance without one would be a worse trade than an
+    // occasional early, timer-forced cut.
+    float beat3_focus_fallback_seconds = 6.0f;
+    // How long the camera holds at each waypoint before flying to the next,
+    // when no marker arrives to trigger the move itself.
     float beat4_dwell_seconds = 4.5f;
 
     // How long the outro (beat 5) takes to fade the camera's hold to black,
@@ -112,6 +125,9 @@ public:
         beat_            = Beat::Face;
         outroFade_       = 0.f;
         clothClearAt_    = -1.0;
+        growingInBeat3_  = true;   // nothing reached yet -- start growing, not focused
+        focusEnteredAt_  = -1.0;
+        waypointEnteredAt_ = -1.0;
 
         const auto& planned = roots.plannedMasks();
         if (planned.empty()) { valid_ = false; return; }
@@ -188,9 +204,13 @@ public:
     // cloth-clearance signal, true once the film has visibly fallen clear of
     // the mask. The first phaseTime it is seen true is when beat 1's
     // clear-tail timer (RootBeatParams::beat1_clear_tail_seconds) starts.
+    // `markerHit` is a level for this one frame only: true the frame a "fire
+    // reverb drop" cue (a FirePlucker marker; see main.mm's marker poll) came
+    // in, which is what beats 3 and 4 switch on -- see their branches below.
     // Writes the camera/growth-pacing fields on `roots` directly.
     void step(RootScene& roots, double phaseTime, double dt,
-             const RootBeatParams& bp, bool wantOutro, bool clothCleared) {
+             const RootBeatParams& bp, bool wantOutro, bool clothCleared,
+             bool markerHit) {
         if (!valid_) return;
 
         const float fdt = float(std::max(0.0, dt));
@@ -252,21 +272,45 @@ public:
                 target[k] = anchor_.pos[k] + (centroid_[k] - anchor_.pos[k]) * u;
         } else if (t < b3) {
             beat_ = Beat::Growth;
-            roots.simPaused = false;
             roots.maskDeal = 1.f;
-            roots.simStepsPerFrame = std::max(1, (int)std::lround(slowStepsPerSec_ * dt));
             radius = structR_ * 0.55f;
 
             float tp[3];
             const int cm = roots.currentMask();
             const auto& pm = roots.plannedMasks();
-            if (roots.arrivedAtMask() && cm >= 0 && cm < (int)pm.size()) {
+            const bool arrived = roots.arrivedAtMask() && cm >= 0 && cm < (int)pm.size();
+            if (arrived) {
                 for (int k = 0; k < 3; ++k) target[k] = pm[size_t(cm)].pos[k];
             } else if (roots.growthTip(tp)) {
                 for (int k = 0; k < 3; ++k) target[k] = tp[k];
             } else {
                 for (int k = 0; k < 3; ++k) target[k] = track_[k];
             }
+
+            // Marker-driven focus/grow toggle (see RootBeatParams' comment
+            // on beat3_focus_fallback_seconds). Arriving at a mask freezes
+            // growth and holds the camera there -- "focusing on a mask" --
+            // until a fire reverb drop marker sends it on to grow the next
+            // one. A marker that arrives before the camera has actually
+            // settled on the mask is dropped rather than queued, so a drop
+            // landing mid-swing cannot cut the hold short; the next one
+            // still switches it once the camera has caught up.
+            if (growingInBeat3_ && arrived) {
+                growingInBeat3_ = false;
+                focusEnteredAt_ = t;
+            }
+            if (!growingInBeat3_) {
+                const float dx = follow_[0] - target[0], dy = follow_[1] - target[1],
+                            dz = follow_[2] - target[2];
+                const bool settled = std::sqrt(dx * dx + dy * dy + dz * dz)
+                                      < 0.05f * std::max(1.f, tightR_);
+                const bool fallback = focusEnteredAt_ >= 0.0 &&
+                    (t - focusEnteredAt_) > (double)bp.beat3_focus_fallback_seconds;
+                if (settled && (markerHit || fallback)) growingInBeat3_ = true;
+            }
+            roots.simPaused = !growingInBeat3_;
+            roots.simStepsPerFrame = std::max(1, (int)std::lround(slowStepsPerSec_ * dt));
+
             {
                 const float kk = 1.f - std::exp(-fdt / 0.7f);
                 for (int k = 0; k < 3; ++k) follow_[k] += (target[k] - follow_[k]) * kk;
@@ -302,32 +346,42 @@ public:
             }
 
             const auto& pm = roots.plannedMasks();
-            const double dwell = std::max(1e-3, (double)bp.beat4_dwell_seconds);
-            const double elapsedBeat4 = phaseTime - b3;
-            const int wp = std::max(0, (int)std::floor(elapsedBeat4 / dwell));
-            if (wp != waypoint_) {
-                waypoint_ = wp;
-                // A fresh speed per waypoint, picked deterministically from
-                // its index so the sequence replays identically on a rerun.
-                std::mt19937 rng(1000u + (unsigned)waypoint_);
+
+            // A waypoint's own goal/standoff-eye pair, as a function of its
+            // index -- pulled out to a lambda because the marker-advance
+            // check below needs it twice: once for "have we settled on the
+            // current one" and again for "here is the new one" the moment it
+            // switches, same frame.
+            auto waypointShot = [&](int wp, float outGoal[3], float outWantEye[3]) {
+                const Neighbour& cyl = hood_[size_t((wp * 3 + 1) % hood_.size())];
+                const auto& m = pm[size_t((wp * 3 + 2) % pm.size())];
+                outGoal[0] = cyl.x + (m.pos[0] - track_[0]) * cyl.scale;
+                outGoal[1] = m.pos[1] * cyl.scale;
+                outGoal[2] = cyl.z + (m.pos[2] - track_[2]) * cyl.scale;
+                float nx = outGoal[0] - cyl.x, nz = outGoal[2] - cyl.z;
+                const float nl = std::sqrt(nx * nx + nz * nz);
+                if (nl > 1e-3f) { nx /= nl; nz /= nl; } else { nx = 1.f; nz = 0.f; }
+                const float standoff = structR_ * 0.75f;
+                outWantEye[0] = outGoal[0] + nx * standoff;
+                outWantEye[1] = outGoal[1] + structR_ * 0.12f;
+                outWantEye[2] = outGoal[2] + nz * standoff;
+            };
+            auto pickSpeed = [&](int wp) {
+                // Deterministic from the waypoint index, so the sequence
+                // replays identically on a rerun regardless of how many
+                // markers it actually took to get here.
+                std::mt19937 rng(1000u + (unsigned)wp);
                 std::uniform_real_distribution<float> U(bp.beat4_cam_speed_min,
                                                          std::max(bp.beat4_cam_speed_min,
                                                                   bp.beat4_cam_speed_max));
                 camSpeed_ = U(rng);
-            }
-            const Neighbour& cyl = hood_[size_t((waypoint_ * 3 + 1) % hood_.size())];
-            const auto& m = pm[size_t((waypoint_ * 3 + 2) % pm.size())];
+            };
 
-            float goal[3] = {cyl.x + (m.pos[0] - track_[0]) * cyl.scale,
-                             m.pos[1] * cyl.scale,
-                             cyl.z + (m.pos[2] - track_[2]) * cyl.scale};
-            float nx = goal[0] - cyl.x, nz = goal[2] - cyl.z;
-            const float nl = std::sqrt(nx * nx + nz * nz);
-            if (nl > 1e-3f) { nx /= nl; nz /= nl; } else { nx = 1.f; nz = 0.f; }
-            const float standoff = structR_ * 0.75f;
-            float wantEye[3] = {goal[0] + nx * standoff,
-                                goal[1] + structR_ * 0.12f,
-                                goal[2] + nz * standoff};
+            if (waypoint_ < 0) {
+                waypoint_ = 0;
+                waypointEnteredAt_ = t;
+                pickSpeed(waypoint_);
+            }
 
             if (!eyePrimed_) {
                 const float pr = structR_ * 0.55f;
@@ -337,6 +391,34 @@ public:
                 for (int k = 0; k < 3; ++k) look_[k] = track_[k];
                 eyePrimed_ = true;
             }
+
+            float goal[3], wantEye[3];
+            waypointShot(waypoint_, goal, wantEye);
+
+            // Marker-driven waypoint advance -- the beat 4 half of the same
+            // "fire reverb drop" pacing as beat 3, with the same settle gate
+            // (a drop landing mid-flight is dropped, not queued) and the same
+            // plain-timer fallback for when no marker is coming at all.
+            {
+                const float dxe = eye_[0] - wantEye[0], dye = eye_[1] - wantEye[1],
+                            dze = eye_[2] - wantEye[2];
+                const float dxl = look_[0] - goal[0], dyl = look_[1] - goal[1],
+                            dzl = look_[2] - goal[2];
+                const bool settledEye = std::sqrt(dxe * dxe + dye * dye + dze * dze)
+                                         < 0.08f * std::max(1.f, structR_ * 0.75f);
+                const bool settledLook = std::sqrt(dxl * dxl + dyl * dyl + dzl * dzl)
+                                          < 0.08f * std::max(1.f, structR_);
+                const double dwell = std::max(1e-3, (double)bp.beat4_dwell_seconds);
+                const bool fallback = waypointEnteredAt_ >= 0.0 &&
+                    (t - waypointEnteredAt_) > dwell;
+                if (settledEye && settledLook && (markerHit || fallback)) {
+                    ++waypoint_;
+                    waypointEnteredAt_ = t;
+                    pickSpeed(waypoint_);
+                    waypointShot(waypoint_, goal, wantEye);
+                }
+            }
+
             // camSpeed_ is the reciprocal of the smoothing time constant, so a
             // higher authored speed is a snappier follow.
             const float speed = std::max(1e-3f, camSpeed_);
@@ -445,5 +527,14 @@ private:
     float look_[3]   = {0.f, 0.f, 0.f};
     bool  eyePrimed_ = false;
     int   waypoint_  = -1;
+    // Beat 3's marker-driven focus/grow toggle -- see step()'s `t < b3`
+    // branch. True = growing toward the next mask; false = held on the one
+    // just arrived at, waiting for a settled marker (or the fallback timer)
+    // to let it go on.
+    bool   growingInBeat3_ = true;
+    double focusEnteredAt_ = -1.0;      // phaseTime the current focus began, -1 if not focused
+    // Beat 4's marker-driven waypoint advance -- phaseTime the camera began
+    // easing towards the current waypoint, for the fallback timer.
+    double waypointEnteredAt_ = -1.0;
     float camSpeed_  = 0.5f;
 };

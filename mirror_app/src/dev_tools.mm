@@ -385,8 +385,12 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
 
         // No cloth in this offline export -- clothCleared=true from frame 0
         // so beat 1 just runs its authored beat1_seconds, unaffected by the
-        // live app's cloth-clearance gating.
-        seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true);
+        // live app's cloth-clearance gating. No live Wwise marker stream
+        // either, so beats 3/4 fall back to their plain timers (see
+        // RootBeatParams::beat3_focus_fallback_seconds / beat4_dwell_seconds)
+        // -- exactly what those exist for.
+        seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true,
+                 /*markerHit=*/false);
         roots.advance(dt);
 
         id<MTLTexture> tex = nil;
@@ -2054,7 +2058,8 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
             }
             clock += dt;
             if (!autoframe)
-                seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared());
+                seq.step(roots, clock, dt, bp, /*wantOutro=*/false, roots.clothCleared(),
+                         /*markerHit=*/false);
             roots.advance(dt);
             id<MTLTexture> tex = roots.render(cb);
             [cb commit]; [cb waitUntilCompleted];

@@ -593,12 +593,37 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             }
                             ui::EndHeader();
                             ui::PopSection();   // "beat 1  clearance"
+                            ui::PushSection("beat 3  markers");
+                            ui::BeginHeader("beat 3  fire reverb drops", false);
+                            {
+                                ui::SliderFloat("focus fallback (s)",
+                                                &g_root_beats.beat3_focus_fallback_seconds,
+                                                0.5f, 30.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Beats 3 and 4 are paced by FirePlucker's own\n"
+                                        "markers now, not a flat duration: arriving at a\n"
+                                        "mask holds the camera there until a drop -- once\n"
+                                        "it has actually settled -- sends it on to grow\n"
+                                        "the next one. This is only the fallback: how\n"
+                                        "long a hold waits with no marker at all before\n"
+                                        "advancing anyway (audio off, or no SDK).");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::PopSection();   // "beat 3  markers"
                             ui::PushSection("beat 4  meander");
                             ui::BeginHeader("beat 4  meander", false);
                             {
-                                ui::SliderFloat("dwell per waypoint (s)",
+                                ui::SliderFloat("dwell fallback (s)",
                                                 &g_root_beats.beat4_dwell_seconds,
                                                 0.5f, 20.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Each waypoint now switches on a settled fire\n"
+                                        "reverb drop marker; this is only the fallback\n"
+                                        "duration used when no marker arrives at all.");
+                                }
                                 ui::SliderFloat("camera speed min", &g_root_beats.beat4_cam_speed_min,
                                                 0.02f, 3.f, "%.2f");
                                 ui::SliderFloat("camera speed max", &g_root_beats.beat4_cam_speed_max,

@@ -2083,6 +2083,16 @@ int main(int argc, char** argv) {
                                 // empty room -- and its 8s stop fade means the
                                 // last person's chord is still dying away as
                                 // this posts.
+                                //
+                                // FirePlucker itself now rings all the way
+                                // through Fitting/Transition/Roots (see the
+                                // Phase::Roots case below), so by the time a
+                                // visitor's loop lands back on Idle there is
+                                // already a voice up -- stop it explicitly
+                                // before re-posting, or the fresh Play would
+                                // stack a second instance on top of it rather
+                                // than replacing it.
+                                g_audio.post("Stop_FirePlucker");
                                 g_audio.postFirePlucker();
                                 g_audio.post("Stop_Pad");
                                 g_audio.post("Stop_Amb_Roots");
@@ -2099,14 +2109,24 @@ int main(int argc, char** argv) {
                                 // The pluck itself keeps ringing -- see the
                                 // Comb_Tuning override below, which glides it
                                 // down to a very low register instead. It
-                                // stops for real on the way into Roots.
+                                // keeps ringing through Roots too now (see
+                                // the Phase::Roots case): its own marker
+                                // stream, run through the same effect bus, is
+                                // what paces the beat 3/4 mask switches.
                                 g_audio.post("Play_Transition");
                                 g_audio.post("Stop_Pad");
                                 break;
                             case show::Phase::Roots:
                                 g_audio.post("Play_Amb_Roots");
                                 g_audio.post("Stop_Pad");
-                                g_audio.post("Stop_FirePlucker");
+                                // FirePlucker is left running (still at the
+                                // Transition hand-off's low register, below)
+                                // rather than stopped: its markers are the
+                                // "fire reverb drop" cues RootCameraSequence
+                                // listens for to switch masks in beats 3/4.
+                                // Stopped only on the way back to Idle, which
+                                // re-posts Play_FirePlucker fresh for the next
+                                // visitor.
                                 break;
                             default:
                                 break;
@@ -2443,18 +2463,20 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Pluck-bed crackle onsets -> raindrops. Same always-drain
-            // reasoning as above: the bed loops through Idle and Fitting on
-            // one Play_, so its markers keep queuing whether or not this is
-            // switched on, and only actually spawning drops in those two
-            // phases is what makes it "the mirror listening to its own bed"
-            // rather than a random-fire toy.
+            // Pluck-bed crackle onsets -> raindrops, and (now that the pluck
+            // rings all the way through Roots too, see the Phase::Roots audio
+            // case) the same cue stream doubling as RootCameraSequence's
+            // "fire reverb drop" markers for beats 3/4 -- see rootMarkerHit
+            // below. Drained here, once per frame, regardless of scene: the
+            // tap is a live input and letting it back up while another scene
+            // is showing would land the whole backlog at once on return.
+            const std::vector<mirror::MarkerHit> pluckHits = g_audio.pollFirePluckerMarkers();
+            const bool rootMarkerHit = !pluckHits.empty();
             {
-                const std::vector<mirror::MarkerHit> hits = g_audio.pollFirePluckerMarkers();
                 const bool active = g_pluck_drops && mirror.valid() &&
                                      dropPhase == show::Phase::Idle;
                 if (active) {
-                    for (const mirror::MarkerHit& e : hits)
+                    for (const mirror::MarkerHit& e : pluckHits)
                         mirror.pond().triggerDrop(e.strength * g_pluck_drop_gain, 0.f);
                 }
             }
@@ -2672,7 +2694,7 @@ int main(int argc, char** argv) {
                     rootsClock >= clothClearAtPreWarm + g_root_beats.beat1_clear_tail_seconds;
                 if (g_root_authored_camera)
                     rootCamSeq.step(roots, rootsClock, dt, g_root_beats,
-                                    /*wantOutro=*/false, cleared);
+                                    /*wantOutro=*/false, cleared, rootMarkerHit);
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
                                  compH / std::max(1, rootDownscale));
@@ -2747,7 +2769,7 @@ int main(int argc, char** argv) {
                     // hardcoded so a manually-navigated phase jump (no
                     // Transition having run first) still behaves sanely.
                     rootCamSeq.step(roots, rootsClock, dt, g_root_beats, wantOutro,
-                                    roots.clothCleared());
+                                    roots.clothCleared(), rootMarkerHit);
                     if (rootCamSeq.beat() == RootCameraSequence::Beat::Outro)
                         g_screen_fade = rootCamSeq.outroFade();
                 }
