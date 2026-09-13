@@ -2141,6 +2141,10 @@ int main(int argc, char** argv) {
                     } else {
                         mirror.pond().beginFit(live_rgb, fit_h, fit_w, FP);
                     }
+                    // See clearLastLoss()'s comment: without this, the frames
+                    // between this beginFit() and the first real fitStep()
+                    // still report the last visitor's converged loss.
+                    mirror.clearLastLoss();
                     g_fit_arm = false;
                     if (g_show_log)
                         printf("show: fit started (%dx%d, %d px%s)\n", fit_w, fit_h,
@@ -2180,7 +2184,17 @@ int main(int argc, char** argv) {
                 // loss has closed that matters, not the absolute distance --
                 // still half scale at exactly the threshold, but it keeps
                 // tightening at a matching pace after, all the way in.
-                ap.fit_level = mirror.pond().fitting()
+                // fitting() can go true a frame or more before the first
+                // fitStep() actually runs (see W0RampT's gate above), during
+                // which lastLoss() is still whatever it was left at -- either
+                // clearLastLoss()'s -1 sentinel, or, before that fix existed,
+                // the *previous* visitor's converged loss. Either way it is
+                // not a real loss for this fit, so it maps to 0 explicitly
+                // rather than through the ratio below, which was built for
+                // loss >= 0 and does something undefined (or, for the -1
+                // case, exactly the false-convergence spike this comment is
+                // here to prevent) when handed a negative one.
+                ap.fit_level = (mirror.pond().fitting() && mirror.lastLoss() >= 0.f)
                     ? std::clamp(1.f / (1.f + mirror.lastLoss() /
                                      std::max(1e-4f, g_show_fit_loss_half)),
                                  0.f, 1.f)

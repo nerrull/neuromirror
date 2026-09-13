@@ -46,6 +46,13 @@ public:
     // fitting. Called once per frame from the app loop, before render().
     float fitSteps(int steps, float lr);
     float lastLoss() const { return last_loss_; }
+    // Call right alongside pond().beginFit(): fitSteps() only ever *writes*
+    // last_loss_ from inside an actual step, so without this the new fit's
+    // very first frame -- fitting() already true, but no step has run yet --
+    // still reads the last visitor's converged (low) loss. Anything gated on
+    // that ratio, like the chord's fit_level, sees a false "fully converged"
+    // spike before the new fit has done a single step of work.
+    void clearLastLoss() { last_loss_ = -1.f; }
 
     bool valid() const { return tex_ != nil; }
     int  lowW() const { return lw_; }
