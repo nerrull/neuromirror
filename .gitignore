@@ -22,3 +22,6 @@ mirror_app/crashlogs/
 # Coverage builds and raw profile data: re-derivable, large, machine-local.
 build_coverage/
 coverage_profiles/
+
+# Python bytecode caches from the tools/ scripts.
+__pycache__/

@@ -3,12 +3,34 @@
 markers, so Wwise picks them up as Markers on re-import and the mirror app
 can react to Play_FirePlucker's AK_Marker notifications.
 
-Onset detector is a direct Python port of mi::OnsetDetector
+Onset detector is a Python port of mi::OnsetDetector
 (wwise_plugins/mi_common/onset_detector.h): thr = mean(rise) + sensitivity *
 stddev(rise) over a rolling window of the envelope's per-hop dB rise, with a
-floor, a minimum rise, and a refractory period. Ported rather than reused so
-this script has no build dependency, but every constant and the control flow
-match the header -- see it for why each guard exists.
+floor and a minimum rise. Ported rather than reused so this script has no
+build dependency.
+
+Departure from the plugin: the plugin gates hits with a fixed refractory
+period counted from the *last accepted hit*, which lets a weak hit block a
+much louder one that follows within the window. Here every hop that clears
+the floor/threshold bar is collected as a candidate first, then
+suppress_neighbors() runs greedy non-max suppression -- take the strongest
+remaining candidate, drop every other candidate within MIN_INTERVAL_MS of
+it, repeat -- so the window is centered on the loudest onset instead of
+whichever one happened to fire first.
+
+A third gate, transient_ratio(), catches what NMS and MIN_STRENGTH can't:
+the decaying tail of a loud pluck ripples enough to clear the ODF/threshold
+bar again on its way down, and because the ripple happens well outside
+MIN_INTERVAL_MS of the original peak, NMS treats it as an unrelated event.
+These retriggers still have a respectable dB-rise strength (they're riding
+on an already-elevated envelope), so MIN_STRENGTH doesn't catch them either
+-- but the raw waveform right after them is quiet relative to what came
+just before, because there's no new percussive click, just noise-floor
+wobble on a decay curve. transient_ratio() measures exactly that: peak
+sample amplitude in the ~30ms after the hit, divided by RMS amplitude in
+the ~50ms before it. A real pluck's click peak dwarfs its own lead-in noise
+(ratio commonly 10-25x in this source); a decay-tail retrigger or ambient
+bump does not (commonly <4x). MIN_TRANSIENT_RATIO below is the cut.
 
 Each cue's label is the hit's 0..1 strength as plain text ("0.734"), which
 WwiseAudio::MarkerCallback (wwise_audio.cpp) parses back out at runtime --
@@ -41,19 +63,45 @@ RELEASE_MS = 60.0
 # across floorDb..0 dBFS) are dropped before the cue chunk is ever written --
 # "very loud plucks only". Print the full distribution below and re-run with
 # a higher number if too much still gets through, or lower if too little does.
-MIN_STRENGTH = 0.5
+MIN_STRENGTH = 0.35
+
+# See transient_ratio() docstring above for what this measures and why.
+# Set to 0 (disabled) -- an amplitude filter at the Wwise program level now
+# does this job at playback time, so decay-tail retriggers no longer need to
+# be filtered out of the marker set itself.
+TRANSIENT_PRE_MS = 50.0
+TRANSIENT_POST_MS = 30.0
+MIN_TRANSIENT_RATIO = 0.0
 
 
 def coeff(ms, dt):
     return 0.0 if ms <= 0.0 else np.exp(-dt / (ms * 0.001))
 
 
-def detect_onsets(mono, sr):
+def transient_ratio(mono, sr, offset, pre_ms=TRANSIENT_PRE_MS, post_ms=TRANSIENT_POST_MS):
+    pre = mono[max(0, offset - int(pre_ms * 0.001 * sr)):offset]
+    post = mono[offset:offset + int(post_ms * 0.001 * sr)]
+    pre_rms = np.sqrt(np.mean(pre.astype(np.float64) ** 2)) if len(pre) else 0.0
+    post_peak = np.max(np.abs(post)) if len(post) else 0.0
+    return float(post_peak / (pre_rms + 1e-9))
+
+
+def detect_onsets(mono, sr, params=None, debug=False):
+    p = dict(
+        sensitivity=SENSITIVITY, floor_db=FLOOR_DB, min_rise_db=MIN_RISE_DB,
+        min_interval_ms=MIN_INTERVAL_MS, window_ms=WINDOW_MS,
+        attack_ms=ATTACK_MS, release_ms=RELEASE_MS,
+        transient_pre_ms=TRANSIENT_PRE_MS, transient_post_ms=TRANSIENT_POST_MS,
+        min_transient_ratio=MIN_TRANSIENT_RATIO,
+    )
+    if params:
+        p.update(params)
+
     n_hops = len(mono) // HOP
     hop_seconds = HOP / sr
-    atk = coeff(ATTACK_MS, hop_seconds)
-    rel = coeff(RELEASE_MS, hop_seconds)
-    hist_len = max(8, min(8192, int(WINDOW_MS * 0.001 * sr / HOP)))
+    atk = coeff(p["attack_ms"], hop_seconds)
+    rel = coeff(p["release_ms"], hop_seconds)
+    hist_len = max(8, min(8192, int(p["window_ms"] * 0.001 * sr / HOP)))
 
     history = np.zeros(hist_len, dtype=np.float64)
     hist_pos = 0
@@ -63,12 +111,16 @@ def detect_onsets(mono, sr):
 
     env = 0.0
     prev_db = -200.0
-    since_hit = 1e9
 
-    hits = []  # (sample_offset, strength)
+    candidates = []  # (sample_offset, strength) -- every hop clearing the bar
 
     frames = mono[: n_hops * HOP].reshape(n_hops, HOP)
     rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+
+    if debug:
+        db_trace = np.empty(n_hops)
+        odf_trace = np.empty(n_hops)
+        thr_trace = np.empty(n_hops)
 
     for i in range(n_hops):
         r = rms[i]
@@ -78,7 +130,6 @@ def detect_onsets(mono, sr):
         rise = 0.0 if prev_db <= -199.0 else (db - prev_db)
         prev_db = db
         odf = rise if rise > 0.0 else 0.0
-        since_hit += hop_seconds
 
         mean = running_sum / hist_filled if hist_filled else 0.0
         if hist_filled >= 2:
@@ -86,7 +137,7 @@ def detect_onsets(mono, sr):
             sd = np.sqrt(var) if var > 0.0 else 0.0
         else:
             sd = 0.0
-        thr = max(mean + SENSITIVITY * sd, MIN_RISE_DB)
+        thr = max(mean + p["sensitivity"] * sd, p["min_rise_db"])
 
         # push history (fixed-size ring, running sums -- matches PushHistory)
         old = history[hist_pos]
@@ -100,16 +151,58 @@ def detect_onsets(mono, sr):
         running_sumsq += odf * odf
         hist_pos = (hist_pos + 1) % hist_len
 
-        loud_enough = db > FLOOR_DB
+        loud_enough = db > p["floor_db"]
         cleared_bar = odf > thr
-        armed = since_hit >= MIN_INTERVAL_MS * 0.001
-        if loud_enough and cleared_bar and armed:
-            since_hit = 0.0
-            span = max(-FLOOR_DB, 1.0)
-            strength = np.clip((db - FLOOR_DB) / span, 0.0, 1.0)
-            hits.append((i * HOP, float(strength)))
+        if loud_enough and cleared_bar:
+            span = max(-p["floor_db"], 1.0)
+            strength = np.clip((db - p["floor_db"]) / span, 0.0, 1.0)
+            candidates.append((i * HOP, float(strength)))
 
+        if debug:
+            db_trace[i] = db
+            odf_trace[i] = odf
+            thr_trace[i] = thr
+
+    survivors = suppress_neighbors(candidates, sr, p["min_interval_ms"])
+    hits = [
+        (off, strength) for off, strength in survivors
+        if transient_ratio(mono, sr, off, p["transient_pre_ms"], p["transient_post_ms"])
+        >= p["min_transient_ratio"]
+    ]
+
+    if debug:
+        return hits, {
+            "db": db_trace, "odf": odf_trace, "thr": thr_trace, "hop": HOP,
+            "candidates": candidates, "survivors": survivors,
+        }
     return hits
+
+
+def suppress_neighbors(candidates, sr, min_interval_ms):
+    """Greedy non-max suppression: repeatedly take the strongest remaining
+    candidate and drop every other candidate within min_interval_ms of it,
+    so a loud onset can no longer be swallowed by a weaker one that happened
+    to fire microseconds earlier (the old fixed refractory-from-last-hit gate
+    did exactly that -- see NHU05008080.wav at 10.169s/10.210s)."""
+    if not candidates:
+        return []
+    min_interval_samples = min_interval_ms * 0.001 * sr
+    remaining = sorted(candidates, key=lambda c: c[0])
+    offsets = np.array([c[0] for c in remaining], dtype=np.float64)
+    strengths = np.array([c[1] for c in remaining], dtype=np.float64)
+    alive = np.ones(len(remaining), dtype=bool)
+
+    order = np.argsort(-strengths)  # strongest first
+    kept = []
+    for idx in order:
+        if not alive[idx]:
+            continue
+        kept.append((int(offsets[idx]), float(strengths[idx])))
+        alive &= np.abs(offsets - offsets[idx]) > min_interval_samples
+        alive[idx] = False
+
+    kept.sort(key=lambda h: h[0])
+    return kept
 
 
 def read_wav_mono(path):
