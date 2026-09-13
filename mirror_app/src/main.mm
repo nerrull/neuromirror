@@ -1904,9 +1904,22 @@ int main(int argc, char** argv) {
                             // in: the next person has to arrive in black and
                             // white, or the second visitor of the day walks up
                             // to a mirror already wearing the first one's.
-                            if (g_colour_idle >= 0.f)
-                                mirror.params().color_mix = g_colour_idle;
+                            //
+                            // Unconditional now, not "restore g_colour_idle if
+                            // it happens to be set": that guard is exactly what
+                            // let this leak. g_colour_idle is only ever written
+                            // while g_colour_fit_on is true (see the Fitting
+                            // case below), so toggling the feature off and on
+                            // around a sitting, or any other path that left it
+                            // at -1, meant Idle saw "nothing to restore" and
+                            // left color_mix wherever the ratchet had pushed
+                            // it -- maxed, forever, no matter how many clean
+                            // Roots->Idle cycles ran afterwards. Idle is the
+                            // one place blackness is guaranteed; it does not
+                            // get to be a no-op.
+                            mirror.params().color_mix = 0.f;
                             g_colour_idle = -1.f;
+                            g_colour_from = 0.f;
                             g_colour_now = 0.f;
                             // The harmony gets its resolution here too, not
                             // just on a converged fit: a visitor who walks off
@@ -1948,11 +1961,19 @@ int main(int argc, char** argv) {
                             // before this fit gets a chance to adopt the
                             // stale, already-saturated value as its own
                             // starting point below.
-                            if (g_colour_idle >= 0.f) {
-                                mirror.params().color_mix = g_colour_idle;
-                                g_colour_idle = -1.f;
-                                g_colour_now = 0.f;
-                            }
+                            //
+                            // Forced to 0 outright rather than restored from
+                            // g_colour_idle -- that mirrors the Idle case's own
+                            // fix: g_colour_idle is only ever populated while
+                            // g_colour_fit_on is on, so trusting it here just
+                            // reintroduces the same "nothing recorded, nothing
+                            // reset" hole for the direct-jump path. Idle is
+                            // black and white by definition; that is the value
+                            // to land on, captured state or not.
+                            mirror.params().color_mix = 0.f;
+                            g_colour_idle = -1.f;
+                            g_colour_from = 0.f;
+                            g_colour_now = 0.f;
                             // The harmony forgets the last sitting here, not
                             // on the way into Idle: resolve() (see the Idle
                             // case above) needs to survive at least until
