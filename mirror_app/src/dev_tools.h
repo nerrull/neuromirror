@@ -38,6 +38,13 @@ int  growshot(const char* path, int steps, float az, float el, float rad,
 int  rootmovie(const char* outPath, double seconds, int fps, int W, int H,
                const std::vector<std::pair<std::string, std::string>>& fields,
                float faces, unsigned faceSeed);
+// The grown system, orbited at a chosen framing -- the shot --rootmovie's beat
+// sequence cannot give, since its first beats are held tight on one mask. See
+// the definition for the key=value knobs.
+int  rootorbit(const char* outPath, double seconds, int fps, int W, int H,
+               const std::vector<std::pair<std::string, std::string>>& fields,
+               int steps, float zoom, float el, float rate,
+               float faces, unsigned faceSeed, double moshAt, float moshFor);
 int  leafshot(const char* path, int W, int H, float az, float el, float radius);
 int  abshot(const char* path, int tranche, int W, int H,
             int focusMask, float zoom, float az, float el, int steps);

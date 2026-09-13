@@ -464,6 +464,95 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
     return 0;
 }
 
+// The finished tangle, orbited.
+//
+//   --rootorbit <out.mp4> [seconds] [fps] [W] [H] [key=value ...]
+//
+// --rootmovie is the show's own beat sequence, and that sequence spends its
+// first two beats tight on one mask -- which is the right shot for the piece
+// and the wrong one for judging anything about the *roots*. A ten-second
+// rootmovie never leaves the face. This grows the system to completion first
+// and then simply orbits it, framed on its own bounds, which is the shot that
+// answers "what does this look like on the root scene".
+//
+// It is also the shot a frame effect needs: the datamosh reads camera motion,
+// and there is very little of it in the beat sequence's held framings.
+//   steps=  growth steps to run before the first frame (default: to completion)
+//   zoom=   framing tightness, RootScene::zoom (1 = whole piece)
+//   el=     elevation, radians
+//   rate=   orbit speed, rad/s
+//   moshAt= / moshFor=   fire the datamosh cue at this point in the export
+int rootorbit(const char* outPath, double seconds, int fps, int W, int H,
+              const std::vector<std::pair<std::string, std::string>>& fields,
+              int steps, float zoom, float el, float rate,
+              float faces, unsigned faceSeed, double moshAt, float moshFor) {
+    MetalContext ctx;
+    if (!ctx.device()) { fprintf(stderr, "rootorbit: no Metal device\n"); return 1; }
+    RootScene roots(ctx, W, H);
+    if (!roots.valid()) { fprintf(stderr, "rootorbit: root scene invalid\n"); return 1; }
+
+    applyGrowthFields(roots, fields);
+    applyPostOverride(roots, getenv("GROWSHOT_POST"));
+    if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
+
+    roots.autoFrame = true;
+    roots.autoOrbit = false;   // the orbit is driven here, at a chosen rate
+    roots.zoom = zoom;
+    roots.elevation = el;
+    roots.showPlannedMasks = true;
+
+    // Grow first, off the clock. `steps` <= 0 means "until the sim says it is
+    // done", with a ceiling so a parameter set that never finishes still
+    // produces a file.
+    const int cap = (steps > 0) ? steps : 20000;
+    for (int i = 0; i < cap && !(steps <= 0 && roots.simDone()); ++i)
+        roots.advance(1.0 / 60.0);
+    roots.simPaused = true;   // the shot is of the finished structure
+    printf("rootorbit: grown (done=%d)\n", roots.simDone() ? 1 : 0);
+
+    const int frames = std::max(2, (int)std::lround(seconds * fps));
+    const double dt = 1.0 / fps;
+    char dirTemplate[] = "/tmp/rootorbit.XXXXXX";
+    const char* dir = mkdtemp(dirTemplate);
+    if (!dir) { fprintf(stderr, "rootorbit: no temp dir\n"); return 1; }
+
+    bool moshFired = false;
+    for (int f = 0; f < frames; ++f) {
+        const double ts = double(f) * dt;
+        roots.azimuth = 0.6f + rate * (float)ts;
+        roots.advance(dt);
+        if (moshAt >= 0.0 && !moshFired && ts >= moshAt) {
+            roots.renderer().triggerDatamosh(moshFor > 0.f ? moshFor
+                                                           : roots.renderer().post.moshTrigger);
+            moshFired = true;
+        }
+        id<MTLTexture> tex = nil;
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            tex = roots.render(cb);
+            [cb commit]; [cb waitUntilCompleted];
+        }
+        if (!tex) { fprintf(stderr, "rootorbit: no texture\n"); return 1; }
+        char path[512];
+        snprintf(path, sizeof(path), "%s/f%05d.ppm", dir, f);
+        if (!writeTexturePPM(tex, W, H, path, roots.renderer().outputIsEncoded()))
+            return 1;
+        if ((f % 60) == 0) { printf("rootorbit: %d/%d\n", f, frames); fflush(stdout); }
+    }
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -y -loglevel error -framerate %d -i %s/f%%05d.ppm "
+             "-c:v libx264 -pix_fmt yuv420p -crf 18 %s",
+             fps, dir, outPath);
+    const int rc = system(cmd);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+    system(cmd);
+    if (rc != 0) { fprintf(stderr, "rootorbit: ffmpeg failed (%d)\n", rc); return 1; }
+    printf("rootorbit: wrote %s (%d frames, %dx%d @ %d fps)\n", outPath, frames, W, H, fps);
+    return 0;
+}
+
 // Post-tranche overrides, so a single knob can be isolated without a rebuild:
 //   ABSHOT_POST="bloom=0,exposure=1.4"
 // Shared by --abshot and --rootbench, which is the point: the setting that was

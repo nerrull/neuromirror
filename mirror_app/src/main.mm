@@ -807,6 +807,36 @@ int main(int argc, char** argv) {
                              at(4) ? atoi(at(4)) : 900,
                              fields, faces, faceSeed);
         }
+        if (a == "--rootorbit") {
+            std::vector<std::string> pos;
+            std::vector<std::pair<std::string, std::string>> fields;
+            int steps = 0; float zoom = 0.55f, el = 0.28f, rate = 0.18f;
+            float faces = 0.f; unsigned faceSeed = 7u;
+            double moshAt = -1.0; float moshFor = 0.f;
+            for (int j = i + 1; j < argc; ++j) {
+                std::string t = argv[j];
+                const size_t eq = t.find('=');
+                if (eq == std::string::npos) { pos.push_back(t); continue; }
+                std::string k = t.substr(0, eq), v = t.substr(eq + 1);
+                if      (k == "steps")   steps = atoi(v.c_str());
+                else if (k == "zoom")    zoom = (float)atof(v.c_str());
+                else if (k == "el")      el = (float)atof(v.c_str());
+                else if (k == "rate")    rate = (float)atof(v.c_str());
+                else if (k == "faces")   faces = (float)atof(v.c_str());
+                else if (k == "facesSeed") faceSeed = (unsigned)strtoul(v.c_str(), nullptr, 10);
+                else if (k == "moshAt")  moshAt = atof(v.c_str());
+                else if (k == "moshFor") moshFor = (float)atof(v.c_str());
+                else fields.emplace_back(k, v);
+            }
+            auto at = [&](size_t n) { return n < pos.size() ? pos[n].c_str() : nullptr; };
+            return rootorbit(at(0) ? at(0) : "roots_orbit.mp4",
+                             at(1) ? atof(at(1)) : 10.0,
+                             at(2) ? atoi(at(2)) : 30,
+                             at(3) ? atoi(at(3)) : 900,
+                             at(4) ? atoi(at(4)) : 900,
+                             fields, steps, zoom, el, rate, faces, faceSeed,
+                             moshAt, moshFor);
+        }
         if (a == "--growshot") {
             // Positional args stop at the first key=value: the growth fields
             // are optional and there are twenty-odd of them, so they are named
