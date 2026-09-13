@@ -3100,8 +3100,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::Separator();
                     ui::SliderFloat("scatter (medium albedo)", &R.fog.scatter, 0.0f, 1.5f);
                     ui::SliderFloat("anisotropy (fwd <-> back)", &R.fog.anisotropy, -0.9f, 0.9f);
-                    ui::SliderFloat("wisp glow", &R.wispGlowStrength, 0.0f, 3.0f);
-                    ui::SliderInt("wisps", &R.wispCount, 0, 8);
                 }
                 ui::EndHeader();
                 ui::PopSection();

@@ -28,18 +28,11 @@
     #define RS_INT  int32_t
 #endif
 
-#define ROOT_MAX_WISPS  50
 #define ROOT_MAX_GROUPS 8
 
 // Baked-noise tiling period; must match the CPU bake in metal_root_renderer.mm
 // and the divisor in both MSL passes.
 #define ROOT_NOISE_TILE_PERIOD 8.0f
-
-// One drifting accent light. intensity packed in pos.w; color in .xyz.
-struct RootWisp {
-    RS_F4 pos;      // xyz = world position, w = intensity
-    RS_F4 color;    // xyz = color
-};
 
 // Geometry pass (root_geom.metal): capsule/blade sphere-tracer + shading.
 struct RootGeomU {
@@ -69,7 +62,6 @@ struct RootGeomU {
     float   pulseIntensity;
     float   pulseTime;
     RS_INT  shaderMode;   // 0 Phong, 1 PBR, 2 Invert
-    RS_INT  wispCount;
     RS_INT  paletteCount;
     RS_INT  pulseEnabled;
     float   cullPx;       // drop capsules projecting smaller than this (0 = off)
@@ -198,12 +190,10 @@ struct RootFogU {
     float   fogStart;        // march begins here: the air near the lens is clear
     RS_F4   fogDrift0;       // xyz, first octave's advection (pre-multiplied by time)
     RS_F4   fogDrift1;       // xyz, second octave's, deliberately not parallel
-    float   wispGlowStrength;
     float   axisLength;
     float   gridSpacing;
     RS_INT  showAxes;
     RS_INT  showGrid;
-    RS_INT  wispCount;
     RS_INT  aoEnabled;    // multiply the geometry pass's ambient share by the AO
     RS_INT  fogSteps;     // march samples between fogStart and the hit
     float   fogDither;    // jitter the march start, in units of one step

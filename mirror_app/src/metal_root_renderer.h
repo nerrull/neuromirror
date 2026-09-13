@@ -1,8 +1,8 @@
 // MetalRootRenderer — Metal port of sdf_viewer/RootRenderer.
 //
 // Same two-pass structure as the GL original (geometry sphere-tracer + fog
-// post-process) and the same public knobs (Material/PBRParams/Fog/Pulse/Overlay/
-// WispDef), but rendered through the app's shared MetalContext into offscreen
+// post-process) and the same public knobs (Material/PBRParams/Fog/Pulse/
+// Overlay), but rendered through the app's shared MetalContext into offscreen
 // MTLTextures. GL Texture-Buffer-Objects become plain MTLBuffers; the procedural
 // noise is the same baked 128^3 tiling fBm. Segment upload takes flat arrays
 // rather than CPlantBox types so this stays independent of the sim (the RootScene
@@ -318,15 +318,6 @@ public:
         float distortZoom    = 1.0f;
     };
 
-    struct WispDef {
-        float basePos[3]  = {};
-        float color[3]    = {0.8f, 0.9f, 1.0f};
-        float intensity   = 3.0f;
-        float driftRadius = 5.0f;
-        float driftSpeed  = 0.5f;
-        float phase[3]    = {};
-    };
-    static constexpr int MAX_WISPS  = ROOT_MAX_WISPS;
     static constexpr int MAX_GROUPS = ROOT_MAX_GROUPS;
 
     MetalRootRenderer(const MetalContext& ctx, const std::string& shaderDir,
@@ -441,10 +432,6 @@ public:
     AOParams   ao;
     PostParams post;
     float      postTime = 0.0f;   // drives the grain; advanced by the scene's clock
-    WispDef    wisps[MAX_WISPS];
-    int        wispCount        = 2;
-    float      wispGlowStrength = 1.0f;
-    float      wispTime         = 0.0f;
     float      radiusScale      = 1.0f;
     float      radiusMin        = 0.0f;
     float      radiusMax        = 0.0f;

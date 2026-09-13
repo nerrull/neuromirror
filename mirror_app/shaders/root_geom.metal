@@ -2,10 +2,10 @@
 //
 // Instanced pass: 6 vertices/segment build a screen-space bounding quad from the
 // projected capsule/blade endpoints; the fragment analytically intersects the
-// capsule (or sphere-marches the blade SDF), shades Phong/PBR, adds wisps + a
+// capsule (or sphere-marches the blade SDF), shades Phong/PBR, adds a
 // travelling pulse, and writes real scene depth so the fog pass and any mid
-// geometry composite against it. root_shared.h (host-prepended) supplies RootGeomU
-// / RootWisp and the tiling-noise period. NOTE: Invert (XOR) mode has no Metal
+// geometry composite against it. root_shared.h (host-prepended) supplies
+// RootGeomU and the tiling-noise period. NOTE: Invert (XOR) mode has no Metal
 // equivalent (no fragment logic ops); it falls back to solid white — see
 // metal_root_renderer for the documented divergence.
 #include <metal_stdlib>
@@ -332,7 +332,6 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
                                device const float4*        primF  [[buffer(6)]],
                                device const float4*        primA  [[buffer(7)]],
                                constant RootGeomU&         U      [[buffer(8)]],
-                               device const RootWisp*      wisps  [[buffer(9)]],
                                texture3d<float>            noiseTex [[texture(0)]]) {
     constexpr sampler noiseSmp(mag_filter::linear, min_filter::linear,
                                address::repeat, mip_filter::linear);
@@ -474,19 +473,6 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
                 * organicDiffuse(n, V, U.lightDir.xyz, albedo,
                                  U.sssWrap, U.sssTrans, U.sssPower, U.sssTint.xyz)
               + U.keyColor.xyz * U.specColor.xyz * (spec * detailSpec);
-
-        const float WISP_CUTOFF2 = 400.0;
-        for (int wi = 0; wi < U.wispCount; wi++) {
-            float3 lv = wisps[wi].pos.xyz - p;
-            float dist2 = dot(lv, lv);
-            if (dist2 > WISP_CUTOFF2) continue;
-            float3 ldir = lv * rsqrt(dist2);
-            float att = wisps[wi].pos.w / (1.0 + dist2 * 0.008);
-            float wd = max(dot(n, ldir), 0.0);
-            float3 wh = normalize(ldir + V);
-            float ws = pow(max(dot(n, wh), 0.0), U.shininess);
-            color += att * wisps[wi].color.xyz * (albedo * U.diffuse * wd + U.specColor.xyz * ws);
-        }
     } else {
         color = indirect;
         // The fibre field varies the finish as well as the form: a raised fibre
@@ -503,19 +489,6 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
                                               U.sssWrap, U.sssTrans, U.sssPower,
                                               U.sssTint.xyz);
             color += U.keyColor.xyz * max(org - lam, 0.0) * (1.0 - U.metallic) * (1.0 / PI);
-        }
-
-        const float WISP_CUTOFF2 = 400.0;
-        for (int wi = 0; wi < U.wispCount; wi++) {
-            float3 lv = wisps[wi].pos.xyz - p;
-            float dist2 = dot(lv, lv);
-            if (dist2 > WISP_CUTOFF2) continue;
-            float3 ldir = lv * rsqrt(dist2);
-            float att = wisps[wi].pos.w / (1.0 + dist2 * 0.008);
-            float ndotl = max(dot(n, ldir), 0.0);
-            float3 wh = normalize(ldir + V);
-            float wspec = pow(max(dot(n, wh), 0.0), 32.0) * (0.2 + 0.8 * U.metallic);
-            color += att * wisps[wi].color.xyz * (albedo * ndotl * (1.0 - U.metallic) + float3(wspec));
         }
     }
 

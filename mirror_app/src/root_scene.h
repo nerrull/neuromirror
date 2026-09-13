@@ -1,7 +1,7 @@
 // RootScene — the 3D lit root scene. Owns a MetalRootRenderer, an orbit camera,
 // and (for now) a procedurally generated branching structure standing in for the
 // live CPlantBox growth (Task: sdfsim wiring). advance() spins the camera and
-// drives the fog/pulse/wisp clocks; render() encodes the two Metal passes into the
+// drives the fog/pulse clocks; render() encodes the two Metal passes into the
 // caller's command buffer and returns the fogged colour texture to present.
 #pragma once
 #ifndef __OBJC__

@@ -1,10 +1,10 @@
 // root_fog.metal — Metal port of sdf_viewer's fog.vert + fog.frag.
 //
 // Fullscreen pass: reads the geometry pass's colour + depth, applies an FXAA-lite
-// smooth, volumetric noise fog (camera-stable option), optional axes/grid
-// overlays, and soft wisp glow. root_shared.h (host-prepended) supplies RootFogU /
-// RootWisp. The ray/uv reconstruction uses the fragment's pixel position so it
-// matches the geometry pass's NDC exactly (Metal textures are row-0-at-top).
+// smooth, volumetric noise fog (camera-stable option), and optional axes/grid
+// overlays. root_shared.h (host-prepended) supplies RootFogU. The ray/uv
+// reconstruction uses the fragment's pixel position so it matches the geometry
+// pass's NDC exactly (Metal textures are row-0-at-top).
 #include <metal_stdlib>
 using namespace metal;
 
@@ -224,7 +224,6 @@ fragment float4 root_fogvol_fs(FogVOut in [[stage_in]],
 
 fragment float4 root_fog_fs(FogVOut in [[stage_in]],
                             constant RootFogU&    U        [[buffer(0)]],
-                            device const RootWisp* wisps    [[buffer(1)]],
                             texture2d<float>      colorTex [[texture(0)]],
                             depth2d<float>        depthTex [[texture(1)]],
                             texture3d<float>      noiseTex [[texture(2)]],
@@ -310,33 +309,12 @@ fragment float4 root_fog_fs(FogVOut in [[stage_in]],
     // "colour of the fog at infinity" is now something the integration arrives
     // at rather than something asserted.
     float3 foggedColor = hitColor * T + fogRes.rgb;
-    const float tau = -log(max(T, 1e-4));   // the wisp attenuation still wants it
 
-    // Wisp glow
-    float3 wispGlow = float3(0.0);
-    const float GLOW_R = 5.0;
-    const float GLOW_CUTOFF2 = (4.0 * GLOW_R) * (4.0 * GLOW_R);
-    float tauPerT = tau / max(min(tHit, 200.0), 1e-3);
-    for (int wi = 0; wi < U.wispCount; wi++) {
-        float3 oc = ro - wisps[wi].pos.xyz;
-        float bo = dot(rd, oc);
-        float tc = max(0.0, -bo);
-        float3 cp = (ro + rd * tc) - wisps[wi].pos.xyz;
-        float d2 = dot(cp, cp);
-        if (d2 > GLOW_CUTOFF2) continue;
-        float glow = wisps[wi].pos.w * exp(-d2 / (GLOW_R * GLOW_R));
-        float tauWisp = tauPerT * min(tc, 200.0);
-        glow *= exp(-tauWisp) * step(tc, tHit + 0.5);
-        wispGlow += wisps[wi].color.xyz * glow;
-    }
-
-    float glowGate = clamp(U.fogDensity / 0.015, 0.0, 1.0) * U.wispGlowStrength;
     // The film does not sit in the medium: it is the picture the piece is
     // cutting from, not a surface eight units into a foggy room. Mixed rather
     // than branched so a partially-released sheet crossfades into the fog as
     // it stops being a picture. Alpha is forwarded so the composite can finish
     // the job -- it is the only reason this pass has ever returned anything but
     // 1 in alpha.
-    const float3 lit = foggedColor + wispGlow * 0.15 * glowGate;
-    return float4(mix(lit, sceneSample.rgb, filmWeight), sceneSample.a);
+    return float4(mix(foggedColor, sceneSample.rgb, filmWeight), sceneSample.a);
 }

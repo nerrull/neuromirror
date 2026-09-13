@@ -190,8 +190,8 @@ RootScene::RootScene(const MetalContext& ctx, int w, int h) {
     rr_ = std::make_unique<MetalRootRenderer>(ctx, shaderDir, sharedHeader, w, h);
     if (!rr_->valid()) return;
 
-    // A warm, mottled root material with soft fog and a couple of drifting wisps,
-    // echoing mask_relay_gui's default look.
+    // A warm, mottled root material with soft fog, echoing mask_relay_gui's
+    // default look.
     rr_->mat.baseColor[0] = 0.55f; rr_->mat.baseColor[1] = 0.42f; rr_->mat.baseColor[2] = 0.28f;
     rr_->mat.baseColor2[0] = 0.28f; rr_->mat.baseColor2[1] = 0.18f; rr_->mat.baseColor2[2] = 0.12f;
     rr_->mat.colorNoiseStrength = 0.6f;
@@ -200,18 +200,6 @@ RootScene::RootScene(const MetalContext& ctx, int w, int h) {
     rr_->mat.diffuse = 0.55f;
     rr_->fog.visibility = 45.0f;
     rr_->fog.noiseStrength = 0.55f;
-
-
-    // Wisps off by default. They are still fully set up below, so turning the
-    // count up in the panel brings them back -- but as a default they put two
-    // coloured point lights into a scene whose look now comes from the
-    // environment and the mask's own light, and they were reading as a
-    // separate effect sitting on top of it rather than as part of it.
-    rr_->wispCount = 0;
-    rr_->wisps[0].basePos[0] = 6.f;  rr_->wisps[0].basePos[1] = -14.f; rr_->wisps[0].basePos[2] = 4.f;
-    rr_->wisps[0].color[0] = 1.0f; rr_->wisps[0].color[1] = 0.85f; rr_->wisps[0].color[2] = 0.5f;
-    rr_->wisps[1].basePos[0] = -7.f; rr_->wisps[1].basePos[1] = -6.f;  rr_->wisps[1].basePos[2] = -3.f;
-    rr_->wisps[1].color[0] = 0.6f; rr_->wisps[1].color[1] = 0.8f; rr_->wisps[1].color[2] = 1.0f;
 
     rr_->pulse.enabled = true;
 
@@ -1537,7 +1525,6 @@ void RootScene::advance(double dt) {
     if (autoOrbit && !clothPinned()) azimuth += orbitRate * (float)dt;
     rr_->fog.driftTime += (float)dt * rr_->fog.driftSpeed;
     rr_->pulse.time    += (float)dt;
-    rr_->wispTime      += (float)dt;
     rr_->postTime      += (float)dt;
 
     focusAngle_ += orbitRate * (float)dt;

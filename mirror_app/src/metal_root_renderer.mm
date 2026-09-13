@@ -628,19 +628,6 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         (simd_float3){up.x,  up.y,  up.z},
         (simd_float3){fwd.x, fwd.y, fwd.z});
 
-    // --- Animate wisps ---
-    int active = std::min(std::max(wispCount, 0), MAX_WISPS);
-    std::vector<RootWisp> wispBuf(std::max(1, active));
-    for (int i = 0; i < active; i++) {
-        const auto& w = wisps[i];
-        float t = wispTime;
-        float wx = w.basePos[0] + w.driftRadius * sinf(w.driftSpeed * t        + w.phase[0]);
-        float wy = w.basePos[1] + w.driftRadius * cosf(w.driftSpeed * t * 0.7f + w.phase[1]);
-        float wz = w.basePos[2] + w.driftRadius * sinf(w.driftSpeed * t * 1.3f + w.phase[2]);
-        wispBuf[i].pos   = (simd_float4){wx, wy, wz, w.intensity};
-        wispBuf[i].color = (simd_float4){w.color[0], w.color[1], w.color[2], 0.f};
-    }
-
     // --- Geometry uniforms ---
     RootGeomU gu = {};
     gu.viewProj = vp;
@@ -677,7 +664,6 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gu.pulseSpeed = pulse.speed; gu.pulseSpacing = pulse.spacing; gu.pulseWidth = pulse.width;
     gu.pulseIntensity = pulse.intensity; gu.pulseTime = pulse.time;
     gu.shaderMode = (int)shaderMode;
-    gu.wispCount = active;
     gu.pulseEnabled = pulse.enabled ? 1 : 0;
     gu.cullPx = subpixelCull ? 0.75f : 0.0f;
     int pc = paletteCount < 0 ? 0 : (paletteCount > MAX_GROUPS ? MAX_GROUPS : paletteCount);
@@ -713,7 +699,6 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     [ge setCullMode:MTLCullModeNone];
     [ge setVertexBytes:&gu length:sizeof(gu) atIndex:8];
     [ge setFragmentBytes:&gu length:sizeof(gu) atIndex:8];
-    [ge setFragmentBytes:wispBuf.data() length:wispBuf.size() * sizeof(RootWisp) atIndex:9];
     [ge setFragmentTexture:noiseTex_ atIndex:0];
 
     lastVisibleInstances = 0; lastCulledInstances = 0; lastDrawnSegments = 0;
@@ -940,10 +925,8 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         fu.fogDrift0 = (simd_float4){ t * 0.050f,  t * 0.021f, t * 0.033f, 0.f};
         fu.fogDrift1 = (simd_float4){-t * 0.027f,  t * 0.044f, t * 0.012f, 0.f};
     }
-    fu.wispGlowStrength = wispGlowStrength;
     fu.axisLength = overlay.axisLength; fu.gridSpacing = overlay.gridSpacing;
     fu.showAxes = overlay.showAxes ? 1 : 0; fu.showGrid = overlay.showGrid ? 1 : 0;
-    fu.wispCount = active;
 
     // --- Pass 3a: the volumetric integral, at scene resolution / fog.downscale.
     // Its own uniform copy differs only in `res`, which is what the ray
@@ -965,7 +948,6 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     id<MTLRenderCommandEncoder> fe = [cb renderCommandEncoderWithDescriptor:fp];
     [fe setRenderPipelineState:fogPipe_];
     [fe setFragmentBytes:&fu length:sizeof(fu) atIndex:0];
-    [fe setFragmentBytes:wispBuf.data() length:wispBuf.size() * sizeof(RootWisp) atIndex:1];
     [fe setFragmentTexture:rootColorTex_ atIndex:0];
     [fe setFragmentTexture:rootDepthTex_ atIndex:1];
     [fe setFragmentTexture:noiseTex_ atIndex:2];

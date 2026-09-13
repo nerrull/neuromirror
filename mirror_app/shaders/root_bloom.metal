@@ -2,7 +2,7 @@
 // (the "dual filter" / COD-Siggraph-2014 approach).
 //
 // A single wide Gaussian would need an enormous kernel to spread light the way
-// the wisps and the travelling pulses want, and it bands badly at that width. A
+// the travelling pulses want, and it bands badly at that width. A
 // chain of 13-tap downsamples followed by 9-tap tent upsamples, each blended
 // back into the level above, reaches the same spread for a fraction of the taps
 // and lands on a much smoother falloff -- which matters here because the bloom
