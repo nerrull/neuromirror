@@ -376,6 +376,33 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
     const int frames = std::max(2, (int)std::lround(seconds * fps));
     const double dt = 1.0 / fps;
 
+    // Free camera, for look-dev rather than for the piece. The beat sequence
+    // owns the camera and every one of its framings stands a long way off the
+    // structure -- which is right for the show and useless for judging
+    // anything that lives *in* the volume between the lens and the roots. Fog
+    // read at those distances is nearly opaque, so a shot meant to show, say,
+    // light coming through the lattice cannot be set up through the beats at
+    // all. With this on, the sequence is skipped and the camera is whatever
+    // GROWSHOT_POST's az/el/radius/targetY/orbitRate leave on the scene.
+    //
+    // The growth is run to completion up front, because there are no beats to
+    // pace it any more and a free-cam shot wants the finished structure.
+    //   ROOTMOVIE_FREECAM=1 GROWSHOT_POST="autoFrame=0,az=3.14,el=-0.9,\
+    //   radius=30,targetY=-14,autoOrbit=1,orbitRate=0.12" mirror_app --rootmovie out.mp4
+    const bool freeCam = getenv("ROOTMOVIE_FREECAM") &&
+                         atoi(getenv("ROOTMOVIE_FREECAM")) != 0;
+    if (freeCam) {
+        const int keepSteps = roots.simStepsPerFrame;
+        roots.simStepsPerFrame = 64;
+        for (int i = 0; i < 4000 && !roots.simDone(); ++i) roots.advance(dt);
+        roots.simStepsPerFrame = keepSteps;
+        roots.simPaused = true;
+        // applyPostOverride ran before the growth, and updateBounds() has been
+        // moving the framing the whole way through it -- so re-apply, or the
+        // authored camera is the one the last growth frame auto-framed.
+        applyPostOverride(roots, getenv("GROWSHOT_POST"));
+    }
+
     char dirTemplate[] = "/tmp/rootmovie.XXXXXX";
     const char* dir = mkdtemp(dirTemplate);
     if (!dir) { fprintf(stderr, "rootmovie: no temp dir\n"); return 1; }
@@ -389,8 +416,9 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
         // either, so beats 3/4 fall back to their plain timers (see
         // RootBeatParams::beat3_focus_fallback_seconds / beat4_dwell_seconds)
         // -- exactly what those exist for.
-        seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true,
-                 /*markerHit=*/false);
+        if (!freeCam)
+            seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true,
+                     /*markerHit=*/false);
         roots.advance(dt);
 
         id<MTLTexture> tex = nil;
