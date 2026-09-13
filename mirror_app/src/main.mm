@@ -2414,13 +2414,30 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Raindrops belong to Idle -- the init phase, face gone, network
+            // untrained for the next visitor -- and nowhere else. Fitting is
+            // the one this actually protects: the ripple field is signal the
+            // network's target does not contain, so it has to be off for the
+            // whole time the pond is being fit, not just toggled off by hand
+            // and forgotten. Transition and Roots have no fit running either,
+            // but they are their own visual beat and were never meant to
+            // carry rain. Driven every frame rather than left to the panel's
+            // "raindrops" checkbox, which used to leave this to hand-toggling
+            // (and to whatever it was last left at).
+            const show::Phase dropPhase = g_show.phase();
+            if (mirror.valid())
+                mirror.params().drops_on = (dropPhase == show::Phase::Idle);
+
             // Audio onsets -> raindrops. Polled here, once per frame and
             // whatever scene is up: the tap is a live input, and letting it
             // back up while another scene is showing would land the whole
-            // backlog at once on the way back to the mirror.
+            // backlog at once on the way back to the mirror. The phase check
+            // above already keeps these from rendering outside Idle; skipping
+            // the trigger call too just avoids queuing work that would only
+            // be thrown away.
             {
                 const std::vector<mirror::AudioOnset> hits = g_pulses.poll();
-                if (g_pulse_drops && mirror.valid()) {
+                if (g_pulse_drops && mirror.valid() && dropPhase == show::Phase::Idle) {
                     for (const mirror::AudioOnset& e : hits)
                         mirror.pond().triggerDrop(e.strength * g_pulse_gain, e.pan);
                 }
@@ -2434,9 +2451,8 @@ int main(int argc, char** argv) {
             // rather than a random-fire toy.
             {
                 const std::vector<mirror::MarkerHit> hits = g_audio.pollFirePluckerMarkers();
-                const show::Phase p = g_show.phase();
                 const bool active = g_pluck_drops && mirror.valid() &&
-                                     (p == show::Phase::Idle || p == show::Phase::Fitting);
+                                     dropPhase == show::Phase::Idle;
                 if (active) {
                     for (const mirror::MarkerHit& e : hits)
                         mirror.pond().triggerDrop(e.strength * g_pluck_drop_gain, 0.f);

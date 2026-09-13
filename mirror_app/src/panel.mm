@@ -2411,6 +2411,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ui::SliderFloat("ripple phase", &P.ripple_offset, 0.0f, 2.0f * (float)M_PI);
                 ui::SliderFloat("refraction (warp)", &P.warp, 0.0f, 1.0f);
                 ui::Checkbox("raindrops", &P.drops_on);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Only takes hold in Idle -- main.mm drives this every\n"
+                        "frame while the show runs (on in Idle, off everywhere\n"
+                        "else, Fitting especially: the ripple field is signal\n"
+                        "the network's target does not contain). This checkbox\n"
+                        "is only the last word when the show isn't running.");
+                }
                 ui::BeginGroup("rain", true, P.drops_on);
                 {
                     mirror::DropSpawnParams& S = P.spawn;
