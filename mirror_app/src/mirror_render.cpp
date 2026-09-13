@@ -88,11 +88,12 @@ const char* kRippleSrc = R"MSL(
 
     #pragma unroll
     for (uint s = 0; s < NSRC; ++s) {
-        const float cx  = src[SRCDIM * s + 0];
-        const float cy  = src[SRCDIM * s + 1];
-        const float ph  = src[SRCDIM * s + 2];
-        const float amp = src[SRCDIM * s + 3];
-        const float pkw = src[SRCDIM * s + 4];
+        const float cx   = src[SRCDIM * s + 0];
+        const float cy   = src[SRCDIM * s + 1];
+        const float ph   = src[SRCDIM * s + 2];
+        const float amp  = src[SRCDIM * s + 3];
+        const float pkw  = src[SRCDIM * s + 4];
+        const float dmul = src[SRCDIM * s + 5];
 
         const float dx = x - cx;
         const float dy = y - cy;
@@ -102,8 +103,10 @@ const char* kRippleSrc = R"MSL(
         const float r2 = ri * ri;
 
         // With core_r2 == 0 this factor is exactly 1, so one kernel serves both
-        // the rolloff-on and rolloff-off settings without a branch.
-        float a = amp * exp(-decay * ri) * (r2 / (r2 + core_r2));
+        // the rolloff-on and rolloff-off settings without a branch. Likewise
+        // dmul == 1 (every non-drop source) leaves the pond's own decay exactly
+        // as it was.
+        float a = amp * exp(-decay * dmul * ri) * (r2 / (r2 + core_r2));
 
         // Drop packet: confine this source's rings to a train riding its own
         // wavefront, at phase/k -- see RippleSource in mirror_render.h. At width
@@ -316,11 +319,12 @@ mx::array multi_ripple_features_ops(const mx::array& coords_in,
     auto gy = mx::zeros({n, 1}, mx::float32);
     for (const auto& s : sources) {
         const float cx = s[0], cy = s[1], phase = s[2], amp = s[3], pkw = s[4];
+        const float dmul = s[5];
         auto dx = mx::subtract(x, S(cx));
         auto dy = mx::subtract(y, S(cy));
         auto ri = mx::sqrt(mx::add(mx::add(mx::multiply(dx, dx), mx::multiply(dy, dy)),
                                    S(1e-6f)));
-        auto a = mx::multiply(S(amp), mx::exp(mx::multiply(S(-decay), ri)));
+        auto a = mx::multiply(S(amp), mx::exp(mx::multiply(S(-decay * dmul), ri)));
         if (core_radius != 0.f) {                     // fade the singular high-freq core
             auto r2 = mx::multiply(ri, ri);
             a = mx::multiply(a, mx::divide(r2, mx::add(r2, S(core_radius * core_radius))));

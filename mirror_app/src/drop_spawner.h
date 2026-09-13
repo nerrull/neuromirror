@@ -53,6 +53,21 @@ struct DropSpawnParams {
     float width = 0.14f, width_jitter = 0.35f;
     float speed = 1.f,  speed_jitter = 0.15f;   // multiplies the pond's speed
 
+    // Below this amplitude a candidate drop -- rain-scheduled or triggered,
+    // after jitter and any hit scaling -- is discarded outright rather than
+    // spawned faint. A rejection, not a floor: quieter than this and it never
+    // appears at all, doesn't count toward `max_active`, and doesn't advance
+    // `spawnCount()`. 0 disables rejection, the old behaviour.
+    float reject_below_amp = 0.f;
+
+    // How much faster a drop's rings fade with radius the quieter it is,
+    // relative to `amp`: a drop at or above `amp` decays at the pond's own
+    // rate (multiplier 1, unchanged); one at amplitude 0 decays at
+    // `1 + weak_decay_gain` times that rate. 0 disables the effect -- every
+    // drop decays the same, the old behaviour. See RippleSource's decay
+    // multiplier in mirror_render.h.
+    float weak_decay_gain = 1.f;
+
     // A drop is retired once its wavefront has left the frame; `life` is only
     // the backstop for a drop so slow it would otherwise sit there forever.
     float life = 8.f;
@@ -76,6 +91,10 @@ struct Drop {
     float  width = 0.14f;
     float  speed = 1.f;          // multiplier on the pond's ripple speed
     bool   from_audio = false;
+    // Multiplier on the pond's ripple decay for this drop's rings alone (see
+    // RippleSource in mirror_render.h). Set once at spawn from `amp` and
+    // `weak_decay_gain`; fixed for the drop's whole life, same as amp/width.
+    float  decay_mult = 1.f;
 };
 
 class DropSpawner {

@@ -2430,6 +2430,22 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("size jitter", &S.width_jitter, 0.0f, 1.0f);
                     ui::SliderFloat("strength", &S.amp, 0.0f, 2.0f);
                     ui::SliderFloat("strength jitter", &S.amp_jitter, 0.0f, 1.0f);
+                    ui::SliderFloat("reject below (strength)", &S.reject_below_amp,
+                                     0.0f, 2.0f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "A candidate drop -- rain or triggered, after\n"
+                            "jitter and any hit scaling -- quieter than this\n"
+                            "never spawns at all. 0 rejects nothing.");
+                    }
+                    ui::SliderFloat("weak decay boost", &S.weak_decay_gain, 0.0f, 4.0f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How much faster a drop's rings fade with radius\n"
+                            "the quieter it is, relative to \"strength\" above.\n"
+                            "0 = every drop decays the same; higher makes weak\n"
+                            "drops die out sooner than strong ones.");
+                    }
                     ui::SliderFloat("spread jitter", &S.speed_jitter, 0.0f, 1.0f);
                     ui::SliderFloat("area x", &S.area_x, 0.0f, 1.2f);
                     ui::SliderFloat("area y", &S.area_y, 0.0f, 1.2f);

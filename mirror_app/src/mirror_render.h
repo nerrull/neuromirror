@@ -22,9 +22,10 @@ namespace mx = mlx::core;
 // sin_field, cos_field, z_cos, spare.
 inline constexpr int ENRICHED_DIM = 8;
 
-// A ripple source: (cx, cy, phase, amp, packet width). Center, outward phase
-// (ramp to animate propagation), 0..1 amplitude envelope, and how wide a train
-// its rings are confined to.
+// A ripple source: (cx, cy, phase, amp, packet width, decay multiplier).
+// Center, outward phase (ramp to animate propagation), 0..1 amplitude
+// envelope, how wide a train its rings are confined to, and how much faster
+// than the pond's own `decay` this source's rings fall off with radius.
 //
 // The packet width is what turns a source from a standing ring field into one
 // impact. At 0 the source is the original field: it oscillates over its whole
@@ -39,12 +40,18 @@ inline constexpr int ENRICHED_DIM = 8;
 // envelope and the oscillation from drifting apart -- a packet whose centre and
 // crests disagree looks like a window sliding over a static wave.
 //
-// Per source rather than one global width because the drops are not
-// interchangeable: a hard transient should land as a wide splash next to a
-// tick's tight ring, and the orbiting source stays a standing field (width 0)
-// in the same frame.
-using RippleSource = std::array<float, 5>;
-inline constexpr int RIPPLE_SRC_DIM = 5;
+// The decay multiplier is what lets a faint drop look faint in a way that
+// isn't just "the same ring, dimmer": 1 is the pond's own decay, unchanged;
+// above 1 the exp(-decay*ri) envelope tightens, so this source's rings die
+// out over a shorter radius than a source at full strength. A standing field
+// (the orbiting source) always passes 1 here -- it has no "weaker" to read.
+//
+// Both are per source rather than one global setting because the drops are
+// not interchangeable: a hard transient should land as a wide splash next to
+// a tick's tight ring and outlive it, while the orbiting source stays a
+// standing field (width 0, multiplier 1) in the same frame.
+using RippleSource = std::array<float, 6>;
+inline constexpr int RIPPLE_SRC_DIM = 6;
 
 // How much a packet lengthens per unit of travel. Real ripples disperse, and a
 // packet of fixed width instead reads as a hard ring sliding outward.

@@ -156,7 +156,7 @@ std::vector<RippleSource> Pond::sources(float asp, double t, const PondParams& p
         const float phase = 2.0f * (float)M_PI * p.speed * (float)t + p.ripple_offset;
         float ox = 0.6f * asp * std::cos(0.5f * (float)t);
         float oy = 0.6f * std::sin(0.5f * (float)t);
-        src.push_back({ox, oy, phase, 1.0f, 0.0f});
+        src.push_back({ox, oy, phase, 1.0f, 0.0f, 1.0f});
     }
     return src;
 }

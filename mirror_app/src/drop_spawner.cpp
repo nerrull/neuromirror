@@ -51,6 +51,13 @@ Drop DropSpawner::makeDrop(double t, float asp, const DropSpawnParams& p,
         const float px = std::clamp(pan, -1.f, 1.f) * asp;
         d.cx = (1.f - k) * d.cx + k * px;
     }
+
+    // Weaker than `amp` -> a faster decay, up to `1 + weak_decay_gain` at
+    // amp 0. At or above `amp` (a scatter roll on the loud side, or a hit
+    // strength near 1) the multiplier is exactly 1: nothing here makes a
+    // strong drop decay any slower than the pond's own rate.
+    const float rel = std::clamp(d.amp / std::max(p.amp, 1e-4f), 0.f, 1.f);
+    d.decay_mult = 1.f + std::max(p.weak_decay_gain, 0.f) * (1.f - rel);
     return d;
 }
 
@@ -86,9 +93,12 @@ const std::vector<RippleSource>& DropSpawner::update(double t, float asp,
 
     // Externally triggered hits first: they are the ones with a deadline.
     for (const Pending& hit : pending_) {
-        if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
-        drops_.push_back(makeDrop(t, asp, p, hit.strength, hit.pan, true));
-        ++spawns_;
+        Drop d = makeDrop(t, asp, p, hit.strength, hit.pan, true);
+        if (d.amp >= p.reject_below_amp) {
+            if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
+            drops_.push_back(std::move(d));
+            ++spawns_;
+        }
     }
     pending_.clear();
 
@@ -98,9 +108,12 @@ const std::vector<RippleSource>& DropSpawner::update(double t, float asp,
         // worth of arrears onto the surface at once.
         int guard = budget;
         while (t >= next_spawn_ && guard-- > 0) {
-            if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
-            drops_.push_back(makeDrop(next_spawn_, asp, p, -1.f, 0.f, false));
-            ++spawns_;
+            Drop d = makeDrop(next_spawn_, asp, p, -1.f, 0.f, false);
+            if (d.amp >= p.reject_below_amp) {
+                if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
+                drops_.push_back(std::move(d));
+                ++spawns_;
+            }
 
             // Regularity: the metronomic gap and an exponential one, blended.
             // The exponential is what makes rain sound and look like rain --
@@ -130,7 +143,8 @@ const std::vector<RippleSource>& DropSpawner::update(double t, float asp,
         // A few milliseconds of attack: at age 0 the packet is a spike at a
         // point, and stepping it in whole would pop a full ring on one frame.
         const float attack = std::min((float)age / 0.05f, 1.f);
-        src_.push_back({d.cx, d.cy, phase, d.amp * attack * attack, d.width});
+        src_.push_back({d.cx, d.cy, phase, d.amp * attack * attack, d.width,
+                       d.decay_mult});
     }
     return src_;
 }

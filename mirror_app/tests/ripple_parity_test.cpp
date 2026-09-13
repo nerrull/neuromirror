@@ -46,8 +46,10 @@ std::vector<mirror::RippleSource> make_sources(int n, float packet_w = 0.f) {
     std::vector<mirror::RippleSource> s;
     for (int i = 0; i < n; ++i) {
         const float f = static_cast<float>(i);
+        // Decay multiplier varies too (0.6, 0.75, 0.9, ...), off 1, so every
+        // case here also exercises the two paths agreeing on it.
         s.push_back({-0.7f + 0.3f * f, 0.5f - 0.21f * f, 0.4f + 0.17f * f,
-                     0.35f + 0.12f * f, packet_w});
+                     0.35f + 0.12f * f, packet_w, 0.6f + 0.15f * f});
     }
     return s;
 }

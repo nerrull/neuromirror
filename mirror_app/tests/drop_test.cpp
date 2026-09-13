@@ -44,7 +44,7 @@ std::vector<float> radial(float phase, float packet_w, int n = 512,
         xy.push_back(0.f);
     }
     auto coords = mx::array(xy.data(), {n, 2}, mx::float32);
-    std::vector<mirror::RippleSource> src{{0.f, 0.f, phase, 1.f, packet_w}};
+    std::vector<mirror::RippleSource> src{{0.f, 0.f, phase, 1.f, packet_w, 1.f}};
     auto f = mirror::multi_ripple_features(coords, src, kRingFreq, 1.8f, 0.f, 0.f);
     // Column 4 is sin_field, the ripple term the MLP actually sees.
     auto col = mx::contiguous(mx::astype(mx::slice(f, {0, 4}, {n, 5}), mx::float32));
@@ -290,6 +290,9 @@ void test_triggers() {
     // The quiet one still has to be visible: an onset that fires and shows
     // nothing is indistinguishable from a dropped trigger.
     check(weak[3] > 0.05f * p.amp && weak[4] > 0.02f, "a quiet hit still lands");
+    // ...but it should die out faster than the loud one -- index 5 is the
+    // ripple decay multiplier (see RippleSource in mirror_render.h).
+    check(weak[5] > strong[5], "and a quiet hit's ripples fade faster");
 
     // Ignoring strength is a setting, not an oversight: at 0 the audio decides
     // only *when*.
@@ -334,6 +337,27 @@ void test_clock_moved_back() {
     check(sp.drops().size() <= size_t(p.max_active), "and the budget still holds");
 }
 
+void test_reject() {
+    std::printf("\na quiet enough candidate never spawns at all\n");
+    mirror::DropSpawnParams p;
+    p.rain_on = false;
+    p.amp_jitter = 0.f;
+    p.hit_amp = 1.f;
+    p.reject_below_amp = 0.5f;   // p.amp defaults to 1
+
+    mirror::DropSpawner weak(3);
+    weak.trigger(0.1f, 0.f);     // amp ~0.235, below the threshold
+    weak.update(0.0, 1.6f, kRingFreq, 1.2f, p);
+    check(weak.drops().empty() && weak.spawnCount() == 0,
+          "a hit below the threshold is discarded, not just hidden");
+
+    mirror::DropSpawner strong(3);
+    strong.trigger(1.f, 0.f);    // amp ~1.0, at the threshold
+    strong.update(0.0, 1.6f, kRingFreq, 1.2f, p);
+    check(!strong.drops().empty() && strong.spawnCount() == 1,
+          "a hit above it still lands, and still counts");
+}
+
 }  // namespace
 
 int main() {
@@ -343,6 +367,7 @@ int main() {
     test_each_drop_is_its_own();
     test_budget_and_retirement();
     test_triggers();
+    test_reject();
     test_clock_moved_back();
     std::printf("%s\n", g_fail == 0 ? "PASS" : "FAIL");
     return g_fail == 0 ? 0 : 1;
