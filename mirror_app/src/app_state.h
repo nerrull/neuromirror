@@ -166,6 +166,12 @@ extern bool  g_shepherd_on;     // the Fitting-phase glissando, on or off
 extern float g_shepherd_rate_min;  // semitones/s at fit_level 0
 extern float g_shepherd_rate_max;  // semitones/s at fit_level 1
 extern float g_shepherd_phase;  // semitones, 0..12 -- the Fitting-phase glissando's position
+
+// The pad's flanger (Mirror_Pad_Flanger, ModFrequency bound 1:1 to the
+// `FlangerRate` RTPC): a sweep that speeds up as the fit converges, the same
+// "the room is responding" idea as the shepherd's rate above.
+extern float g_flanger_rate_min;  // Hz, at fit_level 0
+extern float g_flanger_rate_max;  // Hz, at fit_level 1
 extern std::string g_audio_err;
 
 extern std::vector<float> g_face_colors;

@@ -62,6 +62,7 @@ void WwiseAudio::stopCapture() {}
 #include <AK/Plugin/AkConvolutionReverbFXFactory.h>
 #include <AK/Plugin/AkPeakLimiterFXFactory.h>
 #include <AK/Plugin/AkParametricEQFXFactory.h>
+#include <AK/Plugin/AkFlangerFXFactory.h>
 #include "MacroOscillatorSourceFactory.h"
 #include "DrumSynthSourceFactory.h"
 #include "ModalVoiceFXFactory.h"
@@ -258,6 +259,9 @@ void WwiseAudio::update(const AudioParams& p) {
     // draw. The musical unit stays MIDI right up to `chord`, which converts.
     if (all || Moved(p.comb_hz, sent_.comb_hz))
         AK::SoundEngine::SetRTPCValue("Comb_Tuning", p.comb_hz);
+
+    if (all || Moved(p.flanger_rate, sent_.flanger_rate))
+        AK::SoundEngine::SetRTPCValue("FlangerRate", p.flanger_rate);
 
     sent_ = p;
     sent_any_ = true;

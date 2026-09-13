@@ -42,7 +42,7 @@
 //   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt   (the room)
 //           FitLevel, SceneProgress                             (the piece)
 //           Key, Intensity, Transpose                            (the operator)
-//           Comb_Tuning                                          (the harmony)
+//           Comb_Tuning, FlangerRate                              (the harmony)
 //   States  Phase      = Idle | Fitting | Transition | Roots
 //           ChordStage = Stage0..Stage4
 //
@@ -91,6 +91,15 @@ struct AudioParams {
     // `setState`). Only the comb, which has no State Group of its own, still
     // needs a value pushed every frame.
     float comb_hz = 466.16f;    // Hz, 20..2000
+
+    // The pad's flanger, Hz -- how fast the LFO sweeps. Computed in main.mm as
+    // a lerp between the panel's min/max sliders, driven by fit_level, so the
+    // sweep speeds up as the fit converges. A plain 1:1 RTPC curve on the
+    // Wwise side (see Mirror_Pad_Flanger's ModFrequency binding), because the
+    // shaping -- where between min and max the current fit lands -- is
+    // already a decision made in code, not something a second curve should
+    // remake.
+    float flanger_rate = 0.1f;  // Hz, 0..5
 };
 
 class WwiseAudio {

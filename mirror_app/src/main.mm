@@ -2195,12 +2195,26 @@ int main(int argc, char** argv) {
                     ap.transpose = g_shepherd_phase;
                 }
 
+                // The pad's flanger: a sweep that speeds up as the fit
+                // converges, same idea as the shepherd's rate above but
+                // spent on the pad's own colour instead of its pitch. Not
+                // gated to Fitting -- fit_level is already 0 outside it (the
+                // pond isn't training), so this settles to the slow end on
+                // its own everywhere else.
+                ap.flanger_rate = g_flanger_rate_min +
+                    (g_flanger_rate_max - g_flanger_rate_min) * ap.fit_level;
+
                 // The Transition handoff drops the pluck to a very low
                 // register -- not a chord tone, so it bypasses Chord
                 // entirely. The pluck event itself keeps playing (see the
-                // Phase::Transition case above); the effect's own Glide
-                // portamentos down to this from wherever the pluck was.
-                if (g_show.phase() == show::Phase::Transition) {
+                // Phase::Transition and Phase::Roots cases above); the
+                // effect's own Glide portamentos down to this from wherever
+                // the pluck was, and it holds there through Roots too, since
+                // the pluck is still ringing (and still the source of the
+                // beat 3/4 marker cues) rather than reverting to the Fitting
+                // register it never actually left musically.
+                if (g_show.phase() == show::Phase::Transition ||
+                    g_show.phase() == show::Phase::Roots) {
                     constexpr float kTransitionCombHz = 25.f;  // 20-40 Hz
                     ap.comb_hz = kTransitionCombHz;
                 }

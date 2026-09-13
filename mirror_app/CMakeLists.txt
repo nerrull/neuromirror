@@ -255,6 +255,7 @@ if(_ak_have_all)
         ${_ak_lib}/libAkConvolutionReverbFX.a
         ${_ak_lib}/libAkPeakLimiterFX.a
         ${_ak_lib}/libAkParametricEQFX.a
+        ${_ak_lib}/libAkFlangerFX.a
         ${_ak_lib}/libAkMemoryMgr.a
         ${_ak_lib}/libAkStreamMgr.a
         ${_ak_lib}/libAkSoundEngine.a

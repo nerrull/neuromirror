@@ -340,6 +340,7 @@
 								</BlendContainer>
 								<BlendContainer Name="Mirror_Pad" ID="{47742E5A-FD72-4752-A9A3-D503FD4AE589}" ShortID="643426670">
 									<PropertyList>
+										<Property Name="OverrideEffect" Type="bool" Value="True"/>
 										<Property Name="Volume" Type="Real64">
 											<ValueList>
 												<Value>-1</Value>
@@ -1141,6 +1142,15 @@
 										</Sound>
 									</ChildrenList>
 									<ObjectLists>
+										<ObjectList Name="Effects">
+											<EffectSlot Name="" ID="{AEC69930-6AF2-44D1-ACA1-F02174ACC56A}" ShortID="906625155">
+												<ReferenceList>
+													<Reference Name="Effect" PluginName="Wwise Flanger" CompanyID="0" PluginID="125" PluginType="3">
+														<ObjectRef Name="Mirror_Pad_Flanger" ID="{900C0C20-B02A-4C3A-BF6B-F9B2C08AFB04}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+													</Reference>
+												</ReferenceList>
+											</EffectSlot>
+										</ObjectList>
 										<ObjectList Name="RTPC">
 											<RTPC Name="" ID="{97BE4551-14CF-4FDE-B052-A8CD1D34C76B}" ShortID="916621336">
 												<PropertyList>

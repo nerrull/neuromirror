@@ -742,6 +742,18 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Rise speed at fit_level 1 -- semitones/sec.");
 
+                ui::SliderFloat("flanger rate min (Hz)", &g_flanger_rate_min, 0.f, 5.f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Flanger LFO speed at fit_level 0.");
+                ui::SliderFloat("flanger rate max (Hz)", &g_flanger_rate_max, 0.f, 5.f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Flanger LFO speed at fit_level 1 -- Mirror_Pad_Flanger's\n"
+                        "ModFrequency, bound 1:1 to `FlangerRate`. Accelerates\n"
+                        "between the two as the fit converges, same shape as the\n"
+                        "shepherd's rate above.");
+                }
+
                 if (ui::Visible()) {
                     ImGui::SeparatorText("post");
                     if (ImGui::Button("pluck bed")) g_audio.postFirePlucker();

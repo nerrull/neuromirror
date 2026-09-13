@@ -282,6 +282,10 @@ bool  g_shepherd_on = true;       // the Fitting-phase glissando, on or off
 float g_shepherd_rate_min = 0.15f;  // semitones/s at fit_level 0
 float g_shepherd_rate_max = 0.6f;   // semitones/s at fit_level 1
 float g_shepherd_phase = 0.f;     // semitones, 0..12: Fitting-phase glissando position
+
+float g_flanger_rate_min = 0.1f;   // Hz, at fit_level 0
+float g_flanger_rate_max = 2.5f;   // Hz, at fit_level 1
+
 std::string g_audio_err;
 
 // The neural texture the mask wears: per-vertex RGB sampled from the mirror's

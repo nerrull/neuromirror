@@ -96,6 +96,54 @@
 						<Property Name="OutputLevel" Type="Real32" Value="-16"/>
 					</PropertyList>
 				</Effect>
+				<Effect Name="Mirror_Pad_Flanger" ID="{900C0C20-B02A-4C3A-BF6B-F9B2C08AFB04}" PluginName="Wwise Flanger" CompanyID="0" PluginID="125" PluginType="3">
+					<PropertyList>
+						<Property Name="DelayTime" Type="Real32" Value="1"/>
+						<Property Name="FeedBackLevel" Type="Real32" Value="0.7"/>
+						<Property Name="FeedForwardLevel" Type="Real32" Value="0.7"/>
+						<Property Name="ModDepth" Type="Real32" Value="65.1"/>
+						<Property Name="ModPWM" Type="Real32" Value="26"/>
+						<Property Name="ModPhaseSpread" Type="Real32" Value="180"/>
+						<Property Name="ModSmoothing" Type="Real32" Value="59"/>
+						<Property Name="ModWaveform" Type="int32" Value="3"/>
+						<Property Name="WetDryMix" Type="Real32" Value="30"/>
+					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{E317DAAF-D9A4-47C1-9BA9-875458FEFF78}" ShortID="188184281">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="ModFrequency"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="FlangerRate" ID="{0D7C2769-6129-4419-A954-31816370F6F8}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{82FEF8E7-CA64-4DC2-82A5-C2042105F3BB}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="5"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>0.0020000000949949</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>5</XPos>
+														<YPos>5</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
+				</Effect>
 			</ChildrenList>
 		</WorkUnit>
 	</Effects>
