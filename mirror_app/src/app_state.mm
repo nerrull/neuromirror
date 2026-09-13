@@ -101,6 +101,9 @@ bool  g_pulse_drops  = true;    // onsets spawn raindrops
 float g_pulse_gain   = 1.0f;    // scales an onset's strength before it is used
 bool  g_pluck_drops     = false;  // pluck-bed crackle onsets spawn raindrops
 float g_pluck_drop_gain = 1.0f;   // scales a marker hit's strength before it is used
+
+mirror::MicLevel g_mic;
+std::string g_mic_err;
 mirror::FaceTracker g_tracker;
 mirror::FaceResult  g_face;
 mirror::FaceFitter  g_fitter;

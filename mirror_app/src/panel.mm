@@ -728,6 +728,19 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     }
                 }
 
+                // The room's own mic (Kinect v2 array), independent of the
+                // Wwise engine above -- this is what drives the root scene's
+                // light responsivity (see mic_level.h), not the piece's mix.
+                if (g_mic.running()) {
+                    ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "mic up");
+                    ImGui::SameLine();
+                    ImGui::ProgressBar(g_mic.level(), ImVec2(80, 0));
+                } else {
+                    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "mic off");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("| %s", g_mic_err.c_str());
+                }
+
                 ui::Checkbox("sound on", &g_audio_on);
                 ui::Checkbox("phases post their own events", &g_audio_auto);
                 if (ImGui::IsItemHovered()) {
@@ -3137,9 +3150,82 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::TextUnformatted("key light");
                     ui::ColorEdit3("key color", R.env.keyColor);
                     ui::SliderFloat("key intensity", &R.env.keyIntensity, 0.0f, 4.0f);
+                    if (pf.roots.micLightResponsive) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(live -- set by the mic below)");
+                    }
                     ui::SliderFloat("key direction X", &pf.roots.lightDir[0], -1.0f, 1.0f);
                     ui::SliderFloat("key direction Y", &pf.roots.lightDir[1], -1.0f, 1.0f);
                     ui::SliderFloat("key direction Z", &pf.roots.lightDir[2], -1.0f, 1.0f);
+                    if (pf.roots.trackLightAngle) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(home dir. -- swung by tracking below)");
+                    }
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("key light -- room responsivity");
+                    ui::Checkbox("intensity follows the mic", &pf.roots.micLightResponsive);
+                    ui::SliderFloat("base intensity (silence)", &pf.roots.micBaseKeyIntensity,
+                                    0.0f, 4.0f);
+                    ui::SliderFloat("mic gain", &pf.roots.micIntensityGain, 0.0f, 4.0f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Key intensity = base * (1 + gain * mic level).\n"
+                            "The mic level is the room's own ambient level\n"
+                            "(a real microphone tap -- see mic_level.h), not\n"
+                            "anything Wwise is playing.");
+                    }
+                    ui::Checkbox("angle follows the tracked visitor",
+                                &pf.roots.trackLightAngle);
+                    ui::SliderFloat("track angle range (rad)", &pf.roots.trackAngleRange,
+                                    0.0f, 1.5f);
+
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("key light -- placement");
+                    {
+                        int lm = (int)pf.roots.lightMode;
+                        if (ImGui::Combo("aim", &lm,
+                                "direction (authored)\0position (place a lamp)\0"
+                                "camera-relative\0"))
+                            pf.roots.lightMode = (RootScene::LightMode)lm;
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "The key stays a single directional light in every\n"
+                                "mode -- this is how its direction is decided.\n"
+                                "  direction       the X/Y/Z above, dialled by hand\n"
+                                "  position        aim from a world point at the\n"
+                                "                  focus below; easier to place by eye\n"
+                                "  camera-relative offset from the view axis, so the\n"
+                                "                  rake stays put as the camera moves");
+                        }
+                        if (pf.roots.lightMode == RootScene::LightMode::Position) {
+                            ui::SliderFloat("lamp X", &pf.roots.lightPos[0], -60.f, 60.f);
+                            ui::SliderFloat("lamp Y", &pf.roots.lightPos[1], -60.f, 60.f);
+                            ui::SliderFloat("lamp Z", &pf.roots.lightPos[2], -60.f, 60.f);
+                        } else if (pf.roots.lightMode == RootScene::LightMode::CameraRelative) {
+                            ui::SliderFloat("offset azimuth (rad)",
+                                            &pf.roots.lightOffsetAz, -3.14f, 3.14f);
+                            ui::SliderFloat("offset elevation (rad)",
+                                            &pf.roots.lightOffsetEl, -1.5f, 1.5f);
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip(
+                                    "A key on the view axis (offset 0) is flat frontal\n"
+                                    "light with nothing to model the form -- the rake\n"
+                                    "lives in the off-axis angle.");
+                            }
+                        }
+                        int lf = (int)pf.roots.lightFocus;
+                        if (ImGui::Combo("focus", &lf,
+                                "scene centre\0anchor mask\0camera target\0"))
+                            pf.roots.lightFocus = (RootScene::LightFocus)lf;
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("What the lamp aims at.");
+                        }
+                        const float* rl = pf.roots.resolvedLightDir();
+                        const float* rf = pf.roots.resolvedLightFocus();
+                        ImGui::TextDisabled("live dir (%.2f, %.2f, %.2f)  focus (%.1f, %.1f, %.1f)",
+                                            rl[0], rl[1], rl[2], rf[0], rf[1], rf[2]);
+                    }
+
                     ImGui::Separator();
                     ImGui::TextUnformatted("ambient (hemisphere)");
                     ui::ColorEdit3("background", R.env.background);

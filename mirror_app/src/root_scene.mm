@@ -1567,6 +1567,13 @@ void RootScene::advance(double dt) {
     rr_->pulse.time    += (float)dt;
     rr_->postTime      += (float)dt;
 
+    // Key intensity from the room's own level. Separate from updateLighting()
+    // below, which is about *aim* and has to run after the camera has been
+    // framed; brightness depends on nothing the framing touches.
+    if (micLightResponsive) {
+        rr_->env.keyIntensity = micBaseKeyIntensity * (1.f + micIntensityGain * ambientLevel_);
+    }
+
     focusAngle_ += orbitRate * (float)dt;
 
     // Ahead of the face upload below: clothPressOffset_ (the anchor mask's
@@ -1599,6 +1606,10 @@ void RootScene::advance(double dt) {
     if (useSim_ && sim_ && (simPaused || clothActive_)) uploadFaceFromMasks();
     applyFraming(dt);
 
+    // After the framing, deliberately: CameraTarget focus and CameraRelative
+    // aiming both read the camera, so this has to be the thing that runs last.
+    updateLighting();
+
     // The sheet is solved and packed *after* the framing, not before it.
     //
     // applyFraming is the last thing that moves the camera, and render() draws
@@ -1612,6 +1623,84 @@ void RootScene::advance(double dt) {
     // away from the pond it is supposed to be identical to; building after it
     // brings that back to 0.006.
     if (clothActive_) { ensureClothSheet(); packClothMesh(); }
+}
+
+// Resolve the key's aim. See root_scene.h's LightMode/LightFocus for what each
+// mode is for.
+void RootScene::updateLighting() {
+    if (!rr_) return;
+
+    // --- what the light is aimed at -----------------------------------------
+    // Falls back to the idle bounds whenever the requested focus has nothing
+    // behind it yet (no masks placed, no anchor revealed).
+    float centre[3] = {idleCentre_[0], idleCentre_[1], idleCentre_[2]};
+    switch (lightFocus) {
+        case LightFocus::AnchorMask: {
+            const auto& pm = plannedMasks();
+            if (anchorMask >= 0 && anchorMask < (int)pm.size()) {
+                const auto& m = pm[size_t(anchorMask)];
+                for (int k = 0; k < 3; ++k) centre[k] = m.pos[k];
+            }
+            break;
+        }
+        case LightFocus::CameraTarget:
+            for (int k = 0; k < 3; ++k) centre[k] = target[k];
+            break;
+        case LightFocus::SceneCentre:
+        default:
+            break;
+    }
+    for (int k = 0; k < 3; ++k) lightFocusPt_[k] = centre[k];
+
+    // --- the direction -------------------------------------------------------
+    float base[3] = {lightDir[0], lightDir[1], lightDir[2]};
+    switch (lightMode) {
+        case LightMode::Position: {
+            float d[3] = {lightPos[0] - centre[0],
+                          lightPos[1] - centre[1],
+                          lightPos[2] - centre[2]};
+            const float len = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+            // A lamp placed exactly on the focus has no direction to give;
+            // keep the authored one rather than dividing by zero.
+            if (len > 1e-3f) for (int k = 0; k < 3; ++k) base[k] = d[k] / len;
+            break;
+        }
+        case LightMode::CameraRelative: {
+            // The camera's own orbit angles, offset. azimuth/elevation are the
+            // eye's position about the target, which is already the direction
+            // "from the subject towards the camera" -- i.e. exactly the
+            // convention lightDir uses, so the offset is applied directly.
+            const float az = azimuth + lightOffsetAz;
+            const float el = std::clamp(elevation + lightOffsetEl, -1.5f, 1.5f);
+            base[0] = std::cos(el) * std::sin(az);
+            base[1] = std::sin(el);
+            base[2] = std::cos(el) * std::cos(az);
+            break;
+        }
+        case LightMode::Direction:
+        default:
+            break;
+    }
+
+    // --- the visitor's swing, applied on top of whichever base won ----------
+    // Layered rather than exclusive: "the light comes from over there" and "it
+    // leans towards whoever is in the room" are independent statements, and a
+    // mode that silently cancelled the tracking would be a surprise.
+    const float mag = std::max(1e-4f, std::sqrt(base[0]*base[0] + base[1]*base[1] +
+                                                 base[2]*base[2]));
+    if (trackLightAngle && trackedValid_) {
+        const float az0 = std::atan2(base[0], base[2]);
+        const float el0 = std::asin(std::clamp(base[1] / mag, -1.f, 1.f));
+        const float ox = (trackedX_ - 0.5f) * 2.f;   // -1..1, left..right
+        const float oy = (trackedY_ - 0.5f) * 2.f;   // -1..1, top..bottom
+        const float az = az0 + ox * trackAngleRange;
+        const float el = std::clamp(el0 - oy * trackAngleRange * 0.6f, -1.5f, 1.5f);
+        renderLightDir_[0] = mag * std::cos(el) * std::sin(az);
+        renderLightDir_[1] = mag * std::sin(el);
+        renderLightDir_[2] = mag * std::cos(el) * std::cos(az);
+    } else {
+        for (int k = 0; k < 3; ++k) renderLightDir_[k] = base[k];
+    }
 }
 
 void RootScene::setWideAngle(bool on) {
@@ -1640,8 +1729,10 @@ void RootScene::setWideAngle(bool on) {
 id<MTLTexture> RootScene::render(id<MTLCommandBuffer> cb) {
     if (!valid()) return nil;
     rr_->setClothTexture(pondTex_);
-    float ld = std::sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
+    float ld = std::sqrt(renderLightDir_[0] * renderLightDir_[0] +
+                          renderLightDir_[1] * renderLightDir_[1] +
+                          renderLightDir_[2] * renderLightDir_[2]);
     if (ld < 1e-5f) ld = 1.f;
-    float L[3] = {lightDir[0]/ld, lightDir[1]/ld, lightDir[2]/ld};
+    float L[3] = {renderLightDir_[0] / ld, renderLightDir_[1] / ld, renderLightDir_[2] / ld};
     return rr_->render(cb, azimuth, elevation, radius, target, effectiveFov(), L);
 }

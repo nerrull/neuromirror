@@ -514,6 +514,33 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "key")        E.keyIntensity = v;
         else if (k == "spotOuter")  F.spotOuterDeg = v;
         else if (k == "spotInner")  F.spotInnerDeg = v;
+        // --- where the key is (see root_scene.h) ----------------------------
+        // Note micKey/trackAngle: both room responses are *on* by default and
+        // both write the key every frame, so an offline shot that did not turn
+        // them off would be lit by a microphone that is not there
+        // (keyIntensity collapsing to the silence value) and aimed by a
+        // tracker with no visitor in front of it.
+        else if (k == "autoFrame")  roots.autoFrame = v != 0.f;
+        else if (k == "autoOrbit")  roots.autoOrbit = v != 0.f;
+        else if (k == "orbitRate")  roots.orbitRate = v;
+        else if (k == "az")         roots.azimuth = v;
+        else if (k == "el")         roots.elevation = v;
+        else if (k == "radius")     roots.radius = v;
+        else if (k == "targetY")    roots.target[1] = v;
+        else if (k == "focusMask")  roots.focusMask = (int)v;
+        else if (k == "fogDither")  P.fogDither = v;
+        else if (k == "lightMode")  roots.lightMode = (RootScene::LightMode)(int)v;
+        else if (k == "lightFocus") roots.lightFocus = (RootScene::LightFocus)(int)v;
+        else if (k == "lightX")     roots.lightDir[0] = v;
+        else if (k == "lightY")     roots.lightDir[1] = v;
+        else if (k == "lightZ")     roots.lightDir[2] = v;
+        else if (k == "lampX")      roots.lightPos[0] = v;
+        else if (k == "lampY")      roots.lightPos[1] = v;
+        else if (k == "lampZ")      roots.lightPos[2] = v;
+        else if (k == "lightOffAz") roots.lightOffsetAz = v;
+        else if (k == "lightOffEl") roots.lightOffsetEl = v;
+        else if (k == "trackAngle") roots.trackLightAngle = v != 0.f;
+        else if (k == "micKey")     roots.micLightResponsive = v != 0.f;
         else fprintf(stderr, "post override: unknown key '%s'\n", k.c_str());
     }
 }

@@ -13,6 +13,7 @@
 #include "root_sim.h"
 #include "cloth.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -395,9 +396,84 @@ public:
     // replaces this from the geometry's own bounds every advance(); it is the
     // starting frame for the first render and for the fixed-camera shot paths.
     float target[3] = {0.f, -8.f, 0.f};
+    // The key's authored, "home" direction -- see lightDir's own doc for how
+    // it differs from what actually reaches the renderer once room
+    // responsivity is on.
     float lightDir[3] = {0.4f, 0.8f, 0.35f};
     bool  autoOrbit = true;
     float orbitRate = 0.15f;   // rad/s
+
+    // --- room responsivity ---------------------------------------------------
+    // The key light stops being purely authored once these are on: its
+    // intensity follows the room's own ambient level (fed in once a frame by
+    // main.mm from mic_level.h, since RootScene has no business owning a
+    // CoreAudio tap itself) and its angle swings toward wherever the tracked
+    // visitor is standing in frame. `lightDir` above stays the *home*
+    // direction the panel authors and the angle swings around -- render()
+    // uses the swung direction, not lightDir directly, so a still room with
+    // no one tracked renders exactly what lightDir says.
+    void setAmbientLevel(float level01) { ambientLevel_ = std::clamp(level01, 0.f, 1.f); }
+    // `x`,`y` normalised [0,1] from the top-left, matching FaceResult::
+    // centre_x/y -- the tracker's own convention, so main.mm can pass that
+    // straight through with no remapping.
+    void setTrackedPosition(float x, float y, bool valid) {
+        trackedX_ = x; trackedY_ = y; trackedValid_ = valid;
+    }
+    bool  micLightResponsive  = true;
+    // The key's intensity at silence; at ambientLevel==1 it reaches
+    // micBaseKeyIntensity * (1 + micIntensityGain). Held separately from
+    // env.keyIntensity's own default (renderer().env.keyIntensity) rather
+    // than reading it back, since this *is* what sets that field once
+    // responsivity is on -- reading it back would be reading its own output.
+    float micBaseKeyIntensity = 1.0f;
+    float micIntensityGain    = 1.4f;
+    bool  trackLightAngle     = true;
+
+    // --- where the key light is ----------------------------------------------
+    // How the key's direction is decided. The light stays *directional* in
+    // every mode -- one direction per frame, which is what root_geom/root_face/
+    // root_leaf all shade against -- so this is about aiming and framing it,
+    // not about introducing a positional light with per-pixel falloff.
+    enum class LightMode {
+        // lightDir is the direction, authored in the panel. The historical
+        // behaviour, and still the one an operator dials by hand.
+        Direction = 0,
+        // Aim from a world point instead. The direction becomes
+        // normalize(lightPos - focus), which is far easier to place by eye than
+        // an azimuth/elevation pair -- you put the lamp somewhere and the rays
+        // point where you'd expect. Still one direction for the whole scene.
+        Position,
+        // Straight down the camera's own view axis, offset by lightOffsetAz/El.
+        // A key that stays put relative to the shot, so it keeps raking across
+        // frame the same way however the camera moves.
+        CameraRelative,
+    };
+    LightMode lightMode = LightMode::Direction;
+    // Position mode's lamp, in world space. Defaults above and behind the
+    // structure.
+    float lightPos[3] = {6.f, 14.f, -10.f};
+    // CameraRelative mode's offset from the view axis, radians. A key exactly
+    // on the view axis is a flat frontal light with nothing to model the form.
+    float lightOffsetAz = 1.05f;
+    float lightOffsetEl = 0.55f;
+
+    // What Position mode aims *at*.
+    enum class LightFocus {
+        SceneCentre = 0,   // the whole structure's bounds
+        AnchorMask,        // the face the piece is built around
+        CameraTarget,      // whatever the shot is currently looking at
+    };
+    LightFocus lightFocus = LightFocus::SceneCentre;
+
+    // Where the light ended up this frame, for the panel to display -- the
+    // authored numbers do not answer "where is it actually" in Position or
+    // CameraRelative mode.
+    const float* resolvedLightDir() const { return renderLightDir_; }
+    const float* resolvedLightFocus() const { return lightFocusPt_; }
+    // Radians the key is allowed to swing off lightDir toward an edge-of-frame
+    // visitor; azimuth gets the full range, elevation 60% of it (a person
+    // standing high or low in frame is a smaller cue than side to side).
+    float trackAngleRange     = 0.5f;
 
 private:
     void buildSyntheticRoots(uint32_t seed);
@@ -519,4 +595,21 @@ private:
     float fit_centre_[3] = {0, 0, 0};
     float fit_scale_ = 1.0f;
     double t_ = 0.0;
+
+    // --- room responsivity state (see the public setters above) ------------
+    float ambientLevel_ = 0.f;
+    float trackedX_ = 0.5f, trackedY_ = 0.5f;
+    bool  trackedValid_ = false;
+    // lightDir swung by the tracked position; computed once per advance() and
+    // read by render() instead of lightDir directly. Starts equal to
+    // lightDir's own default so a render before the first advance() is not
+    // pointed at zero.
+    float renderLightDir_[3] = {0.4f, 0.8f, 0.35f};
+    // The point the key aims at, resolved from lightFocus each advance().
+    float lightFocusPt_[3] = {0.f, -8.f, 0.f};
+    // Resolve lightMode/lightFocus into renderLightDir_ and lightFocusPt_.
+    // Called once per advance(), after the camera has been framed --
+    // CameraTarget focus and CameraRelative aiming both read the camera, so
+    // they have to run after whatever moved it.
+    void updateLighting();
 };

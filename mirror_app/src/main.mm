@@ -1482,6 +1482,17 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // The room's own mic, for the root scene's light responsivity (see
+    // RootScene::setAmbientLevel) -- the Kinect's own mic array specifically,
+    // see mic_level.h. Started only now, after g_kinect.open() above: opening
+    // the sensor USB-resets it, which knocks its audio interface off the bus
+    // for a moment (see audio_capture.h), and starting the mic first would
+    // just race that reset. Best-effort, same as everything else here: no
+    // Kinect built, no sensor plugged in, or a denied OS permission all just
+    // mean a still light -- mic_level.mm logs which.
+    if (!g_mic.start(g_mic_err))
+        fprintf(stderr, "mic: %s\n", g_mic_err.c_str());
+
     int downscale = 4;       // mirror render-resolution divisor (low-res + upsample)
     int rootDownscale = 1;   // roots render-resolution divisor (manual, when auto off)
     bool rootAutoScale = true;   // cap the roots' internal resolution (see below)
@@ -2481,6 +2492,17 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Room responsivity for the root scene's key light: the mic's own
+            // smoothed level, and wherever the tracked visitor currently sits
+            // in frame. Set every frame regardless of which Roots-related
+            // branch below actually runs (pre-warm during Transition, or the
+            // literal Roots phase) -- both call roots.advance(), which is
+            // where these are consumed. See RootScene::setAmbientLevel/
+            // setTrackedPosition.
+            roots.setAmbientLevel(g_mic.level());
+            roots.setTrackedPosition(g_face.centre_x, g_face.centre_y,
+                                     g_track_on && g_face.valid);
+
             id<MTLTexture> sceneTex = nil;
 
             // The mirror's frame, trained and rendered. A lambda because two
@@ -3316,6 +3338,7 @@ int main(int argc, char** argv) {
     // of threads, and leaving it running past the last RenderAudio() is how a
     // quit turns into a stuck tone.
     g_audio.term();
+    g_mic.stop();
 
     ImGui_ImplMetal_Shutdown();
     ImGui_ImplGlfw_Shutdown();

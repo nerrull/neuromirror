@@ -52,7 +52,8 @@ add_executable(mirror_app
     src/ui_params.cpp
     src/text_sdf.cpp
     src/text_overlay.mm
-    src/fullscreen_present.mm)
+    src/fullscreen_present.mm
+    src/mic_level.mm)
 # ../sdf_viewer for LeafMesh.h (the leaf triangulation is renderer-agnostic C++
 # and lives with the rest of the flower code); ../wwise_plugins/mi_common for the
 # OnsetTap shared-memory layout -- header-only, and deliberately the *same*
@@ -167,10 +168,17 @@ find_package(freenect2 QUIET)
 if(freenect2_FOUND AND EXISTS ${_kv2}/src/demo/kinect_source.cpp)
     target_sources(mirror_core PRIVATE
         src/kinect_target.cpp
-        ${_kv2}/src/demo/kinect_source.cpp)
+        ${_kv2}/src/demo/kinect_source.cpp
+        # mic_level.mm's Kinect-mic-array capture (see mic_level.h/.mm):
+        # audio_capture.mm is pure CoreAudio/AudioToolbox, no freenect2 calls
+        # of its own, but it lives with the rest of the Kinect subsystem and
+        # follows the same MIRROR_HAVE_KINECT gate as the video side.
+        ${_kv2}/src/demo/audio_capture.mm
+        ${_kv2}/src/demo/dsp.cpp)
     target_include_directories(mirror_core PUBLIC
         ${_kv2}/src/demo ${freenect2_INCLUDE_DIRS})
-    target_link_libraries(mirror_core PUBLIC ${freenect2_LIBRARIES})
+    target_link_libraries(mirror_core PUBLIC ${freenect2_LIBRARIES}
+        "-framework AudioToolbox" "-framework CoreAudio")
     target_compile_definitions(mirror_core PUBLIC MIRROR_HAVE_KINECT=1)
     message(STATUS "mirror_app: Kinect fit target enabled")
 else()

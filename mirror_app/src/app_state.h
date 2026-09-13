@@ -28,6 +28,7 @@
 #include "presence.h"
 #include "chord.h"
 #include "wwise_audio.h"
+#include "mic_level.h"
 
 #include <cstdint>
 #include <string>
@@ -100,6 +101,12 @@ extern std::string g_midi_err;
 extern mirror::AudioPulses g_pulses;
 extern bool  g_pulse_drops;
 extern float g_pulse_gain;
+
+// The room's own ambient level (a real microphone tap, distinct from
+// g_pulses' Wwise bus tap above) -- drives the root scene's key light; see
+// mic_level.h and RootScene::setAmbientLevel.
+extern mirror::MicLevel g_mic;
+extern std::string g_mic_err;
 
 // The pluck bed's own crackle onsets (Wwise cue markers on Play_FirePlucker,
 // see wwise_audio.h), Idle/Fitting only -- the phases where that bed plays.
