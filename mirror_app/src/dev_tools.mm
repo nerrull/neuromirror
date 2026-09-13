@@ -376,6 +376,17 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
     const int frames = std::max(2, (int)std::lround(seconds * fps));
     const double dt = 1.0 / fps;
 
+    // The datamosh cue, offline. GROWSHOT_POST can only set steady state, and
+    // the whole point of this effect is the moment it starts -- the motion
+    // field freezes there, so it has to be started while something is moving
+    // for it to show anything at all. ROOTMOVIE_MOSH_AT=<s> fires the same
+    // trigger the panel button does, at that point in the export.
+    //   ROOTMOVIE_MOSH_AT=6 ROOTMOVIE_MOSH_FOR=3 mirror_app --rootmovie out.mp4
+    const char* moshAtEnv = getenv("ROOTMOVIE_MOSH_AT");
+    const double moshAt = moshAtEnv ? atof(moshAtEnv) : -1.0;
+    const char* moshForEnv = getenv("ROOTMOVIE_MOSH_FOR");
+    bool moshFired = false;
+
     // Free camera, for look-dev rather than for the piece. The beat sequence
     // owns the camera and every one of its framings stands a long way off the
     // structure -- which is right for the show and useless for judging
@@ -420,6 +431,11 @@ int rootmovie(const char* outPath, double seconds, int fps, int W, int H,
             seq.step(roots, ts, dt, bp, /*wantOutro=*/false, /*clothCleared=*/true,
                      /*markerHit=*/false);
         roots.advance(dt);
+        if (moshAt >= 0.0 && !moshFired && ts >= moshAt) {
+            roots.renderer().triggerDatamosh(
+                moshForEnv ? (float)atof(moshForEnv) : roots.renderer().post.moshTrigger);
+            moshFired = true;
+        }
 
         id<MTLTexture> tex = nil;
         @autoreleasepool {
@@ -534,6 +550,22 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "grainSize")  P.grainSize = v;
         else if (k == "grainChroma") P.grainChroma = v;
         else if (k == "splitStr")   P.splitStrength = v;
+        else if (k == "crush")      P.crush = v;
+        else if (k == "crushBlock") P.crushBlock = v;
+        else if (k == "crushLevels") P.crushLevels = v;
+        else if (k == "crushDither") P.crushDither = v;
+        else if (k == "mosh")       P.mosh = v != 0.f;
+        else if (k == "moshAmt")    P.moshAmount = v;
+        else if (k == "moshGain")   P.moshGain = v;
+        else if (k == "moshBlock")  P.moshBlock = v;
+        else if (k == "moshFreeze") P.moshFreeze = v;
+        else if (k == "sort")       P.sort = v != 0.f;
+        else if (k == "sortAmt")    P.sortAmount = v;
+        else if (k == "sortLow")    P.sortLow = v;
+        else if (k == "sortHigh")   P.sortHigh = v;
+        else if (k == "sortFeed")   P.sortFeed = v;
+        else if (k == "sortAxis")   P.sortAxis = (int)v;
+        else if (k == "sortPasses") P.sortPasses = (int)v;
         else if (k == "k1")         P.distortK1 = v;
         else if (k == "k2")         P.distortK2 = v;
         else if (k == "dzoom")      P.distortZoom = v;

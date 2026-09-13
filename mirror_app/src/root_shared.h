@@ -279,4 +279,93 @@ struct RootPostU {
     float   distortZoom;   // re-crop so the distorted corners stay in frame
 };
 
+// Camera-reprojection motion vectors (root_glitch.metal, first pass).
+//
+// Per-pixel screen motion, recovered from the depth buffer and the *previous*
+// frame's view-projection rather than written out by the geometry pass. The
+// capsules are drawn as analytic hits inside a bounding quad, so there is no
+// vertex the rasterizer could difference across frames to give a real velocity
+// -- and the scene's own motion is overwhelmingly the camera's, since the roots
+// grow at a rate no smear would register. Reprojecting depth gets that motion
+// for one fullscreen pass and no change at all to the geometry path.
+struct RootMotionU {
+    RS_F3X3 cam;          // camera basis (right, up, fwd) as columns
+    RS_F4   eye;          // xyz
+    RS_F2   res;          // motion buffer resolution
+    float   fov;
+    float   nearZ;
+    float   farZ;
+    // What distance a background pixel is treated as sitting at. The sky has no
+    // depth, but it does move when the camera turns, and leaving it at the far
+    // plane would give it a velocity of nearly zero while everything in front
+    // of it swept sideways -- the smear would stop dead at every silhouette.
+    float   bgDepth;
+    float   _pad0;
+    float   _pad1;
+    RS_F4X4 prevViewProj; // last frame's world -> clip
+};
+
+// Pixel sort (root_glitch.metal, second pass).
+//
+// A real pixel sort orders whole spans of a scanline at once, which is a sort
+// per span per frame and nothing a fragment shader should be asked to do. This
+// is an odd-even transposition sort instead: every frame each pixel compares
+// itself with one neighbour along the sort axis and the pair swaps if it is out
+// of order. That is *two* samples per pixel per frame -- the cheapest pass in
+// this whole file -- and repeated over successive frames it converges on the
+// same fully sorted spans. The sort is therefore something the image visibly
+// falls into over about a second rather than a state it snaps to, which is the
+// better look anyway and is why the state lives in its own ping-pong pair.
+//
+// Only pixels whose luminance is inside [lo, hi] are allowed to move, which is
+// what cuts the image into spans: a run of in-band pixels bounded by out-of-band
+// ones sorts within itself and cannot leak past its ends.
+struct RootSortU {
+    RS_F2   res;
+    float   lo;        // luminance band, below which a pixel is pinned
+    float   hi;
+    float   feed;      // share of the live frame mixed in each pass: 0 freezes
+                       // the sorted picture, higher keeps it following the
+                       // scene at the cost of never fully settling
+    RS_INT  axis;      // 0 = sort down columns, 1 = along rows
+    RS_INT  parity;    // which half of the odd-even pairing this pass runs
+    RS_INT  descending;
+    RS_INT  seed;      // 1 = ignore the state and start from the live frame
+    RS_INT  _pad0;
+    RS_INT  _pad1;
+    RS_INT  _pad2;
+};
+
+// Datamosh + bitcrush (root_glitch.metal, second pass).
+//
+// Both are deliberately the *last* thing in the chain, after the sRGB encode:
+// they are codec and display artefacts, not lens or film ones. A bitcrush
+// applied in linear would put all its steps in the shadows, and a datamosh
+// blends whole finished frames -- it is what a decoder does with a picture it
+// already made, which is the entire look being asked for.
+struct RootGlitchU {
+    RS_F2   res;
+    // Bitcrush. One dial: 0 is a bit-exact pass-through (block 1 px, 256
+    // levels), 1 is the full block size and level count below. Making the dial
+    // drive the parameters rather than cross-fade with the clean image is what
+    // keeps the half-way setting looking like a lower-resolution picture
+    // instead of a double exposure of two of them.
+    float   crush;
+    float   crushBlock;   // pixels per block at crush = 1
+    float   crushLevels;  // colour steps per channel at crush = 1
+    float   crushDither;  // ordered (Bayer) dither before the quantise
+    // Datamosh. moshOn gates the whole thing; the frozen motion field lives in
+    // its own texture, which the host simply stops re-rendering for as long as
+    // the freeze lasts (see MetalRootRenderer::render).
+    RS_INT  moshOn;
+    float   moshAmount;   // 1 = the warped feedback replaces the frame entirely
+    float   moshGain;     // multiplier on the motion vectors: >1 over-shoots
+    float   moshBlock;    // macroblock the vectors are quantised to, in pixels
+    // Pixel sort, mixed in ahead of both of the above: sortOn says the sorted
+    // state texture is bound and worth reading, sortAmount cross-fades it
+    // against the frame it was made from.
+    RS_INT  sortOn;
+    float   sortAmount;
+};
+
 #endif // ROOT_SHARED_H

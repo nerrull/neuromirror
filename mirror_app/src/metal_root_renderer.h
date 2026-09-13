@@ -316,6 +316,51 @@ public:
         float distortK1      = 0.0f;
         float distortK2      = 0.0f;
         float distortZoom    = 1.0f;
+
+        // --- signal degradation ----------------------------------------------
+        // Two codec/display artefacts, run after everything above (see
+        // root_glitch.metal). Both are off by default and cost nothing at all
+        // when they are: the pass is not encoded and its targets are not even
+        // allocated until the first frame that asks for them.
+
+        // Bitcrush. One dial from a bit-exact pass-through to blockPx-sized
+        // pixels quantised to `crushLevels` steps per channel.
+        float crush          = 0.0f;
+        float crushBlock     = 16.0f;   // pixels per block at crush = 1
+        float crushLevels    = 5.0f;    // colour steps per channel at crush = 1
+        float crushDither    = 1.0f;    // ordered dither before the quantise
+
+        // Datamosh. `mosh` latches it on; triggerDatamosh() runs it for a fixed
+        // time and releases it. moshFreeze is the heart of the effect: for that
+        // many seconds after it starts, the motion field stops being
+        // recomputed, so the picture keeps being dragged along a motion that
+        // has already finished happening. After the freeze expires it tracks
+        // the live motion again, still smearing -- which reads as the decoder
+        // recovering without ever getting a keyframe. 0 or less freezes for the
+        // whole run.
+        bool  mosh           = false;
+        float moshAmount     = 0.92f;   // 1 = the feedback replaces the frame
+        float moshGain       = 1.0f;    // multiplier on the vectors
+        float moshBlock      = 16.0f;   // macroblock size, output pixels
+        float moshFreeze     = 1.2f;    // seconds the vectors stay fixed
+        float moshTrigger    = 2.0f;    // default length of one triggered run
+        // How far a background pixel is treated as being, for the vectors. The
+        // sky has no depth but it does move when the camera turns; leaving it
+        // at the far plane would stop the smear dead at every silhouette.
+        float moshBgDepth    = 120.0f;
+
+        // Pixel sort. Converges over frames rather than in one pass -- see
+        // RootSortU in root_shared.h -- so `sortPasses` is the speed dial: one
+        // pass per frame settles in about a second, four in a quarter of that,
+        // and each pass is two texture reads per pixel.
+        bool  sort           = false;
+        float sortAmount     = 1.0f;    // cross-fade against the unsorted frame
+        float sortLow        = 0.30f;   // luminance band allowed to move
+        float sortHigh       = 1.0f;
+        float sortFeed       = 0.06f;   // live frame mixed in per pass
+        int   sortAxis       = 0;       // 0 = down columns, 1 = along rows
+        int   sortPasses     = 1;
+        bool  sortDescending = false;
     };
 
     static constexpr int MAX_GROUPS = ROOT_MAX_GROUPS;
@@ -419,6 +464,14 @@ public:
     void setTranche(int level);
     int  tranche() const { return tranche_; }
 
+    // Run the datamosh for `seconds` and then let go of it, without touching
+    // post.mosh. This is the show-facing entry point -- a cue, a MIDI note, a
+    // panel button -- while post.mosh is the latch for holding it open by hand.
+    // Re-triggering while one is running restarts both the run and the freeze.
+    void triggerDatamosh(float seconds);
+    // True while either the latch or a trigger has the effect engaged.
+    bool datamoshActive() const;
+
     // Public knobs (same defaults/meaning as RootRenderer).
     ShaderMode shaderMode = ShaderMode::Phong;
     Material   mat;
@@ -465,6 +518,9 @@ private:
     id<MTLRenderPipelineState> bloomDownPipe_ = nil;
     id<MTLRenderPipelineState> bloomUpPipe_   = nil;   // additive blend
     id<MTLRenderPipelineState> postPipe_ = nil;
+    id<MTLRenderPipelineState> motionPipe_ = nil;   // camera reprojection
+    id<MTLRenderPipelineState> sortPipe_   = nil;   // one odd-even sort step
+    id<MTLRenderPipelineState> glitchPipe_ = nil;   // datamosh + bitcrush
     id<MTLDepthStencilState>   depthState_ = nil;
 
     id<MTLBuffer> faceBuf_ = nil;
@@ -488,6 +544,31 @@ private:
     id<MTLTexture> aoBlurTex_    = nil;   // ping-pong for the separable blur
     id<MTLTexture> fogVolTex_    = nil;   // sw_/fog.downscale, (scatter.rgb, transmittance)
     id<MTLTexture> postTex_      = nil;   // w_ x h_, display-referred, presented
+    // The glitch stage's targets. Allocated on first use rather than in
+    // buildTargets: they are three full-resolution surfaces that most runs of
+    // this piece never touch, and the effects they serve are momentary.
+    // Ping-pong rather than a target plus a copy: this stage's output IS the
+    // datamosh's feedback buffer, and alternating which of the two it writes
+    // saves a full-resolution blit every frame it runs.
+    id<MTLTexture> glitchTex_[2] = {nil, nil};   // w_ x h_, output / feedback
+    int   glitchIdx_ = 0;                        // the one written this frame
+    id<MTLTexture> motionTex_    = nil;   // w_ x h_, RG16F screen velocity
+    id<MTLTexture> sortTex_[2]   = {nil, nil};   // w_ x h_, sort state
+    int   sortIdx_ = 0;
+    bool  sortValid_ = false;       // sortTex_ holds a state worth continuing
+    bool  moshHistValid_ = false;   // the unwritten glitchTex_ holds a frame
+    bool  moshWasOn_     = false;   // the effect was engaged last frame
+    float moshStart_     = 0.0f;    // postTime at the rising edge
+    float moshUntil_     = 0.0f;    // postTime a trigger releases at
+    bool  moshTriggered_ = false;   // a trigger is running (vs. the latch)
+    // Last frame's view-projection, kept every frame whether or not the effect
+    // is on: the field the freeze holds has to be the motion *into* the frame
+    // the effect started on, which is only available if the previous frame's
+    // camera was already recorded.
+    simd_float4x4 prevViewProj_{};
+    bool prevViewProjValid_ = false;
+    void ensureGlitchTargets();
+    void releaseGlitchTargets();
     id<MTLTexture> outTex_       = nil;   // whichever of the two the caller gets
     std::vector<id<MTLTexture>> bloomMips_;   // w_/2, w_/4, ... (post.bloomLevels)
     id<MTLTexture> noiseTex_     = nil;
@@ -539,4 +620,7 @@ private:
     // AO is a single [0,1] visibility factor and 8 bits of it is plenty once
     // the bilateral blur has run over it.
     static constexpr MTLPixelFormat kAOFmt    = MTLPixelFormatR8Unorm;
+    // Screen velocity in uv units: small, signed, and needing more precision
+    // than 8 bits but nothing like a full float.
+    static constexpr MTLPixelFormat kMotionFmt = MTLPixelFormatRG16Float;
 };

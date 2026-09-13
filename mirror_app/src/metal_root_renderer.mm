@@ -94,10 +94,12 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     id<MTLLibrary> leafLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_leaf.metal"});
     id<MTLLibrary> clothLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_cloth.metal"});
     id<MTLLibrary> fogLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_fog.metal"});
-    id<MTLLibrary> aoLib   = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_ao.metal"});
+    id<MTLLibrary> aoLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_ao.metal"});
     id<MTLLibrary> blmLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_bloom.metal"});
     id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_post.metal"});
-    if (!geomLib || !faceLib || !leafLib || !clothLib || !fogLib || !aoLib || !blmLib || !postLib) {
+    id<MTLLibrary> gltLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_glitch.metal"});
+    if (!geomLib || !faceLib || !leafLib || !clothLib || !fogLib
+        || !aoLib || !blmLib || !postLib || !gltLib) {
         fprintf(stderr, "MetalRootRenderer: shader compile failed\n"); return;
     }
 
@@ -182,7 +184,11 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     bloomDownPipe_ = makePost(blmLib,  "root_bloom_vs", "root_bloom_down_fs", kColorFmt, false);
     bloomUpPipe_   = makePost(blmLib,  "root_bloom_vs", "root_bloom_up_fs",   kColorFmt, true);
     postPipe_      = makePost(postLib, "root_post_vs",  "root_post_fs",       kColorFmt, false);
-    if (!aoPipe_ || !aoBlurPipe_ || !bloomDownPipe_ || !bloomUpPipe_ || !postPipe_) return;
+    motionPipe_    = makePost(gltLib,  "root_glitch_vs", "root_motion_fs",    kMotionFmt, false);
+    sortPipe_      = makePost(gltLib,  "root_glitch_vs", "root_sort_fs",       kColorFmt, false);
+    glitchPipe_    = makePost(gltLib,  "root_glitch_vs", "root_glitch_fs",     kColorFmt, false);
+    if (!aoPipe_ || !aoBlurPipe_ || !bloomDownPipe_ || !bloomUpPipe_ || !postPipe_
+        || !motionPipe_ || !sortPipe_ || !glitchPipe_) return;
 
     {
         MTLDepthStencilDescriptor* dd = [[MTLDepthStencilDescriptor alloc] init];
@@ -245,6 +251,10 @@ void MetalRootRenderer::buildTargets() {
         if (bw < 4 || bh < 4) break;
         bloomMips_.push_back(make2D(kColorFmt, bw, bh, MTLStorageModePrivate));
     }
+
+    // Output-sized, so a resize invalidates them; rebuilt lazily by the first
+    // frame that actually asks for the effect again.
+    releaseGlitchTargets();
 
     builtSsaa_ = ss;
     builtAoDs_ = ds;
@@ -576,6 +586,57 @@ int MetalRootRenderer::addInstance(const std::vector<float>& nodesXYZ,
 }
 
 void MetalRootRenderer::clearInstances() { instances_.clear(); }
+
+// The glitch stage's three targets. Separate from buildTargets because they
+// depend on nothing it tracks (they are always output-sized) and because most
+// runs never allocate them at all -- 1080p is 16 MB of RGBA16F apiece.
+void MetalRootRenderer::ensureGlitchTargets() {
+    if (glitchTex_[0] && glitchTex_[1] && motionTex_ && sortTex_[0] && sortTex_[1]) return;
+    releaseGlitchTargets();
+    auto make2D = [&](MTLPixelFormat fmt, MTLStorageMode store) -> id<MTLTexture> {
+        MTLTextureDescriptor* td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
+                                                               width:std::max(1, w_)
+                                                              height:std::max(1, h_)
+                                                           mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        td.storageMode = store;
+        return [device_ newTextureWithDescriptor:td];
+    };
+    // Shared, like postTex_: either of the two may be the texture render()
+    // returns, and the headless capture paths read that without a blit.
+    glitchTex_[0] = make2D(kColorFmt, MTLStorageModeShared);
+    glitchTex_[1] = make2D(kColorFmt, MTLStorageModeShared);
+    motionTex_    = make2D(kMotionFmt, MTLStorageModePrivate);
+    sortTex_[0]   = make2D(kColorFmt, MTLStorageModePrivate);
+    sortTex_[1]   = make2D(kColorFmt, MTLStorageModePrivate);
+    moshHistValid_ = false;
+    sortValid_ = false;
+}
+
+void MetalRootRenderer::releaseGlitchTargets() {
+    // No ARC in this file (see the buffer-capacity note above), so these are
+    // +1 references this class owns and has to give back itself.
+    for (int i = 0; i < 2; ++i) {
+        [glitchTex_[i] release]; glitchTex_[i] = nil;
+        [sortTex_[i] release];   sortTex_[i] = nil;
+    }
+    [motionTex_ release]; motionTex_ = nil;
+    moshHistValid_ = false;
+    sortValid_ = false;
+}
+
+void MetalRootRenderer::triggerDatamosh(float seconds) {
+    moshTriggered_ = true;
+    moshUntil_ = postTime + std::max(seconds, 0.0f);
+    // Restart the freeze even if the latch already had the effect running: a
+    // cue means "tear it again from here", not "carry on with the old motion".
+    moshStart_ = postTime;
+}
+
+bool MetalRootRenderer::datamoshActive() const {
+    return post.mosh || (moshTriggered_ && postTime < moshUntil_);
+}
 
 id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                                          float azimuth, float elevation, float radius,
@@ -958,7 +1019,12 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     [fe drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [fe endEncoding];
 
-    if (!post.enabled) { outTex_ = fogColorTex_; return fogColorTex_; }
+    if (!post.enabled) {
+        // Still record the camera: the glitch stage's freeze needs an unbroken
+        // history of it, and post.enabled is a live checkbox.
+        prevViewProj_ = vp; prevViewProjValid_ = true;
+        outTex_ = fogColorTex_; return fogColorTex_;
+    }
 
     // --- Pass 4: bloom chain ---
     const bool bloomOn = post.bloom && !bloomMips_.empty()
@@ -1042,6 +1108,110 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
               fogColorTex_, bloomOn ? bloomMips_[0] : fogColorTex_, rootDepthTex_,
               haloTex});
 
-    outTex_ = postTex_;
-    return postTex_;
+    // --- Pass 6: pixel sort, datamosh, bitcrush ------------------------------
+    // Codec and display artefacts on the finished picture; see
+    // root_glitch.metal. Skipped whole -- targets included, which is 40 MB at
+    // 1080p -- when none of the three is asked for, the common case.
+    const bool moshOn  = datamoshActive();
+    const bool crushOn = post.crush > 0.0f;
+    const bool sortOn  = post.sort && post.sortAmount > 0.0f;
+    if (moshTriggered_ && postTime >= moshUntil_) moshTriggered_ = false;
+
+    id<MTLTexture> result = postTex_;
+    if ((moshOn || crushOn || sortOn) && glitchPipe_ && motionPipe_ && sortPipe_) {
+        ensureGlitchTargets();
+        // Rising edge: this frame is where the freeze starts, and the feedback
+        // buffer holds whatever the last run of this pass left in it, which may
+        // be minutes old. Both are reset here rather than trusted.
+        const bool firstMoshFrame = moshOn && !moshWasOn_;
+        if (firstMoshFrame) {
+            if (!moshTriggered_) moshStart_ = postTime;   // the latch's own edge
+            moshHistValid_ = false;
+        }
+
+        // The frozen field is the motion *into* the frame the effect started
+        // on, so the vector pass has to run on that frame even though every
+        // frame after it is skipped. Skipping it is the freeze: nothing writes
+        // motionTex_, so it keeps handing back the same vectors.
+        const bool frozen = moshOn && !firstMoshFrame &&
+                            (post.moshFreeze <= 0.0f ||
+                             postTime - moshStart_ < post.moshFreeze);
+        if (moshOn && !frozen) {
+            RootMotionU mu = {};
+            mu.cam = cam;
+            mu.eye = gu.eye;
+            mu.res = (simd_float2){(float)w_, (float)h_};
+            mu.fov = fov;
+            mu.nearZ = nearZ; mu.farZ = farZ;
+            mu.bgDepth = post.moshBgDepth;
+            // On the very first frame there is no previous camera; the current
+            // one gives a zero field, which is the honest answer.
+            mu.prevViewProj = prevViewProjValid_ ? prevViewProj_ : vp;
+            encodeFS({cb, motionPipe_, motionTex_, &mu, sizeof(mu), rootDepthTex_});
+        }
+
+        // The pixel sort's own state, stepped once (or a few times) per frame.
+        // Each step is a fullscreen pass with four texture reads, and the sort
+        // converges over frames rather than inside one -- see RootSortU.
+        if (sortOn) {
+            RootSortU su = {};
+            su.res = (simd_float2){(float)w_, (float)h_};
+            su.lo = post.sortLow;
+            su.hi = post.sortHigh;
+            su.feed = post.sortFeed;
+            su.axis = (post.sortAxis == 1) ? 1 : 0;
+            su.descending = post.sortDescending ? 1 : 0;
+            const int passes = std::max(1, std::min(post.sortPasses, 8));
+            for (int i = 0; i < passes; ++i) {
+                su.parity = sortIdx_ & 1;
+                su.seed = sortValid_ ? 0 : 1;
+                const int dst = sortIdx_ ^ 1;
+                encodeFS({cb, sortPipe_, sortTex_[dst], &su, sizeof(su),
+                          sortTex_[sortIdx_], postTex_});
+                sortIdx_ = dst;
+                sortValid_ = true;
+            }
+        } else {
+            sortValid_ = false;
+        }
+
+        RootGlitchU glu = {};
+        glu.res = (simd_float2){(float)w_, (float)h_};
+        glu.crush = post.crush;
+        glu.crushBlock = post.crushBlock;
+        glu.crushLevels = post.crushLevels;
+        glu.crushDither = post.crushDither;
+        glu.moshOn = moshOn ? 1 : 0;
+        glu.moshAmount = post.moshAmount;
+        glu.moshGain = post.moshGain;
+        glu.moshBlock = post.moshBlock;
+        glu.sortOn = sortOn ? 1 : 0;
+        glu.sortAmount = post.sortAmount;
+
+        // Ping-pong: write the buffer the previous frame did not, so the one it
+        // did is still intact underneath as the datamosh's feedback. Until that
+        // holds a frame of this run, the current frame stands in for it -- the
+        // first moshed frame then comes out as itself and the smear builds from
+        // there, rather than tearing a stale picture back onto the screen.
+        const int dst = glitchIdx_ ^ 1;
+        encodeFS({cb, glitchPipe_, glitchTex_[dst], &glu, sizeof(glu),
+                  postTex_, moshHistValid_ ? glitchTex_[glitchIdx_] : postTex_,
+                  motionTex_, sortOn ? sortTex_[sortIdx_] : postTex_});
+        glitchIdx_ = dst;
+        moshHistValid_ = true;
+        result = glitchTex_[glitchIdx_];
+    } else {
+        moshHistValid_ = false;
+        sortValid_ = false;
+    }
+    moshWasOn_ = moshOn;
+
+    // Recorded every frame, effect or no effect: the freeze needs the camera
+    // from the frame *before* the one it starts on, and that is only available
+    // if it was already being kept.
+    prevViewProj_ = vp;
+    prevViewProjValid_ = true;
+
+    outTex_ = result;
+    return result;
 }

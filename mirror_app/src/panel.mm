@@ -3340,6 +3340,61 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 }
                 ui::EndHeader();
                 ui::PopSection();
+                ui::PushSection("glitch");
+                ui::BeginHeader("glitch", /*default_open=*/false);
+                {
+                    ImGui::TextUnformatted("bitcrush");
+                    ui::SliderFloat("crush", &R.post.crush, 0.0f, 1.0f);
+                    ImGui::TextDisabled("0 is bit-exact; the dial drives block "
+                                        "size and level count together");
+                    ui::BeginGate(R.post.crush > 0.0f);
+                    {
+                        ui::SliderFloat("block size (px)", &R.post.crushBlock, 1.0f, 64.0f);
+                        ImGui::TextDisabled("output is %.0fx%.0f blocks at full crush",
+                                            (float)R.width() / std::max(R.post.crushBlock, 1.0f),
+                                            (float)R.height() / std::max(R.post.crushBlock, 1.0f));
+                        ui::SliderFloat("colour levels", &R.post.crushLevels, 2.0f, 32.0f);
+                        ui::SliderFloat("crush dither", &R.post.crushDither, 0.0f, 2.0f);
+                    }
+                    ui::EndGate();
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("datamosh");
+                    ui::Checkbox("mosh (hold)", &R.post.mosh);
+                    ImGui::SameLine();
+                    if (ImGui::Button("trigger")) R.triggerDatamosh(R.post.moshTrigger);
+                    ui::SliderFloat("trigger length (s)", &R.post.moshTrigger, 0.1f, 10.0f);
+                    ui::SliderFloat("vector freeze (s)", &R.post.moshFreeze, 0.0f, 8.0f);
+                    ImGui::TextDisabled("how long the motion field stays fixed after "
+                                        "it starts; 0 = for the whole run");
+                    ui::SliderFloat("mosh amount", &R.post.moshAmount, 0.0f, 1.0f);
+                    ui::SliderFloat("vector gain", &R.post.moshGain, 0.0f, 6.0f);
+                    ui::SliderFloat("macroblock (px)", &R.post.moshBlock, 1.0f, 64.0f);
+                    ui::SliderFloat("background depth", &R.post.moshBgDepth, 5.0f, 400.0f);
+                    ImGui::TextDisabled(R.datamoshActive() ? "moshing" : "idle");
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("pixel sort");
+                    ui::Checkbox("sort", &R.post.sort);
+                    ui::BeginGate(R.post.sort);
+                    {
+                        ui::SliderFloat("sort amount", &R.post.sortAmount, 0.0f, 1.0f);
+                        ui::SliderFloat("band low", &R.post.sortLow, 0.0f, 1.0f);
+                        ui::SliderFloat("band high", &R.post.sortHigh, 0.0f, 1.0f);
+                        ImGui::TextDisabled("only pixels inside the band move, so the "
+                                            "band's edges are where the spans break");
+                        ui::SliderInt("passes/frame", &R.post.sortPasses, 1, 8);
+                        ImGui::TextDisabled("the sort converges over frames; this is "
+                                            "how fast");
+                        ui::SliderFloat("live feed", &R.post.sortFeed, 0.0f, 0.5f);
+                        int axis = R.post.sortAxis;
+                        if (ImGui::RadioButton("columns", axis == 0)) R.post.sortAxis = 0;
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("rows", axis == 1)) R.post.sortAxis = 1;
+                        ui::Checkbox("bright first", &R.post.sortDescending);
+                    }
+                    ui::EndGate();
+                }
+                ui::EndHeader();
+                ui::PopSection();
                 ui::PushSection("face masks");
                 ui::BeginHeader("face masks", /*default_open=*/false);
                 {
