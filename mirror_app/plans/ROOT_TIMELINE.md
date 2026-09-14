@@ -290,4 +290,19 @@ the existing "neighbours emit into the shared face mesh" path.
 - `--roundtriptest` still reports `mirror/raindrops` (forced by phase every
   frame in main.mm) and `sound/center (Hz)` (the slider snaps a loaded value
   to the nearest note when `snap to notes` is on). Both are by design, not
-  lost keys; the test could special-case them.
+  lost keys; the test could special-case them. (Re-checked on 757d590:
+  450/452, the same two misses, both by design.)
+- `root_sequence.h`'s `Stage` enum is `Face, Grow, Turn, Orbit, Outro, Done`
+  -- Reveal was folded into Orbit (the header says so at the top of its own
+  Reveal block) rather than kept as the separate stage this doc's timeline
+  section still lists. Not a bug, but this doc's stage list is stale next
+  to the code.
+- `--growshot`'s `radius` positional argument (`roots.radius = rad` in
+  dev_tools.mm) has no visible effect on the rendered frame -- shots taken
+  at radius 5, 18, 42 and 100 (same az/el/faceScale) came back byte-identical.
+  `faceScale` does change the render (confirmed at 0.3 vs 3.0, where the
+  cavity oval visibly scales with it, and at the requested 0.6 vs 1.2, which
+  differ byte-for-byte though the change reads as only a few pixels at
+  growshot's fixed framing). Worth a look if growshot is meant to frame
+  closer for tuning stills; `--seqshot`'s camera is unaffected (its stills
+  above show normal per-hop framing).
