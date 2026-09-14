@@ -132,6 +132,10 @@ struct RootSim::Impl {
     // the mask cavities.
     std::shared_ptr<HostSurface> host;
     std::vector<std::pair<double, double>> maskUV;   // per mask, when there is a host
+    // masks[0] stands on the host's axis rather than on its surface (see
+    // reset()): its maskUV entry is then not a surface coordinate, and the
+    // hop that leaves it starts from its front rather than behind its chin.
+    bool anchorAxis = false;
 
     // The travelling root's own growth law, read off the species file once:
     // elongation rate, maximal length, and the function relating the two. The
@@ -160,7 +164,6 @@ struct RootSim::Impl {
     bool   reached = false;
     bool   doneFlag = false;
     bool   ok = false;
-    bool   seedHop = false;           // hop 0, wrapping the first mask
     HopReport report;                 // the hop in flight
     std::vector<HopReport> reports;
 
@@ -207,13 +210,13 @@ struct RootSim::Impl {
     // Where the travelling root starts a hop: just behind the mask it is
     // leaving, or the seed for the first one.
     Vector3d hopStart(int h) const {
-        // The seed hop starts on the first mask itself: its job is to put a
-        // root system around that face before anything travels anywhere.
+        // Hop 0 travels to mask 0 from the seed -- or, growing out of the
+        // first mask, does not exist (reset() reveals mask 0 and starts at
+        // hop 1). The latter case is only ever asked by commonAge(), and the
+        // answer that gives it a zero-length hop is the mask itself.
         if (h == 0) {
             if (!p.growFromFirstMask || masks.empty()) return Vector3d(0, 0, 0);
-            const MaskNode& m = masks[0];
-            return m.pos.minus(m.normal.times(m.r_depth + (double)p.spawnBehind))
-                        .minus(m.bitangent.times(m.r_height * (double)p.spawnRim));
+            return masks[0].pos;
         }
         int from = h - 1;
         if (p.treeRelay) {
@@ -227,6 +230,12 @@ struct RootSim::Impl {
             }
         }
         const MaskNode& m = masks[from];
+        // The on-axis anchor faces down the axis, and the chain runs that
+        // way: the root leaves straight out of the face's front. spawnRim
+        // and spawnBehind are for a mask on a surface the root has to get
+        // round; this one has nothing behind it to come round from.
+        if (from == 0 && anchorAxis)
+            return m.pos.plus(m.normal.times(m.r_depth + (double)p.anchorSpawn));
         // Behind the surface, and down at the chin: emerging from the rim is
         // what makes it read as growing out of this face.
         return m.pos.minus(m.normal.times(m.r_depth + (double)p.spawnBehind))
@@ -253,9 +262,10 @@ struct RootSim::Impl {
         Vector3d b = masks[h].pos.plus(Vector3d(0, 0, (double)p.targetLift));
         const int from = hopFrom(h);
         // Over the host when travel is confined to it and both ends have
-        // surface coordinates; the chord otherwise, which is all the first hop
-        // (out of the seed, which is on no surface) can be measured by.
-        if (p.coneSurfaceTravel && host && from >= 0 &&
+        // surface coordinates; the chord otherwise, which is all a hop out of
+        // the seed, or out of an on-axis anchor -- neither on the surface --
+        // can be measured by.
+        if (p.coneSurfaceTravel && host && from >= 0 && !(from == 0 && anchorAxis) &&
             from < (int)maskUV.size() && h < (int)maskUV.size())
             return host->pathBetween(maskUV[from].first, maskUV[from].second,
                                      maskUV[h].first, maskUV[h].second);
@@ -288,8 +298,17 @@ struct RootSim::Impl {
     }
 
     void rebuildTropism(double mainW, double latW, bool travel, double dwellThreshold) {
+        // The hop out of an on-axis anchor starts inside the keep-clear tube
+        // in front of that face (hopStart), and a tube the tip is inside
+        // only ever pushes it sideways, across the face. That one travel
+        // goes without the anchor's tube; the anchor is localRevealed[0]
+        // (revealed first, at reset) and every later hop has it back.
+        int noTube = -1;
+        if (travel && anchorAxis && p.growFromFirstMask && hopFrom(hop) == 0 &&
+            !localRevealed.empty())
+            noTube = 0;
         auto geom = buildCavityGeometry(localRevealed, p.R0, p.Hh, false, 2.0,
-                                        tipRadius, p.viewCylLen, 0.9, p.taperPower);
+                                        tipRadius, p.viewCylLen, 0.9, p.taperPower, noTube);
         // The travel shell: intersecting the cavity-avoidance geometry with a
         // thin shell around the cone makes the root crawl over the surface
         // rather than cut through the middle. It only constrains the radial
@@ -387,21 +406,12 @@ struct RootSim::Impl {
         hopLen = localTarget.minus(localSeed).length();
         hopPath = hopPathFor(h);
 
-        // The seed hop: a root system that wraps the first mask and goes
-        // nowhere. Without it the face the piece opens on is the one bare mask
-        // in the structure -- the relay leaves it immediately and never comes
-        // back, so the shot the whole sequence is anchored on has no roots.
-        // It arrives by construction: it is already there.
-        seedHop = (h == 0 && p.growFromFirstMask);
-        if (seedHop) {
-            revealed.push_back(masks[0]);
-            pushRevealedRender(masks[0]);
-            localRevealed.push_back(localTargetNode);
-            reached = true; reachedDay = 0.0;
-            rebuildTropism(p.dwellWeight, p.dwellLateralWeight, false, 0.0);
-        } else {
-            rebuildTropism(p.weight, p.lateralWeight, true, -1.0);
-        }
+        // Every hop travels. There used to be a "seed hop" here -- hop 0,
+        // growing out of the first mask, wrapped it for a dwell before
+        // anything left -- but the face the piece opens on is meant to stay
+        // bare, with one root leaving it: reset() reveals mask 0 and starts
+        // the relay at hop 1.
+        rebuildTropism(p.weight, p.lateralWeight, true, -1.0);
 
         // The travel budget: what the distance costs this species, allowing for
         // the fact that the root does not travel in a straight line, capped by
@@ -413,8 +423,7 @@ struct RootSim::Impl {
         hopMaxDays = hopTravelDays + std::max(0.0, (double)p.dwellDays);
         if (p.evenNests) hopMaxDays = std::max(hopMaxDays, evenAgeDays);
 
-        if (!seedHop) { day = 0.0; reachedDay = -1.0; reached = false; }
-        else          { day = 0.0; }
+        day = 0.0; reachedDay = -1.0; reached = false;
         report = HopReport{};
         report.mask = h;
         report.chord = (float)hopLen;
@@ -518,6 +527,7 @@ bool RootSim::reset(const SimParams& p) {
     const double angStep = p.angleStepGoldenMult * goldenRad;
     impl_->host.reset();
     impl_->maskUV.clear();
+    impl_->anchorAxis = false;
 
     if (p.host == "lobes") {
         // No host surface: the roots fill the volume between the faces instead
@@ -546,6 +556,25 @@ bool RootSim::reset(const SimParams& p) {
         impl_->masks.reserve(impl_->maskUV.size());
         for (const auto& uv : impl_->maskUV)
             impl_->masks.push_back(impl_->host->maskAt(uv.first, uv.second, maskR));
+
+        // The anchor on the axis, facing down it. The cone and the cylinder
+        // hang from the seed at grow z=0 down -z, so "down the axis" is
+        // -z, at the height the pattern's first sample would have had; the
+        // chain then runs down from the face's front rather than round the
+        // surface from its chin. The frame is right-handed like coneMaskAt's
+        // (tangent x bitangent = normal), so the face is not mirrored. The
+        // sphere and the torus have no such axis and keep their first sample.
+        impl_->anchorAxis = p.anchorOnAxis && !impl_->masks.empty() &&
+                            (p.host == "cone" || p.host == "cylinder" ||
+                             (p.host != "sphere" && p.host != "torus"));
+        if (impl_->anchorAxis) {
+            MaskNode& a = impl_->masks[0];
+            const double t0 = std::clamp((double)p.startFrac, 0.0, 1.0);
+            a.pos       = Vector3d(0.0, 0.0, -t0 * p.Hh);
+            a.normal    = Vector3d(0.0, 0.0, -1.0);
+            a.tangent   = Vector3d(1.0, 0.0, 0.0);
+            a.bitangent = a.normal.cross(a.tangent).normalized();   // (0,-1,0)
+        }
     }
     if (impl_->masks.empty()) return false;
 
@@ -576,14 +605,29 @@ bool RootSim::reset(const SimParams& p) {
     // plan -- CPlantBox's own grow-space math (Tropism, SDF hosts, cavity
     // avoidance) is completely untouched by this; only the render-space
     // output (every mask's frame, the skeleton, and the tip) is transformed.
+    //
+    // With the anchor on the axis (anchorOnAxis) the whole cone hangs off
+    // the anchor's normal, so "normal to +z" would lay the structure down
+    // along z, level -- and then nothing later in the piece hangs: the Turn
+    // has no vertical to turn to and the hood is a field of structures on
+    // their sides. So the on-axis anchor is pitched: its normal goes to
+    // (0, -sin a, cos a) with a = anchorPitchDeg, facing down-and-toward +z,
+    // and the chain hangs (90 - a) degrees off vertical, leaning toward the
+    // camera that stands down that normal. Its bitangent goes to
+    // (0, cos a, sin a), so from that camera (the renderer's up is world +y)
+    // the face is upright. Composed as a rotation about x on top of the
+    // frame-to-axes map: rows t0, c b0 - s n0, s b0 + c n0.
     {
         const Vector3d n0 = toYup(impl_->masks[0].normal);
         const Vector3d t0 = toYup(impl_->masks[0].tangent);
         const Vector3d b0 = toYup(impl_->masks[0].bitangent);
         const Vector3d p0 = toYup(impl_->masks[0].pos);
+        const double a = impl_->anchorAxis
+            ? std::clamp((double)p.anchorPitchDeg, 0.0, 85.0) * M_PI / 180.0 : 0.0;
+        const double c = std::cos(a), s = std::sin(a);
         impl_->anchorRowT = t0;
-        impl_->anchorRowB = b0;
-        impl_->anchorRowN = n0;
+        impl_->anchorRowB = b0.times(c).minus(n0.times(s));
+        impl_->anchorRowN = b0.times(s).plus(n0.times(c));
         impl_->anchorTrans = Vector3d(0, 0, 0);   // applyAnchorPoint needs it zeroed first
         impl_->anchorTrans = Vector3d(0, 0, 0).minus(impl_->applyAnchorRot(p0));
     }
@@ -614,11 +658,21 @@ bool RootSim::reset(const SimParams& p) {
     for (const auto& m : impl_->masks) impl_->plannedRender.push_back(impl_->toSimMask(m));
     impl_->evenAgeDays = impl_->commonAge();
 
-    // Hop 0 is the seed hop when growing out of the first mask: it reveals
-    // that mask and wraps it, rather than travelling to it. initHop does the
-    // revealing, so nothing is pre-revealed here.
+    // Growing out of the first mask: mask 0 is revealed here, bare, with no
+    // hop of its own -- no root travels to it and none dwells on it -- and
+    // the relay starts at hop 1, leaving it. A zero-day report stands in for
+    // the hop it did not take, so hops() still has one entry per mask.
     impl_->hop = 0;
-    impl_->initHop(0);
+    if (p.growFromFirstMask) {
+        impl_->revealed.push_back(impl_->masks[0]);
+        impl_->pushRevealedRender(impl_->masks[0]);
+        HopReport r;
+        r.mask = 0;
+        impl_->reports.push_back(r);
+        impl_->hop = 1;
+        if (impl_->hop >= p.N) { impl_->doneFlag = true; return true; }
+    }
+    impl_->initHop(impl_->hop);
     return true;
 }
 

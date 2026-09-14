@@ -195,10 +195,16 @@ inline std::vector<MaskNode> conePhyllotaxis(int n, double baseRadius, double he
 // mask along its normal -- roots can still ball up around the sides/back of
 // the cavity, but stay out of the tube directly in front of it, so the face
 // remains visible instead of getting buried under a wrapped knot.
+//
+// noViewCylIndex >= 0 leaves that one node's tube out: a root meant to leave
+// a face straight out of its front starts inside the tube, and a tube it is
+// inside only ever pushes it sideways (mirror_app's root_sim.cpp, the
+// anchor-on-axis layout, for the hop that leaves the anchor).
 inline std::shared_ptr<SignedDistanceFunction>
 buildCavityGeometry(const std::vector<MaskNode>& nodes, double baseRadius, double height,
                     bool coneContainer = true, double coneMargin = 2.0, double tipRadius = 0.0,
-                    double viewCylLen = 0.0, double viewCylRadiusMult = 0.9, double taperPower = 1.0) {
+                    double viewCylLen = 0.0, double viewCylRadiusMult = 0.9, double taperPower = 1.0,
+                    int noViewCylIndex = -1) {
     std::shared_ptr<SignedDistanceFunction> cone = coneContainer
         ? std::make_shared<SDF_Cone>(baseRadius + coneMargin, height + coneMargin, tipRadius,
                                      Vector3d(0, 0, 0), taperPower)
@@ -206,10 +212,12 @@ buildCavityGeometry(const std::vector<MaskNode>& nodes, double baseRadius, doubl
     if (nodes.empty())
         return cone ? cone : std::make_shared<SignedDistanceFunction>();   // unconstrained
     std::vector<std::shared_ptr<SignedDistanceFunction>> cavities;
+    int idx = -1;
     for (const auto& m : nodes) {
+        ++idx;
         cavities.push_back(std::make_shared<SDF_Ellipsoid>(
             m.pos, m.normal, m.tangent, m.bitangent, m.r_depth, m.r_width, m.r_height));
-        if (viewCylLen > 0) {
+        if (viewCylLen > 0 && idx != noViewCylIndex) {
             double r = viewCylRadiusMult * std::max(m.r_width, m.r_height);
             Vector3d cylCenter = m.pos.plus(m.normal.times(viewCylLen * 0.5));
             cavities.push_back(std::make_shared<SDF_Cylinder>(cylCenter, m.normal, r, viewCylLen * 0.5));

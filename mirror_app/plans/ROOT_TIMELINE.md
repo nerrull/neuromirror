@@ -18,7 +18,23 @@ the four framing modes (`autoFrame`/`focusMask`/`focusGroup`/`anchorMask`/
 
 - `RootSim` (CPlantBox hop-by-hop growth), the phyllotaxis-on-cone mask
   layout (make the default preset a little more elongated: taller `Hh`
-  relative to `R0`).
+  relative to `R0`). **Layout note (anchor on the axis):** with
+  `anchorOnAxis` (SimParams, default on; cone and cylinder hosts) mask 0
+  is not the pattern's first surface sample but sits *on the cone's axis*
+  at the start height, facing down the axis, so the chain grows straight
+  out of the visitor's face. Masks 1..N-1 keep the phyllotaxis placement
+  and their outward normals. The anchor-first transform then pitches the
+  anchor's normal `anchorPitchDeg` (60) below the horizontal, toward +z:
+  the Face camera stands down that normal (el = -60), the face is upright
+  from there (bitangent -> (0, cos, sin)), and the whole structure hangs
+  30 degrees off vertical leaning toward that camera -- "normal to +z" would
+  have laid it level along z, with nothing left to hang in Turn/Reveal.
+  There is no seed hop any more: `reset()` reveals mask 0 bare and the
+  relay starts at hop 1, leaving it from `anchorSpawn` cm in front of the
+  face (the anchor's keep-clear tube is dropped for that one travel, since
+  the root starts inside it; `spawnRim`/`spawnBehind` only apply to masks
+  on the surface). The hop-1 path estimate is the chord (the anchor has no
+  surface coordinate).
 - `MetalRootRenderer`, the glitch stage (`triggerDatamosh`).
 - The cloth press in Transition (`RootScene::restartCloth` etc.) and its
   pre-warm: the sequence's **Face** stage already runs during
@@ -62,8 +78,9 @@ inputs)` every frame. It writes `roots.target/radius/azimuth/elevation`,
 on the scene's framing.
 
 ### Face
-Anchor mask (mask 0, at the origin facing +z) alone, tight (radius ≈
-2.6 × mask extent, down its normal). Sim paused. The mask is live-driven
+Anchor mask (mask 0, at the origin, facing `anchorPitchDeg` below the
+horizontal toward +z -- see the layout note above) alone, tight (radius ≈
+2.6 × mask extent, down its normal, so el = -60). Sim paused. The mask is live-driven
 by the viewer (existing `setFittedFace` path in main.mm — unchanged).
 Duration: `face_seconds` as a floor, and it never ends before the cloth has
 cleared + `face_clear_tail_seconds` (same semantics as the old
@@ -72,40 +89,33 @@ cleared + `face_clear_tail_seconds` (same semantics as the old
 
 ### Grow (×5 target faces, i.e. planned masks 1..N-1)
 - Sim runs. Rate = `growthStepEstimate()/ (N-1) / grow_face_seconds`
-  (default 10 s/face, slider to 60), clamped to `[grow_rate_min,
-  grow_rate_max]` steps/s. The steps are dealt out through a fractional
-  accumulator (`stepGrowth`), so a rate under one step per frame is honoured:
-  the show's plant is ~190 steps over 5 hops, under 4 steps/s at 10 s/face,
-  and the old `lround(rate·dt)` rounded up to one step *every frame* (60/s),
-  which is why the whole chain used to grow in the three seconds of the
-  swing. `grow_rate_min` is 1 for the same reason (it was 20, above the
-  derived rate). Measured in `--seqshot` with `SEQSHOT_REALTIME=1` (dt =
-  1/60): Grow takes `(N-1)·grow_face_seconds + grow_swing_seconds·gate`.
+  (default 10 s/face, slider to 60; the show preset runs 3.3), clamped to
+  `[grow_rate_min, grow_rate_max]` steps/s. The steps are dealt out through
+  a fractional accumulator (`stepGrowth`), so a rate under one step per
+  frame is honoured: the show's plant is ~180 steps over 5 hops, under 4
+  steps/s at 10 s/face, and the old `lround(rate·dt)` rounded up to one
+  step *every frame* (60/s). `grow_rate_min` is 1 for the same reason.
+  Measured in `--seqshot` with `SEQSHOT_REALTIME=1` (dt = 1/60): Grow
+  takes `(N-1)·grow_face_seconds` (16.5 s at 3.3 s/face, no hold).
 - The viewer stops driving the mask the moment Grow starts (main.mm: stop
   the live `setFittedFace` upload; `RootFaceSequence` playback, if valid,
   may continue).
-- Camera: `eye = target + R·dir(az, el)`. The structure's axis `A` is
-  (centroid of planned masks − anchor pos), normalised. The Grow direction
-  is `A` swung toward the anchor's normal by `grow_view_tilt_deg` (default
-  60): 0 is dead on the axis (the chain grows straight at the lens, faces
-  edge-on), 90 is square to it. Measured off the *axis*, so the growth always
-  has cos(tilt) of itself coming toward the lens whatever the layout -- on
-  the cone the axis is ~120° off the anchor's normal, and the earlier "45°
-  off the normal" left the camera 70° off the axis with the chain running
-  sideways and, at the start of the swing, straight away. At Grow entry the
-  camera eases from the Face pose to this pose over `grow_swing_seconds`
-  (default 3), and the growth itself is held until the swing is
-  `grow_swing_gate` (default 0.7) of the way through, so the first hop is
-  seen from the Grow pose rather than heading away from the Face one. The
-  camera below the hanging cone (el ≈ −60°) reads fine through the show fog.
-- Pull-back "pushed by the tip": each frame compute the radius needed so
-  that the anchor, the current growth tip (`roots.growthTip`) and the current
-  target mask (`roots.currentMask()` → `plannedMasks()[i]`) all fit inside the
-  frustum with margin `grow_margin` (default 0.35). `radius = max(radius,
-  needed)` — it never comes back in — eased with time constant
-  `cam_ease_seconds` (default 1.2). Target point: anchor pos eased toward the
-  midpoint of anchor and current target mask, so the anchor drifts off-centre
-  slowly rather than staying pinned.
+- Camera, **per hop**: for the hop in flight (`roots.currentMask()` → planned
+  mask *i*) the camera direction is *that mask's outward normal* (az/el from
+  `pm[i].normal`), the target is that mask's position -- leaning
+  `grow_hop_lead` (0.3) of the way toward the growth tip while the root is
+  still travelling, the mask itself once `arrivedAtMask()` -- and the radius
+  is what fits the target mask, the tip and the previous mask (so the root's
+  origin stays in frame) with `grow_margin` (0.35); it comes in as well as
+  out, floored at the Face's tight radius. Target and radius ease with
+  `cam_ease_seconds` (1.2), the angles with the same ease under the
+  `cam_max_angular_speed` clamp, so each hop is one travel-out move that
+  ends square on the face just reached, and the first hop's swing off the
+  Face pose is the same ease (no separate swing/gate: at 3.3 s/face the
+  travel is ~0.5 s of the hop and the camera settles during the dwell,
+  8-10 degrees off the normal by the hop's end -- `--seqshot` prints the
+  angle at each arrival and each hop end). The whole structure is **not**
+  framed during Grow; the Turn is the first frame of it.
 - Reveal of a target face — **both options, selectable**:
   `reveal_mode = OnArrival | WhenFramed`.
   - OnArrival: today's behaviour, the mask appears when the root reaches it.
@@ -130,15 +140,21 @@ around this one as a **fan behind it, as seen from the Turn-end camera**
 (`addNeighbours`): structure k is `reveal_spacing` × structure radius ×
 sqrt(k+1) out from this structure's centre, on its plane, at the azimuth
 that puts it at a golden-ratio-sequenced view angle outside the band the
-subject covers and inside the frustum, alternating sides. (The earlier
-sunflower put seed 0 dead behind the subject and the rest wherever the
-golden angle landed, mostly out of the Turn-end frame — which is why a live
-run with a 24-capture bank showed one structure of three.) Structure k pops
-in **dark** on a marker (`markerHit`), and its light pops on at the next
-marker; if no marker arrives within `reveal_fallback_seconds` (default 2.5)
-the step happens anyway. Camera holds the Turn's angles and target but backs
-off (monotonically, eased) to keep this structure and every neighbour shown
-so far in frame. Reveal ends when every structure is lit.
+subject covers and inside the frustum, alternating sides. `reveal_spacing`
+is 2.2: at 1.2 the hood interleaved into one tangle; at 2.2 the structures
+stand clear of each other and a six-strong hood still reads inside the fog
+from the orbit (r ≈ 130); at 2.8 the orbit hits `orbit_max_radius` and the
+outer ones are haze. On entry **every** structure appears at once, dark
+(`setAllStructuresVisible`, roots and masks). Then each marker
+(`markerHit`; `reveal_fallback_seconds`, 2.5, without one) lights **one face
+mask** somewhere in the hood -- `RootScene::setStructureMaskLit(k, j)`, the
+face mesh's per-vertex `lit` -- in a shuffled order over every (structure,
+mask) pair, fixed-seeded so reruns match. A structure's **roots** (the
+instance `lit`, the emissive/pulse glow) come on only once every one of its
+masks is lit (`setStructureLit`). The camera holds the Turn's angles and
+target and backs off (monotonically, eased) to frame the hood. Reveal ends
+when the last mask is lit. Each lit step re-emits the shared face mesh
+(one rebuild per marker, the same cost as the old per-structure step).
 Number of structures: `reveal_structures` (default 0 = from the face bank,
 see below; otherwise exactly that many, the bank's faces dealt round again
 when it is short).
@@ -257,9 +273,15 @@ the existing "neighbours emit into the shared face mesh" path.
   and the mean centre follows it a little. Check on the show screen whether
   the lens ever brushes a near structure (seqshot prints the nearest surface
   distance at the orbit snap: ~35 with 12 structures).
-- Grow: in the compressed `--seqshot` run the target mask at the bottom of
-  the frame lags the camera ease (`cam_ease_seconds` 1.2, `grow_margin`
-  0.35); at show speed it keeps up. Revisit if the live Grow ever cuts it.
+- Grow: the travel is a small part of each hop (~0.5 s of 3.3 at the show's
+  pacing -- Lupin covers the gap in a few sim days and the rest is dwell),
+  so the arrival happens while the camera is still ~90 degrees off the new
+  mask's normal and the per-hop move is mostly seen over the dwell. A
+  shorter `cam_ease_seconds` or a longer `grow_face_seconds` brings the
+  camera round sooner. The compressed `--seqshot` run uses an ease of 0.25.
+- Lit masks on the hood are small at the Reveal's distance (60-150 out, in
+  fog): on a 960x540 still a lit face is a bright dot. Judge on the show
+  screen.
 - The `cloth/*` section (the press timings hold/press/settle/release/fall
   and the film's look) had no `kBankRules` entry after its rename from
   `transition`, so its keys were drawn but never saved -- every launch came

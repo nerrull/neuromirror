@@ -600,31 +600,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
                                 ui::SliderFloat("grow rate max (steps-s)", &S.grow_rate_max, 1.f, 2000.f,
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
-                                ui::SliderFloat("grow view tilt (deg)", &S.grow_view_tilt_deg, 0.f, 90.f, "%.0f");
+                                ui::SliderFloat("grow hop lead", &S.grow_hop_lead, 0.f, 1.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Where the camera stands for the growth, as an\n"
-                                        "angle off the structure's axis toward the anchor's\n"
-                                        "normal: at 0 the chain grows straight at the lens\n"
-                                        "with the faces edge-on, at 90 it runs across the\n"
-                                        "frame. Lower is more \"toward the viewer\", higher\n"
-                                        "reads the faces better.");
-                                }
-                                ui::SliderFloat("grow swing seconds", &S.grow_swing_seconds, 0.f, 10.f, "%.1f");
-                                ui::SliderFloat("grow swing gate", &S.grow_swing_gate, 0.f, 1.f, "%.2f");
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "The growth is held until the swing is this far\n"
-                                        "through, so the first hop is seen from the Grow\n"
-                                        "pose rather than heading away from the Face one.");
+                                        "Each hop the camera looks down the normal of the\n"
+                                        "face the root is heading for, at that face. While\n"
+                                        "the root travels the target sits this far from\n"
+                                        "the face toward the tip (0 pins the face, 1\n"
+                                        "follows the tip); on arrival it is the face.");
                                 }
                                 ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Margin around the anchor / growth tip / target\n"
-                                        "mask when the tip pushes the camera back, as a\n"
-                                        "fraction of their extent. The radius only ever\n"
-                                        "grows.");
+                                        "Margin around the target face / growth tip /\n"
+                                        "face the root left, as a fraction of their\n"
+                                        "extent, when fitting the hop's camera distance.");
                                 }
                                 ui::SliderFloat("grow timeout mult", &S.grow_timeout_mult, 1.f, 4.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
@@ -2896,6 +2886,37 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::EndGate();
                     ImGui::PopItemWidth();
 
+                    ui::BeginGate(SP.host == "cone" || SP.host == "cylinder");
+                    ui::Checkbox("anchor on axis", &SP.anchorOnAxis);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The first mask on the host's axis, facing down it,\n"
+                            "instead of on the surface facing out: the root\n"
+                            "leaves the visitor's face straight out of its front\n"
+                            "and the chain grows toward the camera. Structural --\n"
+                            "regrow to apply.");
+                    }
+                    ui::BeginGate(SP.anchorOnAxis);
+                    ImGui::PushItemWidth(110);
+                    ui::SliderFloat("anchor pitch", &SP.anchorPitchDeg, 0.f, 85.f, "%.0f deg");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How steeply the first face looks down, degrees below\n"
+                            "the horizontal. The chain hangs off that face, so\n"
+                            "this is how the structure hangs: 90 would be\n"
+                            "straight down, 0 lays it level. Structural --\n"
+                            "regrow to apply.");
+                    }
+                    ImGui::SameLine();
+                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, 0.f, 6.f, "%.2f cm");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far past the front of the first face, along its\n"
+                            "normal, the root leaves it.");
+                    }
+                    ImGui::PopItemWidth();
+                    ui::EndGate();
+                    ui::EndGate();
                     ui::Checkbox("tree relay", &SP.treeRelay);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(

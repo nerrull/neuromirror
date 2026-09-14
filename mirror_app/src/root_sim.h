@@ -48,7 +48,28 @@ struct SimParams {
     // it -- so mask 0 is revealed the moment the grow starts, with no root
     // attached, and the first hop leaves it for mask 1. Otherwise the opening
     // shot has a root already arriving at a face that has not been shown yet.
+    // There is no dwell on it: the face stays bare and one root leaves it.
     bool  growFromFirstMask = true;
+    // Mask 0 on the host's axis, facing down it, rather than on the surface
+    // facing out like the rest. The root then leaves the face straight out
+    // of its front and the chain grows down the axis -- straight at the
+    // camera standing in front of the face. Cone and cylinder hosts only
+    // (the ones with an axis); off, mask 0 is the pattern's own first
+    // sample on the surface.
+    bool  anchorOnAxis = true;
+    // How steeply that face looks down, degrees below the horizontal, in
+    // render space (see the anchor-first placement in reset()). The chain
+    // hangs off the face's normal, so this is also how the structure hangs:
+    // 90 would be straight down (and the camera in front of the face
+    // straight below it, where the renderer's world-up view has no up), 0
+    // is level with the structure lying along +z. 60 keeps the chain 30
+    // degrees off vertical, leaning toward the camera.
+    float anchorPitchDeg = 60.f;
+    // Where the root leaves an on-axis anchor: this far, cm, past the front
+    // of the face along its normal. The keep-clear tube in front of the face
+    // (viewCylLen) is dropped for that one hop, since the root starts inside
+    // it.
+    float anchorSpawn  = 0.5f;
     float angleStepGoldenMult = 1.0f;
     float distStepFrac = 0.0f;
     float dwellDays    = 18.0f;
@@ -132,6 +153,9 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("tubeRadius", p.tubeRadius);
     f("treeRelay", p.treeRelay);
     f("growFromFirstMask", p.growFromFirstMask);
+    f("anchorOnAxis", p.anchorOnAxis);
+    f("anchorPitchDeg", p.anchorPitchDeg);
+    f("anchorSpawn", p.anchorSpawn);
     f("angleStepGoldenMult", p.angleStepGoldenMult);
     f("distStepFrac", p.distStepFrac);
     f("dwellDays", p.dwellDays);

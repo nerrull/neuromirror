@@ -83,7 +83,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (94 parameters)
+## show (92 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -117,14 +117,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/fog fade seconds` | float | 0 .. 20 | 2 |
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/roots/frame margin` | float | 0 .. 1.5 | 0.25 |
-| `show/roots/grow face seconds` | float | 0.5 .. 60 | 10 |
+| `show/roots/grow face seconds` | float | 0.5 .. 60 | 3.3 |
+| `show/roots/grow hop lead` | float | 0 .. 1 | 0.3 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
 | `show/roots/grow rate max (steps-s)` | float | 1 .. 2000 | 1200 |
 | `show/roots/grow rate min (steps-s)` | float | 1 .. 2000 | 1 |
-| `show/roots/grow swing gate` | float | 0 .. 1 | 0.7 |
-| `show/roots/grow swing seconds` | float | 0 .. 10 | 3 |
 | `show/roots/grow timeout mult` | float | 1 .. 4 | 1.5 |
-| `show/roots/grow view tilt (deg)` | float | 0 .. 90 | 60 |
 | `show/roots/head pan` | bool | -- | 1 |
 | `show/roots/head pan (deg)` | float | -30 .. 30 | 5 |
 | `show/roots/head pan tau (s)` | float | 0.05 .. 3 | 0.6 |
@@ -134,12 +132,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/orbit elevation (deg)` | float | -60 .. 80 | 25 |
 | `show/roots/orbit max radius` | float | 20 .. 400 | 150 |
 | `show/roots/orbit rate (rad-s)` | float | -1 .. 1 | 0.08 |
-| `show/roots/orbit seconds` | float | 1 .. 300 | 40 |
+| `show/roots/orbit seconds` | float | 1 .. 300 | 20 |
 | `show/roots/reveal fallback seconds` | float | 0.2 .. 20 | 2.5 |
-| `show/roots/reveal max structures` | int | 1 .. 32 | 12 |
+| `show/roots/reveal max structures` | int | 1 .. 32 | 16 |
 | `show/roots/reveal min structures` | int | 0 .. 32 | 3 |
 | `show/roots/reveal mode` | int | 0 .. 1 | 0 |
-| `show/roots/reveal spacing` | float | 0.5 .. 6 | 1.2 |
+| `show/roots/reveal spacing` | float | 0.5 .. 6 | 2.2 |
 | `show/roots/reveal structures` | int | 0 .. 32 | 0 |
 | `show/roots/turn end elevation (deg)` | float | -60 .. 60 | 5 |
 | `show/roots/turn seconds` | float | 0.5 .. 20 | 6 |
@@ -301,7 +299,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | -2 .. 2 | 0.019 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
 
-## roots (184 parameters)
+## roots (187 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -310,12 +308,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/cached field: LOD & culling/frustum cull` | bool | -- | 1 |
 | `roots/cached field: LOD & culling/grid NxN` | int | 2 .. 20 | 6 |
 | `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 0 |
-| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 2.96323 |
-| `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.0570834 |
+| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | -0.25183 |
+| `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.436332 |
 | `roots/camera/fov` | float | 0.2 .. 1.2 | 0.6 |
 | `roots/camera/frame automatically` | bool | -- | 0 |
 | `roots/camera/margin` | float | 0 .. 1.5 | 0.35 |
-| `roots/camera/radius` | float | 5 .. 120 | 55.4977 |
+| `roots/camera/radius` | float | 5 .. 120 | 110.712 |
 | `roots/camera/zoom` | float | 0.15 .. 5 | 1 |
 | `roots/environment & material/AO downscale` | int | 1 .. 4 | 2 |
 | `roots/environment & material/AO intensity` | float | 0 .. 4 | 2 |
@@ -394,12 +392,15 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/glitch/trigger length (s)` | float | 0.1 .. 10 | 4.381 |
 | `roots/glitch/vector freeze (s)` | float | 0 .. 8 | 2.027 |
 | `roots/glitch/vector gain` | float | 0 .. 6 | 4.399 |
+| `roots/growth/anchor on axis` | bool | -- | 1 |
+| `roots/growth/anchor pitch` | float | 0 .. 85 | 60 |
+| `roots/growth/anchor spawn` | float | 0 .. 6 | 0.5 |
 | `roots/growth/cone height` | float | 24 .. 96 | 65 |
 | `roots/growth/cone radius` | float | 6 .. 24 | 13 |
-| `roots/growth/crawl the cone surface` | bool | -- | 0 |
-| `roots/growth/days - step` | float | 0.05 .. 3 | 0.75 |
+| `roots/growth/crawl the cone surface` | bool | -- | 1 |
+| `roots/growth/days - step` | float | 0.05 .. 3 | 1.03 |
 | `roots/growth/dwell` | float | 0 .. 1 | 0.92 |
-| `roots/growth/dwell days` | float | 2 .. 60 | 18 |
+| `roots/growth/dwell days` | float | 2 .. 60 | 27.915 |
 | `roots/growth/dwell lateral` | float | 0 .. 1 | 0.92 |
 | `roots/growth/even nests` | bool | -- | 1 |
 | `roots/growth/feature clusters` | int | 1 .. 6 | 3 |
@@ -416,10 +417,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/pattern` | string | -- | phyllotaxis |
 | `roots/growth/pull reach` | float | 0.4 .. 3 | 1.2 |
 | `roots/growth/reach x` | float | 0.4 .. 4 | 1.6 |
-| `roots/growth/seed` | int | 0 .. 1.07374e+09 | 42 |
+| `roots/growth/seed` | int | 0 .. 1.07374e+09 | 2 |
 | `roots/growth/shell` | float | 1 .. 20 | 9 |
 | `roots/growth/spawn behind` | float | -10 .. 10 | 0 |
-| `roots/growth/species` | string | -- | Zea_mays_6_Leitner_2014.xml |
+| `roots/growth/species` | string | -- | Lupinus_albus_Leitner_2014.xml |
 | `roots/growth/spiral drift` | float | -0.5 .. 0.5 | 0 |
 | `roots/growth/spiral x golden` | float | 0.2 .. 2 | 1 |
 | `roots/growth/steps-frame` | int | 1 .. 30 | 1 |

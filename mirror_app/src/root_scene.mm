@@ -525,6 +525,7 @@ void RootScene::addNeighbours(int count, int variations, float spacing, float st
         np.instance = inst;
         np.radius = v.radius * pl.scale;
         np.visible = false; np.lit = false;
+        np.maskLit.assign(v.masks.size(), 0);
         neighbours.push_back(np);
     }
     rebuildFace();
@@ -539,12 +540,34 @@ void RootScene::setStructureVisible(int k, bool visible) {
     rebuildFace();
 }
 
+void RootScene::setAllStructuresVisible(bool visible) {
+    bool changed = false;
+    for (auto& np : neighbours) {
+        if (np.visible == visible) continue;
+        np.visible = visible;
+        if (rr_) rr_->setInstanceVisible(np.instance, visible);
+        changed = true;
+    }
+    if (changed) rebuildFace();
+}
+
 void RootScene::setStructureLit(int k, bool lit) {
     if (k < 0 || k >= (int)neighbours.size()) return;
     NeighbourPlacement& np = neighbours[size_t(k)];
-    if (np.lit == lit) return;
+    bool changed = np.lit != lit;
     np.lit = lit;
+    for (char& c : np.maskLit) { changed = changed || (c != 0) != lit; c = lit ? 1 : 0; }
+    if (!changed) return;
     if (rr_) rr_->setInstanceLit(np.instance, lit ? 1.f : 0.f);
+    rebuildFace();
+}
+
+void RootScene::setStructureMaskLit(int k, int j, bool lit) {
+    if (k < 0 || k >= (int)neighbours.size()) return;
+    NeighbourPlacement& np = neighbours[size_t(k)];
+    if (j < 0 || j >= (int)np.maskLit.size()) return;
+    if ((np.maskLit[size_t(j)] != 0) == lit) return;
+    np.maskLit[size_t(j)] = lit ? 1 : 0;
     rebuildFace();
 }
 
@@ -611,7 +634,6 @@ void RootScene::uploadFaceFromMasks() {
         ++k;
         if (!pl.visible) continue;
         if (pl.variation < 0 || pl.variation >= (int)variations_.size()) continue;
-        const float lit = pl.lit ? 1.f : 0.f;
         const float cy = std::cos(pl.rotYaw), sy = std::sin(pl.rotYaw);
         auto xf = [&](const float v[3], bool isPoint) {
             const float s = isPoint ? pl.scale : 1.f;
@@ -632,8 +654,12 @@ void RootScene::uploadFaceFromMasks() {
             m.rDepth = sm.rDepth * pl.scale;
             m.rWidth = sm.rWidth * pl.scale;
             m.rHeight = sm.rHeight * pl.scale;
+            // Per mask: the Reveal lights the faces one at a time, ahead of
+            // the structure's roots (pl.lit, the instance's own flag).
+            const bool litMask = ni < (int)pl.maskLit.size() ? pl.maskLit[size_t(ni)] != 0 : pl.lit;
             appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
-                                 maskColor, *face.colors, rr_->face.smoothNormals, lit);
+                                 maskColor, *face.colors, rr_->face.smoothNormals,
+                                 litMask ? 1.f : 0.f);
         }
     }
     rr_->uploadFaceMesh(data);
@@ -645,8 +671,10 @@ void RootScene::uploadFaceFromMasks() {
 // The cloth is built and simulated entirely in the anchor mask's own local
 // frame (tangent -> local x, bitangent -> local y, normal -> local z) rather
 // than in a fixed camera frame: step 1-2's anchor-first placement guarantees
-// that frame is fixed and known (render-space origin, normal +z, bitangent
-// +y -- see root_sim.cpp), so a rest sheet built flat at local z=0 already
+// that frame is fixed and known (render-space origin, normal pitched
+// anchorPitchDeg below +z, bitangent upright from the camera down that
+// normal -- see root_sim.cpp; read back via refreshClothAnchor rather than
+// assumed), so a rest sheet built flat at local z=0 already
 // sits exactly in the mask's own plane, and gravity along -normal is just
 // (0,0,-g) in local coordinates -- the same simplicity TransitionScene had
 // from its fixed front-on camera, without depending on one. Positions are

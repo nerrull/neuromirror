@@ -251,15 +251,29 @@ public:
         int   instance;       // the renderer's instance index
         float centre[3]; float radius;
         bool  visible;        // drawn at all (capsules and masks)
-        bool  lit;            // shaded as normal, else dark (env.unlitLevel)
+        bool  lit;            // its roots shaded as normal, else dark (env.unlitLevel)
+        // ...and each of its masks, one flag per mask of its variation's
+        // layout. The Reveal lights the masks one at a time and the roots
+        // (`lit`) only once every mask is; see setStructureMaskLit.
+        std::vector<char> maskLit;
+        int  maskCount() const { return (int)maskLit.size(); }
+        bool allMasksLit() const {
+            for (char c : maskLit) if (!c) return false;
+            return true;
+        }
     };
     std::vector<NeighbourPlacement> neighbours;
-    // The Reveal steps a structure in dark and then lights it. Structure k is
-    // neighbours[k]; the live structure and its chain are always drawn and
-    // lit. Each call re-emits the face mesh, so call on a change, not per
-    // frame. Out-of-range k is ignored.
+    // The Reveal shows the hood dark and then lights it mask by mask.
+    // Structure k is neighbours[k]; the live structure and its chain are
+    // always drawn and lit. setStructureLit is the whole structure -- its
+    // roots and every mask -- and setStructureMaskLit one face of it (the
+    // roots untouched). Each call re-emits the face mesh, so call on a
+    // change, not per frame; setAllStructuresVisible re-emits once for the
+    // lot. Out-of-range k/j is ignored.
     void setStructureVisible(int k, bool visible);
+    void setAllStructuresVisible(bool visible);
     void setStructureLit(int k, bool lit);
+    void setStructureMaskLit(int k, int j, bool lit);
 
     // Where the growth currently is, in render space; false when nothing is
     // growing. For a camera that follows the tip instead of the structure.

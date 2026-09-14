@@ -2162,9 +2162,10 @@ int seqshot(const char* prefix, int W, int H,
     const bool realtime = getenv("SEQSHOT_REALTIME") && atoi(getenv("SEQSHOT_REALTIME")) != 0;
     if (!realtime) {
         sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
-        sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f; sp.grow_swing_seconds = 0.5f;
+        sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f;
         sp.turn_seconds = 1.0f;
         sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
+        sp.cam_ease_seconds = 0.25f;         // ...and the eases with them
     } else {
         sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
     }
@@ -2173,7 +2174,7 @@ int seqshot(const char* prefix, int W, int H,
     // is the operator's count (reveal_structures), up to reveal_max_structures'
     // worth of variations.
     if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_structures = atoi(n);
-    // SEQSHOT_SEQ="tilt=45,spacing=1.3,margin=0.3,orbitEl=15,orbitFrac=0.85,
+    // SEQSHOT_SEQ="lead=0.3,faceSec=3.3,spacing=2.2,margin=0.3,orbitEl=15,orbitFrac=0.85,
     // orbitMax=130,growMargin=0.35" overrides the framing knobs being tuned,
     // so a still can be re-shot without a rebuild.
     if (const char* spec = getenv("SEQSHOT_SEQ")) {
@@ -2184,7 +2185,8 @@ int seqshot(const char* prefix, int W, int H,
             if (eq != std::string::npos) {
                 const std::string k = t.substr(0, eq);
                 const float v = (float)atof(t.c_str() + eq + 1);
-                if      (k == "tilt")       sp.grow_view_tilt_deg = v;
+                if      (k == "lead")       sp.grow_hop_lead = v;
+                else if (k == "faceSec")    sp.grow_face_seconds = v;
                 else if (k == "spacing")    sp.reveal_spacing = v;
                 else if (k == "margin")     sp.frame_margin = v;
                 else if (k == "growMargin") sp.grow_margin = v;
@@ -2207,11 +2209,10 @@ int seqshot(const char* prefix, int W, int H,
         const auto& pm = roots.plannedMasks();
         const int hops = std::max(1, (int)pm.size() - 1);
         printf("seqshot: growth %d sim steps over %d hops; %.1f s/face -> %.1f steps/s "
-               "(swing %.1f s, gate %.2f) -> expect grow %.1f s\n",
+               "-> expect grow %.1f s\n",
                roots.growthStepEstimate(), hops, sp.grow_face_seconds,
                float(roots.growthStepEstimate()) / hops / sp.grow_face_seconds,
-               sp.grow_swing_seconds, sp.grow_swing_gate,
-               sp.grow_face_seconds * hops + sp.grow_swing_seconds * sp.grow_swing_gate);
+               sp.grow_face_seconds * hops);
         float A[3] = {0, 0, 0}, n[3] = {pm[0].normal[0], pm[0].normal[1], pm[0].normal[2]};
         for (const auto& m : pm) for (int k = 0; k < 3; ++k) A[k] += (m.pos[k] - pm[0].pos[k]) / pm.size();
         const float la = std::sqrt(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]);
@@ -2228,19 +2229,37 @@ int seqshot(const char* prefix, int W, int H,
     int frame = 0, shot = 0, revealFrames = 0;
     RootSequence::Stage last = seq.stage();
     double bakeSeconds = 0.0, orbitT0 = -1.0, growT0 = -1.0, growStartedT = -1.0;
-    bool placedShot = false, halfShot = false, wantOutro = false;
+    bool placedShot = false, masksShot = false, halfShot = false, wantOutro = false;
     bool moshBeforeFade = true;
     int  moshDuringFade = 0, fadeFrames = 0;
     int growQuarter = 0;   // stills at 25/50/75 % of the hops
-    // The Grow pose, for the eye: the camera's direction against the axis.
+    // Per hop: the mask in flight and whether the root has arrived, so the
+    // arrival and the hop's end are each seen once.
+    int  lastMask = -1;
+    bool lastArrived = false;
+    double hopT0 = -1.0;
+    // The camera's direction against the axis, and against a mask's normal:
+    // the Grow camera is meant to end each hop down the target's normal.
+    auto camDir = [&](float d[3]) {
+        const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
+        d[0] = ce * std::sin(roots.azimuth); d[1] = se; d[2] = ce * std::cos(roots.azimuth);
+    };
     auto camDotAxis = [&]() {
         const auto& pm = roots.plannedMasks();
         float A[3] = {0, 0, 0};
         for (const auto& m : pm) for (int k = 0; k < 3; ++k) A[k] += (m.pos[k] - pm[0].pos[k]) / pm.size();
         const float la = std::sqrt(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]);
-        const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
-        const float d[3] = {ce * std::sin(roots.azimuth), se, ce * std::cos(roots.azimuth)};
+        float d[3]; camDir(d);
         return (d[0] * A[0] + d[1] * A[1] + d[2] * A[2]) / std::max(1e-6f, la);
+    };
+    auto camOffNormalDeg = [&](int mask) {
+        const auto& pm = roots.plannedMasks();
+        if (mask < 0 || mask >= (int)pm.size()) return 0.f;
+        const float* n = pm[size_t(mask)].normal;
+        const float ln = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        float d[3]; camDir(d);
+        const float c = (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / std::max(1e-6f, ln);
+        return std::acos(std::clamp(c, -1.f, 1.f)) * 57.2958f;
     };
     auto snap = [&](const char* tag) {
         @autoreleasepool {
@@ -2297,6 +2316,28 @@ int seqshot(const char* prefix, int W, int H,
         // tip's depth from the eye shrinks and it drops in frame.
         if (seq.stage() == RootSequence::Stage::Grow) {
             if (growStartedT < 0.0 && !roots.simPaused) growStartedT = clock;
+            // Each hop's arrival and end: how far the camera is off the
+            // target's normal (0 = looking straight down it), and a still
+            // of each, so the per-hop framing can be read.
+            const int cm = roots.currentMask();
+            const bool arrived = roots.arrivedAtMask();
+            if (cm != lastMask) {
+                if (lastMask >= 0) {
+                    printf("seqshot: hop to mask %d ended at %.1f s (%.1f s in the hop): cam %.0f deg off its normal, r=%.1f\n",
+                           lastMask, clock - growT0, clock - hopT0, camOffNormalDeg(lastMask), roots.radius);
+                    char tag[32];
+                    snprintf(tag, sizeof(tag), "hop%d_end", lastMask);
+                    if (!snap(tag)) return 1;
+                }
+                lastMask = cm; lastArrived = false; hopT0 = clock;
+            } else if (arrived && !lastArrived && cm >= 0) {
+                lastArrived = true;
+                printf("seqshot: root reached mask %d at %.1f s (%.1f s in the hop): cam %.0f deg off its normal, r=%.1f\n",
+                       cm, clock - growT0, clock - hopT0, camOffNormalDeg(cm), roots.radius);
+                char tag[32];
+                snprintf(tag, sizeof(tag), "hop%d_arrive", cm);
+                if (!snap(tag)) return 1;
+            }
             const int hops = std::max(1, roots.simParams().N - 1);
             const int q = roots.currentMask() * 4 / std::max(1, hops + 1);
             if (q > growQuarter && growQuarter < 3) {
@@ -2335,9 +2376,20 @@ int seqshot(const char* prefix, int W, int H,
                 }
                 if (!snap("reveal_placed")) return 1;
             }
-            // Half-way: the first frame with at least one dark and one lit.
+            // Some masks lit, no structure's roots yet; then the first
+            // structure fully lit (its roots on) while others are not.
+            int masksLit = 0, masksAll = 0;
+            for (const auto& n : roots.neighbours)
+                for (char c : n.maskLit) { masksAll += 1; masksLit += c ? 1 : 0; }
+            if (!masksShot && lit == 0 && masksLit >= std::max(2, masksAll / 4)) {
+                masksShot = true;
+                printf("seqshot: %d/%d masks lit, no roots lit\n", masksLit, masksAll);
+                if (!snap("reveal_masks")) return 1;
+            }
             if (!halfShot && lit > 0 && vis > lit) {
                 halfShot = true;
+                printf("seqshot: %d/%d masks lit, %d/%d structures' roots lit\n",
+                       masksLit, masksAll, lit, vis);
                 if (!snap("reveal_half")) return 1;
             }
         }
