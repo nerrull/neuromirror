@@ -206,10 +206,74 @@ void bankPose() {
     }
 }
 
+// Does a hop actually leave from its source mask's *mouth* -- not the mask
+// centre, not dropped to the chin (the old spawnRim*r_height offset)?
+//
+// Right after reset() the sim has already called initHop() for the hop in
+// flight (growFromFirstMask reveals mask 0 bare and starts the relay at hop
+// 1) but has not simulated a single step, so the live root's first node is
+// still exactly at hopStart(hop) -- geometry()'s only node, since frozen[]
+// is empty this early. That is compared against the mouth point computed the
+// same way root_sim.cpp's hopStart() does: pos + tangent*mouthU +
+// bitangent*mouthV + normal*mouthN, scaled by faceScale x faceUnit, read off
+// plannedMasks()[0] (the source mask; hopFrom(1) == 0 with treeRelay off).
+void spawnAtMouth(bool anchorOnAxis) {
+    printf("spawn at mouth (anchorOnAxis=%s)\n", anchorOnAxis ? "true" : "false");
+    rootsim::SimParams p;
+    p.paramDir = ROOTSIM_PARAM_DIR;
+    p.anchorOnAxis = anchorOnAxis;
+    p.treeRelay = false;
+    p.growFromFirstMask = true;
+    // Deliberately off-centre and non-zero on every axis, so an
+    // implementation that silently drops a term (or falls back to the mask
+    // centre) shows up as a large miss rather than an accidental match.
+    p.faceMouthU = 0.04f;   p.faceMouthV = -0.32f;  p.faceMouthN = 0.06f;
+    p.spawnBehind = 0.05f;  p.anchorSpawn = 0.5f;
+    rootsim::RootSim sim;
+    if (!sim.reset(p) || !sim.valid()) {
+        printf("  skip: no sim (parameter dir %s)\n", ROOTSIM_PARAM_DIR);
+        return;
+    }
+    check(sim.currentMask() == 1, "hop 1 is the one in flight right after reset");
+    const auto& planned = sim.plannedMasks();
+    check(!planned.empty(), "at least one planned mask");
+    if (sim.currentMask() != 1 || planned.empty()) return;
+    const rootsim::SimMask& src = planned[0];   // hopFrom(1) == 0
+
+    std::vector<float> nodes, radii; std::vector<int> segs;
+    sim.geometry(nodes, segs, radii);
+    check(nodes.size() >= 3, "the in-flight hop has already placed its seed node");
+    if (nodes.size() < 3) return;
+    const V3 spawn = {nodes[0], nodes[1], nodes[2]};
+
+    const V3 pos = v3(src.pos), n = v3(src.normal), t = v3(src.tangent), b = v3(src.bitangent);
+    const double fs = double(p.faceScale) * double(src.faceUnit);
+    const V3 mouth = {pos.x + t.x * p.faceMouthU * fs + b.x * p.faceMouthV * fs + n.x * p.faceMouthN * fs,
+                       pos.y + t.y * p.faceMouthU * fs + b.y * p.faceMouthV * fs + n.y * p.faceMouthN * fs,
+                       pos.z + t.z * p.faceMouthU * fs + b.z * p.faceMouthV * fs + n.z * p.faceMouthN * fs};
+    const V3 d = sub(spawn, mouth);
+    const double dn = dot(d, n), dt = dot(d, t), db = dot(d, b);
+    printf("  spawn - mouth: along normal %.4f cm, tangent %.4f cm, bitangent %.4f cm (r_height %.2f)\n",
+           dn, dt, db, (double)src.rHeight);
+
+    const double eps = 0.02;
+    check(std::fabs(dt) < eps, "no tangential offset from the mouth");
+    check(std::fabs(db) < eps, "not dropped to the chin (no r_height-sized bitangent offset)");
+    if (anchorOnAxis) {
+        check(dn > -eps && dn < (double)p.anchorSpawn + eps,
+              "anchor: spawn is within anchorSpawn in front of the mouth");
+    } else {
+        check(dn > -((double)p.spawnBehind + eps) && dn < eps,
+              "non-anchor: spawn is within spawnBehind behind the mouth");
+    }
+}
+
 }  // namespace
 
 int main() {
     simFrames();
+    spawnAtMouth(/*anchorOnAxis=*/true);
+    spawnAtMouth(/*anchorOnAxis=*/false);
     bankPose();
     printf("mask_frame_test: %s\n", g_fail ? "FAIL" : "OK");
     return g_fail ? 1 : 0;

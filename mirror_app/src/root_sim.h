@@ -115,14 +115,12 @@ struct SimParams {
     float coneShellThickness = 9.0f;
     float growthDt     = 0.75f;    // sim days advanced per step()
     float targetLift   = 0.0f;
-    float spawnBehind  = 0.0f;
-    // Where on the mask the next root leaves from, along the face's own up
-    // axis, in units of its half-height. 0 is dead behind the face, where the
-    // mask hides the root until it has already crawled clear -- which reads as
-    // a root arriving from off-screen rather than one growing out of the face
-    // you are looking at. 1 puts it at the chin, in view from the first
-    // segment.
-    float spawnRim     = 1.0f;
+    // How far behind the surface, along -normal from the *mouth* point (see
+    // faceMouthU/V/N below), a non-anchor hop starts. Small on purpose: the
+    // root should emerge through the mouth, not sit buried in the cavity --
+    // 0 is right at the mouth's own depth, and this is just enough to read
+    // as "coming from inside" rather than floating in front of the face.
+    float spawnBehind  = 0.05f;
     // The cavity a mask sits in is the face it will show, not a fixed oval.
     // RootScene draws a mask's face at faceScale x faceUnit (SimMask::
     // faceUnit, the layout's mask size) times a mesh normalised to a largest
@@ -137,6 +135,22 @@ struct SimParams {
     // growth, so not in visitSimParams. cavityMargin is.
     float faceScale    = 0.85f;
     float faceHalfW    = 0.75f, faceHalfH = 1.0f, faceHalfD = 0.5f;
+    // The mouth's own position, in the same normalised (largest coordinate 1)
+    // mesh frame faceHalf* is measured in -- i.e. an offset from the mask's
+    // pos along its own (tangent, bitangent, normal), in units of the same
+    // mesh-local coordinates appendFaceVertexData maps onto that frame
+    // (local.x -> tangent, local.y -> bitangent, local.z -> normal). Where
+    // every hop actually leaves from: mouth point = pos + tangent*mouthU +
+    // bitangent*mouthV + normal*mouthN (root_sim.cpp's hopStart). Computed
+    // once from the neutral/basis face (FaceBasis's own landmark basis,
+    // dlib-68 mouth points 48..67, in the same units as FaceBasis::neutral()
+    // and normalised the same way normalizeMesh() normalises the drawn
+    // mesh) -- not from whatever capture happens to be loaded, since
+    // captures are only squared to the neutral by rotation, not re-measured
+    // per person. RootScene's, copied in at every reset (see
+    // RootScene::syncFaceParams): not a setting of the growth, so not in
+    // visitSimParams, same as faceHalf*.
+    float faceMouthU   = 0.0f, faceMouthV = 0.0f, faceMouthN = 0.0f;
     float cavityMargin = 0.15f;
     unsigned seed      = 42u;
     std::string paramDir;          // CPlantBox modelparameter dir (trailing slash)
@@ -187,7 +201,6 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("coneShellThickness", p.coneShellThickness);
     f("growthDt", p.growthDt);
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
-    f("spawnRim", p.spawnRim);
     f("cavityMargin", p.cavityMargin);
     f("seed", p.seed);
 }

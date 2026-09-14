@@ -196,15 +196,21 @@ inline std::vector<MaskNode> conePhyllotaxis(int n, double baseRadius, double he
 // the cavity, but stay out of the tube directly in front of it, so the face
 // remains visible instead of getting buried under a wrapped knot.
 //
-// noViewCylIndex >= 0 leaves that one node's tube out: a root meant to leave
-// a face straight out of its front starts inside the tube, and a tube it is
-// inside only ever pushes it sideways (mirror_app's root_sim.cpp, the
-// anchor-on-axis layout, for the hop that leaves the anchor).
+// noCavityIndex >= 0 leaves that one node out entirely -- both its ellipsoid
+// and its tube: a root meant to leave a face at (or just behind) its own
+// mouth starts inside, or hard against, that face's own cavity and tube, and
+// confinement geometry the spawn point is already inside/against only ever
+// pushes it sideways or fights the tropism trying to leave it (mirror_app's
+// root_sim.cpp, the hop that leaves this node -- the anchor-on-axis case
+// used to only need the tube dropped, since its old chin-offset spawn point
+// was always outside the ellipsoid; a mouth-offset spawn is not guaranteed
+// to clear the ellipsoid too, so both go now, for every mask, not just the
+// anchor).
 inline std::shared_ptr<SignedDistanceFunction>
 buildCavityGeometry(const std::vector<MaskNode>& nodes, double baseRadius, double height,
                     bool coneContainer = true, double coneMargin = 2.0, double tipRadius = 0.0,
                     double viewCylLen = 0.0, double viewCylRadiusMult = 0.9, double taperPower = 1.0,
-                    int noViewCylIndex = -1) {
+                    int noCavityIndex = -1) {
     std::shared_ptr<SignedDistanceFunction> cone = coneContainer
         ? std::make_shared<SDF_Cone>(baseRadius + coneMargin, height + coneMargin, tipRadius,
                                      Vector3d(0, 0, 0), taperPower)
@@ -215,14 +221,20 @@ buildCavityGeometry(const std::vector<MaskNode>& nodes, double baseRadius, doubl
     int idx = -1;
     for (const auto& m : nodes) {
         ++idx;
+        if (idx == noCavityIndex) continue;
         cavities.push_back(std::make_shared<SDF_Ellipsoid>(
             m.pos, m.normal, m.tangent, m.bitangent, m.r_depth, m.r_width, m.r_height));
-        if (viewCylLen > 0 && idx != noViewCylIndex) {
+        if (viewCylLen > 0) {
             double r = viewCylRadiusMult * std::max(m.r_width, m.r_height);
             Vector3d cylCenter = m.pos.plus(m.normal.times(viewCylLen * 0.5));
             cavities.push_back(std::make_shared<SDF_Cylinder>(cylCenter, m.normal, r, viewCylLen * 0.5));
         }
     }
+    // Every node may have been the one excluded (the single-mask case): fall
+    // back to the unconstrained cone rather than build an SDF_Union of zero
+    // sdfs, which indexes sdfs[0] unconditionally.
+    if (cavities.empty())
+        return cone ? cone : std::make_shared<SignedDistanceFunction>();
     auto obstacles = std::make_shared<CPlantBox::SDF_Union>(cavities);
     if (cone)
         return std::make_shared<CPlantBox::SDF_Difference>(cone, obstacles);

@@ -30,11 +30,14 @@ the four framing modes (`autoFrame`/`focusMask`/`focusGroup`/`anchorMask`/
   30 degrees off vertical leaning toward that camera -- "normal to +z" would
   have laid it level along z, with nothing left to hang in Turn/Reveal.
   There is no seed hop any more: `reset()` reveals mask 0 bare and the
-  relay starts at hop 1, leaving it from `anchorSpawn` cm in front of the
-  face (the anchor's keep-clear tube is dropped for that one travel, since
-  the root starts inside it; `spawnRim`/`spawnBehind` only apply to masks
-  on the surface). The hop-1 path estimate is the chord (the anchor has no
-  surface coordinate).
+  relay starts at hop 1, leaving from its mouth (`faceMouthU/V/N`, see
+  root_sim.h) plus `anchorSpawn` cm further out along the normal (the
+  source mask's own cavity and keep-clear tube are dropped for that one
+  travel, since the root starts inside/against them -- every mask gets this,
+  not just the anchor; see `rebuildTropism`'s `noCavity`). Every other mask
+  leaves the same way, `spawnBehind` cm behind the surface at its own mouth
+  rather than at a fixed point on its rim. The hop-1 path estimate is the
+  chord (the anchor has no surface coordinate).
 - `MetalRootRenderer`, the glitch stage (`triggerDatamosh`).
 - The cloth press in Transition (`RootScene::restartCloth` etc.) and its
   pre-warm: the sequence's **Face** stage already runs during
@@ -127,34 +130,52 @@ cleared + `face_clear_tail_seconds` (same semantics as the old
   `grow_face_seconds × (N-1) × grow_timeout_mult` (default 1.5) as a guard.
 
 ### Turn
-Over `turn_seconds` (default 6, smoothstep) rotate the camera about the
-structure's centre (centroid of planned masks) from the Grow pose to the
-"hanging" pose: elevation `turn_end_elevation_deg` (default 5), azimuth
-unchanged, radius = whole-structure radius × `frame_margin`. The chain axis
-should end up reading vertical/downward on screen. Sim continues running
-(it is usually done by now).
+The other structures -- baked variations of previous visitors' plants --
+pop in here, all at once, at the moment Grow ends: `placeHood()` runs and
+every structure is made visible and dark immediately, at the last Grow
+framing, camera still close on the face just reached (`orbitBound()` also
+runs at this point, over the just-placed hood, so its fit is ready for the
+move below). Then over `turn_seconds` (default 6, smoothstep) the camera
+rotates/zooms out from that pose straight to the **Orbit framing**:
+elevation `orbit_elevation_deg`, azimuth unchanged, target and radius the
+same fit Orbit itself uses (`orbitRadius`/`orbitTarget`, `orbit_zoom`,
+`orbit_max_radius`). This is a single move with nothing left to ease when
+Orbit begins -- there used to be a separate `turn_end_elevation_deg`
+ending on the whole-structure's own frame, with Orbit easing again from
+there; folding the two into one move made that knob meaningless, so it is
+gone. The chain axis should end up reading vertical/downward on screen.
+Sim continues running (it is usually done by now). No lighting yet --
+`stepLighting` does not run until Orbit is entered.
 
 ### Reveal
 Other structures — baked variations of previous visitors' plants — stand
-around this one as a **fan behind it, as seen from the Turn-end camera**
-(`addNeighbours`): structure k is `reveal_spacing` × structure radius ×
-sqrt(k+1) out from this structure's centre, on its plane, at the azimuth
-that puts it at a golden-ratio-sequenced view angle outside the band the
-subject covers and inside the frustum, alternating sides. `reveal_spacing`
-is 2.2: at 1.2 the hood interleaved into one tangle; at 2.2 the structures
-stand clear of each other and a six-strong hood still reads inside the fog
-from the orbit (r ≈ 130); at 2.8 the orbit hits `orbit_max_radius` and the
-outer ones are haze. On entry **every** structure appears at once, dark
-(`setAllStructuresVisible`, roots and masks). Then each marker
-(`markerHit`; `reveal_fallback_seconds`, 2.5, without one) lights **one face
-mask** somewhere in the hood -- `RootScene::setStructureMaskLit(k, j)`, the
-face mesh's per-vertex `lit` -- in a shuffled order over every (structure,
-mask) pair, fixed-seeded so reruns match. A structure's **roots** (the
-instance `lit`, the emissive/pulse glow) come on only once every one of its
-masks is lit (`setStructureLit`). The camera holds the Turn's angles and
-target and backs off (monotonically, eased) to frame the hood. Reveal ends
-when the last mask is lit. Each lit step re-emits the shared face mesh
-(one rebuild per marker, the same cost as the old per-structure step).
+around this one as a **tight ring forming an overall cone**
+(`addNeighbours`): each structure's own seed mask (its variation's mask 0,
+which the fixed anchor pose always carries at that variation's local
+origin) lands `reveal_ring_radius` out from this structure's own seed mask
+(`plannedMasks()[0]`), evenly spaced in angle around it in the plane
+perpendicular to the live axis (`plannedMasks()[0].normal` -- the anchor
+faces down the axis) -- starting angle seeded off the plant's own seed, so
+the ring is stable across replacements of the same generation. Each
+structure is then the live axis rotated `reveal_tilt_deg` outward, toward
+its own position on the ring -- a rotation of the whole baked structure
+about its own seed mask, so the seed mask stays on the ring and the
+structure leans away from the centre -- so the hood reads as one cone with
+the live structure down its middle. `reveal_ring_radius` defaults to ~1.2 ×
+a seed mask's own max(rWidth, rHeight) (3.0 with the default face sizing),
+i.e. the parent masks nearly touch; `reveal_tilt_deg` defaults to 60.
+Placement (and every structure appearing at once, dark) now happens at
+**Turn's entry**, not here -- see Turn above -- so by the time this stage
+is read the hood is already standing and Turn has already moved the
+camera onto the orbit framing. Then each marker (`markerHit`;
+`reveal_fallback_seconds`, 2.5, without one) lights **one face mask**
+somewhere in the hood -- `RootScene::setStructureMaskLit(k, j)`, the face
+mesh's per-vertex `lit` -- in a shuffled order over every (structure, mask)
+pair, fixed-seeded so reruns match. A structure's **roots** (the instance
+`lit`, the emissive/pulse glow) come on only once every one of its masks
+is lit (`setStructureLit`). Reveal ends when the last mask is lit. Each
+lit step re-emits the shared face mesh (one rebuild per marker, the same
+cost as the old per-structure step).
 Number of structures: `reveal_structures` (default 0 = from the face bank,
 see below; otherwise exactly that many, the bank's faces dealt round again
 when it is short).
@@ -165,8 +186,11 @@ Azimuth advances at `orbit_rate` rad/s (default 0.08), elevation
 the live structure plus every neighbour within `orbit_bound_frac` (default
 0.7) of the furthest one's distance, never fewer than the nearest four; the
 target is the mean of that set and the radius fits each of them as its own
-bound (× `frame_margin`), capped at `orbit_max_radius` (150), eased in over
-`cam_ease_seconds`. The outermost of a full hood may leave the frame --
+bound (× `frame_margin`), capped at `orbit_max_radius` (150). Turn already
+ends the camera on this framing (see Turn above), so on Orbit's first
+frame the ease against it is a no-op; the ease (`cam_ease_seconds`) stays
+live through the stage so a panel slider dragged mid-orbit still retimes
+smoothly rather than snapping. The outermost of a full hood may leave the frame --
 fitting all twelve puts the camera so far out the fog swallows the lot. Lasts `orbit_seconds` (default 40) or until the host
 asks for the outro (`wantOutro`, the existing visitor-absence signal), whichever
 first.
@@ -262,17 +286,16 @@ the existing "neighbours emit into the shared face mesh" path.
   at the cut or drop the replay.
 - A twelve-structure hood cannot all read inside the fog's range (visibility
   45); the orbit trims to the inner ~70 % and the outer ring is a haze.
-  Either fewer structures, a tighter `reveal_spacing`, or a fog that opens
-  during Orbit.
+  Either fewer structures, a tighter `reveal_ring_radius`, or a fog that
+  opens during Orbit.
 - `--seqshot` renders with the constructor's fog (`fogFrac` 0.12), not the
   roots preset (0.552); tuning stills need
   `SEQSHOT_POST="fogFrac=0.552,fogAniso=-0.693,fogCon=3,fogScale=1.629,fogScat=0.03"`.
   The tool could load `presets/roots/default.roots` instead.
 - The orbit passes over the outer ring by elevation (25°) rather than
-  around it; the near-wedge reflection in `addNeighbours` loads the far side
-  and the mean centre follows it a little. Check on the show screen whether
-  the lens ever brushes a near structure (seqshot prints the nearest surface
-  distance at the orbit snap: ~35 with 12 structures).
+  around it. Check on the show screen whether the lens ever brushes a near
+  structure (seqshot prints the nearest surface distance at the orbit snap:
+  ~35 with 12 structures, before the ring/cone rewrite).
 - Grow: the travel is a small part of each hop (~0.5 s of 3.3 at the show's
   pacing -- Lupin covers the gap in a few sim days and the rest is dwell),
   so the arrival happens while the camera is still ~90 degrees off the new

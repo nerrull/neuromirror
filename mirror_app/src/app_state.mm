@@ -423,11 +423,13 @@ id<MTLCommandQueue> g_vp_queue = nil;
 bool  g_ui_visible  = true;
 bool  g_ui_detached = false;
 
-// --fullscreen: open on the primary monitor at its native mode instead of a
-// 1280x720 window. The installation runs unattended on one screen, where a
-// window with a title bar is a window a visitor can move; the operator's build
-// keeps the default so the panel has somewhere to sit.
-bool  g_fullscreen  = false;
+// Fullscreen by default: the installation runs unattended on one screen,
+// where a window with a title bar is a window a visitor can move, and that
+// is the common case this binary launches into. --windowed opts back into
+// the 1280x720 window for dev work; --fullscreen is still accepted (as a
+// no-op) so existing launch scripts and the launchd plist keep working
+// unchanged.
+bool  g_fullscreen  = true;
 
 // --reset-panel: put the panel back over the main window at a known size, for
 // when imgui.ini has it parked on a monitor that is not here any more.

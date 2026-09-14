@@ -31,11 +31,18 @@ composition:
   way; `--panel-window` and `--reset-panel` set it from the command line, and
   `--reset-panel` also puts the panel back at a known position and size — the
   way out of a panel parked on a monitor that is not plugged in any more.
-- **`--fullscreen`** opens the piece on the primary monitor at its size, with
-  no title bar, instead of the default 1280x720 window. It is a borderless
-  window rather than a video-mode switch, which is what keeps it from
-  minimising when something steals focus — see
-  [`install/README.md`](install/README.md) for the installation that wants it.
+- The panel always opens at the top-left of the main display's work area on
+  the very first frame of a launch, regardless of what `imgui.ini` remembers —
+  so a panel `imgui.ini` had parked off-screen, or on a monitor that is no
+  longer connected, is still reachable at startup. After that first frame it
+  is free to be moved (and dragged off, docked, or detached) as usual.
+- **Fullscreen is the default**: the piece opens on the primary monitor at its
+  size, with no title bar. It is a borderless window rather than a video-mode
+  switch, which is what keeps it from minimising when something steals focus
+  — see [`install/README.md`](install/README.md) for the installation that
+  wants it. `--fullscreen` is still accepted (a no-op, kept for existing
+  launch scripts and the launchd plist). **`--windowed`** opts back into the
+  1280x720 titled window, for dev work.
 - **F1** or **`** hides and reveals the whole UI — panel, cam-mask handles and
   source PiP — and there is a **hide** button next to the checkbox. Two keys
   because macOS eats F1 for screen brightness unless F-keys are set to behave as

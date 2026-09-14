@@ -140,9 +140,9 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/reveal min structures` | int | 0 .. 32 | 9 |
 | `show/roots/reveal mode` | int | 0 .. 1 | 0 |
 | `show/roots/reveal pulse lag` | float | 0 .. 5 | 0 |
-| `show/roots/reveal spacing` | float | 0.5 .. 6 | 1.34 |
+| `show/roots/reveal ring radius` | float | 0.1 .. 20 | 3 |
 | `show/roots/reveal structures` | int | 0 .. 32 | 0 |
-| `show/roots/turn end elevation (deg)` | float | -60 .. 60 | 5 |
+| `show/roots/reveal tilt (deg)` | float | 0 .. 89 | 60 |
 | `show/roots/turn seconds` | float | 0.5 .. 20 | 6 |
 | `show/run the show` | bool | -- | 1 |
 | `show/transition` | int | 0 .. 4 | 2 |

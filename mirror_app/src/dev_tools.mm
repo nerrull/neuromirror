@@ -2176,7 +2176,7 @@ int seqshot(const char* prefix, int W, int H,
     // is the operator's count (reveal_structures), up to reveal_max_structures'
     // worth of variations.
     if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_structures = atoi(n);
-    // SEQSHOT_SEQ="lead=0.3,faceSec=3.3,spacing=2.2,margin=0.3,orbitEl=15,orbitFrac=0.85,
+    // SEQSHOT_SEQ="lead=0.3,faceSec=3.3,ring=3.0,tilt=60,margin=0.3,orbitEl=15,orbitFrac=0.85,
     // orbitMax=130,orbitZoom=0.55,orbitLift=0,pulseLag=0,growMargin=0.35"
     // overrides the framing knobs being tuned, so a still can be re-shot
     // without a rebuild.
@@ -2190,10 +2190,12 @@ int seqshot(const char* prefix, int W, int H,
                 const float v = (float)atof(t.c_str() + eq + 1);
                 if      (k == "lead")       sp.grow_hop_lead = v;
                 else if (k == "faceSec")    sp.grow_face_seconds = v;
-                else if (k == "spacing")    sp.reveal_spacing = v;
+                else if (k == "ring")       sp.reveal_ring_radius = v;
+                else if (k == "tilt")       sp.reveal_tilt_deg = v;
                 else if (k == "margin")     sp.frame_margin = v;
                 else if (k == "growMargin") sp.grow_margin = v;
-                else if (k == "turnEl")     sp.turn_end_elevation_deg = v;
+                // Turn now ends on the orbit framing (see root_sequence.h);
+                // "orbitEl" below sets both Turn's end elevation and Orbit's.
                 else if (k == "orbitEl")    sp.orbit_elevation_deg = v;
                 else if (k == "orbitFrac")  sp.orbit_bound_frac = v;
                 else if (k == "orbitMax")   sp.orbit_max_radius = v;
@@ -2239,7 +2241,8 @@ int seqshot(const char* prefix, int W, int H,
     int frame = 0, shot = 0, orbitFrames = 0;
     RootSequence::Stage last = seq.stage();
     double bakeSeconds = 0.0, orbitT0 = -1.0, growT0 = -1.0, growStartedT = -1.0;
-    bool placedShot = false, topShot = false, fullShot = false, allShot = false, wantOutro = false;
+    bool topShot = false, fullShot = false, allShot = false, wantOutro = false;
+    bool turnLitBad = false;   // any structure lit while Turn is running (should never be)
     int  firstLit = -1;         // the structure the first marker lit
     double firstLitT = -1.0;    // ...and when
     bool moshBeforeFade = true;
@@ -2303,6 +2306,7 @@ int seqshot(const char* prefix, int W, int H,
         const auto t0 = std::chrono::steady_clock::now();
         seq.step(roots, clock, dt, sp, in);
         const double stepSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;   // the hood's bake stall lands wherever placeHood() runs (Turn's entry)
         roots.advance(dt);
         if (seq.stage() != last) {
             printf("seqshot: frame %d  %s -> %s\n", frame, RootSequence::stageName(last),
@@ -2316,11 +2320,68 @@ int seqshot(const char* prefix, int W, int H,
                        clock - growT0, growStartedT >= 0 ? clock - growStartedT : 0.0,
                        growStartedT >= 0 ? growStartedT - growT0 : 0.0, roots.simDone() ? 1 : 0);
                 if (!snap("grow_end")) return 1;
+                // The hood pops in right at the Grow -> Turn cut, all of it
+                // visible and dark, before the camera has moved off the
+                // last Grow framing at all.
+                {
+                    int vis = 0, lit = 0, started = 0;
+                    for (const auto& n : roots.neighbours) {
+                        vis += n.visible; lit += n.lit;
+                        started += n.pulseStart >= 0.f ? 1 : 0;
+                    }
+                    printf("seqshot: hood baked + placed at turn entry in %.2f s (%d variations, %zu placed); "
+                           "%d visible, %d lit, %d pulse-started (%s)\n",
+                           stepSecs, roots.variationCount(), roots.neighbours.size(), vis, lit, started,
+                           !roots.neighbours.empty() && vis == (int)roots.neighbours.size()
+                               && lit == 0 && started == 0
+                               ? "OK" : "FAIL");
+                    // The ring/cone geometry: each structure's seed mask
+                    // (n.translate, the local origin every variation carries
+                    // its own mask 0 at) against the live seed mask
+                    // (plannedMasks()[0]) and axis (its normal) -- ring
+                    // distance should read reveal_ring_radius, and the tilt
+                    // between the live axis and this structure's own (n.rot
+                    // applied to that same local axis) should read
+                    // reveal_tilt_deg.
+                    const auto& pm0 = roots.plannedMasks();
+                    float seed0[3] = {0, 0, 0}, axis0[3] = {0, 0, 1};
+                    if (!pm0.empty()) {
+                        for (int c = 0; c < 3; ++c) { seed0[c] = pm0[0].pos[c]; axis0[c] = pm0[0].normal[c]; }
+                    }
+                    for (size_t k = 0; k < roots.neighbours.size(); ++k) {
+                        const auto& n = roots.neighbours[k];
+                        const float dx = n.centre[0] - roots.target[0], dz = n.centre[2] - roots.target[2];
+                        printf("seqshot:   structure %zu  variation %d  at az %.2f  %.1f out  y %.1f  r %.1f  mask dists",
+                               k, n.variation, std::atan2(dx, dz), std::sqrt(dx * dx + dz * dz),
+                               n.centre[1], n.radius);
+                        for (float d : n.maskDist) printf(" %.0f", d);
+                        printf("\n");
+                        const float rdx = n.translate[0] - seed0[0], rdy = n.translate[1] - seed0[1],
+                                    rdz = n.translate[2] - seed0[2];
+                        const float ringDist = std::sqrt(rdx * rdx + rdy * rdy + rdz * rdz);
+                        float ax[3];
+                        for (int r = 0; r < 3; ++r)
+                            ax[r] = n.rot[3 * r] * axis0[0] + n.rot[3 * r + 1] * axis0[1] + n.rot[3 * r + 2] * axis0[2];
+                        const float axLen = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+                        const float cosTilt = (ax[0] * axis0[0] + ax[1] * axis0[1] + ax[2] * axis0[2]) /
+                                              std::max(1e-6f, axLen);
+                        printf("seqshot:     seed mask ring dist %.2f  axis tilt %.1f deg\n",
+                               ringDist, std::acos(std::clamp(cosTilt, -1.f, 1.f)) * 57.2958f);
+                    }
+                    if (!snap("turn_placed")) return 1;
+                }
                 if (realtime) break;
+            }
+            if (seq.stage() == RootSequence::Stage::Orbit) {
+                printf("seqshot: no structure lit during turn: %s\n", turnLitBad ? "FAIL" : "OK");
+                if (turnLitBad) return 1;
             }
             // Into the Outro: the frame the datamosh fires on.
             if (seq.stage() == RootSequence::Stage::Outro && !snap("outro")) return 1;
             last = seq.stage();
+        }
+        if (seq.stage() == RootSequence::Stage::Turn) {
+            for (const auto& n : roots.neighbours) turnLitBad = turnLitBad || n.lit;
         }
         // Quarter-way stills through the chain, with where the tip is on
         // screen against the anchor: growing *toward* the lens means the
@@ -2371,30 +2432,21 @@ int seqshot(const char* prefix, int W, int H,
         }
         if (seq.stage() == RootSequence::Stage::Orbit) {
             ++orbitFrames;
-            if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;
-            if (orbitT0 < 0.0) orbitT0 = clock;
+            if (orbitT0 < 0.0) {
+                orbitT0 = clock;
+                // Orbit's first frame, before stepLighting has run at all
+                // (main.mm only calls it once a marker/fallback fires): no
+                // structure has a pulse front yet, so none should draw a
+                // pulse -- every instance still lit == 0, pulseStart < 0.
+                int lit0 = 0, started0 = 0;
+                for (const auto& n : roots.neighbours) {
+                    lit0 += n.lit; started0 += n.pulseStart >= 0.f ? 1 : 0;
+                }
+                printf("seqshot: orbit entry, before any marker: %d lit, %d pulse-started (%s)\n",
+                       lit0, started0, (lit0 == 0 && started0 == 0) ? "OK" : "FAIL");
+            }
             int vis = 0, lit = 0;
             for (const auto& n : roots.neighbours) { vis += n.visible; lit += n.lit; }
-            // The hood placed, all of it standing dark, on the Orbit's first
-            // frame -- the structures appear right as the camera starts to
-            // back off the Turn-end pose, not after.
-            if (!placedShot && !roots.neighbours.empty()) {
-                placedShot = true;
-                printf("seqshot: variations baked + placed in %.2f s (%d variations, %zu placed); "
-                       "%d visible, %d lit at orbit entry (%s)\n",
-                       stepSecs, roots.variationCount(), roots.neighbours.size(), vis, lit,
-                       vis == (int)roots.neighbours.size() && lit == 0 ? "OK" : "FAIL");
-                for (size_t k = 0; k < roots.neighbours.size(); ++k) {
-                    const auto& n = roots.neighbours[k];
-                    const float dx = n.centre[0] - roots.target[0], dz = n.centre[2] - roots.target[2];
-                    printf("seqshot:   structure %zu  variation %d  at az %.2f  %.1f out  y %.1f  r %.1f  mask dists",
-                           k, n.variation, std::atan2(dx, dz), std::sqrt(dx * dx + dz * dz),
-                           n.centre[1], n.radius);
-                    for (float d : n.maskDist) printf(" %.0f", d);
-                    printf("\n");
-                }
-                if (!snap("orbit_placed")) return 1;
-            }
             // The first marker: one structure's top mask on, its front
             // started (pulseStart set, roots flagged lit so they light behind
             // it), every other mask of it still dark.
@@ -2405,12 +2457,16 @@ int seqshot(const char* prefix, int W, int H,
                 const auto& n = roots.neighbours[size_t(firstLit)];
                 int ml = 0;
                 for (char c : n.maskLit) ml += c ? 1 : 0;
+                int started = 0;
+                for (const auto& nb : roots.neighbours) started += nb.pulseStart >= 0.f ? 1 : 0;
                 firstLitT = clock;
                 printf("seqshot: first marker lit structure %d: top mask %s, %d/%d masks lit, front started %s "
-                       "(pulse clock %.2f, speed %.1f)  %s\n",
+                       "(pulse clock %.2f, speed %.1f), %d/%zu structures pulse-started  %s\n",
                        firstLit, n.maskLit.empty() || !n.maskLit[0] ? "OFF" : "on", ml, n.maskCount(),
                        n.pulseStart >= 0.f ? "yes" : "NO", n.pulseStart, roots.renderer().pulse.speed,
-                       (!n.maskLit.empty() && n.maskLit[0] && ml == 1 && n.pulseStart >= 0.f) ? "OK" : "FAIL");
+                       started, roots.neighbours.size(),
+                       (!n.maskLit.empty() && n.maskLit[0] && ml == 1 && n.pulseStart >= 0.f && started == 1)
+                           ? "OK" : "FAIL");
                 if (!snap("orbit_first_top")) return 1;
             }
             // ...its front has reached its last mask while later ones are
@@ -2494,9 +2550,11 @@ int seqshot(const char* prefix, int W, int H,
     // the reseed.
     {
         using S = RootSequence::Stage;
-        struct Jump { S s; int wantLit; };   // wantLit: -1 don't care, else lit == visible?
-        const Jump jumps[] = {{S::Turn, -1}, {S::Orbit, 0}, {S::Outro, 1},
-                              {S::Face, -1}, {S::Grow, -1}, {S::Orbit, 0}, {S::Turn, -1}};
+        // wantLit: -1 don't care, -2 hood hidden (vis == 0), 0 hood visible
+        // and dark, 1 hood visible and fully lit.
+        struct Jump { S s; int wantLit; };
+        const Jump jumps[] = {{S::Turn, 0}, {S::Orbit, 0}, {S::Outro, 1},
+                              {S::Face, -2}, {S::Grow, -2}, {S::Orbit, 0}, {S::Turn, 0}};
         int jumpBad = 0;
         for (const Jump& j : jumps) {
             clock += dt;
@@ -2517,6 +2575,7 @@ int seqshot(const char* prefix, int W, int H,
             bool ok = landed == j.s && rendered;
             if (j.s == S::Turn) ok = ok && roots.simDone() && seq.stage() == S::Turn;
             if (j.s == S::Grow) ok = ok && !roots.simDone();
+            if (j.wantLit == -2) ok = ok && vis == 0 && lit == 0;
             if (j.wantLit == 0) ok = ok && vis > 0 && lit == 0;
             if (j.wantLit == 1) ok = ok && vis > 0 && lit == vis;
             printf("seqshot: jump %-6s -> landed %-6s, after a step %-6s  sim done %d  "

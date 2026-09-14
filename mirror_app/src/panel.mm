@@ -194,6 +194,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ImGui::SetNextWindowViewport(mainvp->ID);
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.f);
             } else {
+                // Every launch, not just a first-ever run: imgui.ini persists
+                // window position across runs, so ImGuiCond_FirstUseEver below
+                // does nothing once the panel has been drawn once, ever -- the
+                // panel would otherwise come back exactly where it was left,
+                // including off-screen or on a monitor that got unplugged.
+                // panel_frames is still 0 the first time this function runs
+                // this process, so it is what "first frame of this launch"
+                // means here; forcing the position (not the size) only on
+                // that frame leaves the operator free to drag it anywhere
+                // afterwards, same as before.
+                if (panel_frames == 0) {
+                    want_pos = ImVec2(mainvp->WorkPos.x + 8, mainvp->WorkPos.y + 8);
+                    want_pos_set = true;
+                }
                 // One SetNextWindowPos call, decided here. ImGui keeps a single
                 // pending position per frame, so a later default with
                 // ImGuiCond_FirstUseEver does not "fall through" -- it replaces
@@ -716,24 +730,42 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             ui::BeginHeader("turn", false);
                             {
                                 ui::SliderFloat("turn seconds", &S.turn_seconds, 0.5f, 20.f, "%.1f");
-                                ui::SliderFloat("turn end elevation (deg)", &S.turn_end_elevation_deg,
-                                                -60.f, 60.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Turn pops the hood in dark at the last Grow\n"
+                                        "framing, then rotates/zooms out in one move to\n"
+                                        "the Orbit's own framing (orbit elevation below)\n"
+                                        "-- there is nothing left to ease once Orbit\n"
+                                        "begins.");
+                                }
                                 ui::SliderFloat("frame margin", &S.frame_margin, 0.f, 1.5f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Margin around the whole structure (Turn) and\n"
-                                        "around every structure (Orbit), as a fraction\n"
-                                        "of the bound's extent.");
+                                        "Margin around the whole structure and every\n"
+                                        "other structure, as a fraction of the bound's\n"
+                                        "extent -- Turn's end framing and Orbit's share\n"
+                                        "this fit.");
                                 }
                             }
                             ui::EndHeader();
                             ui::BeginHeader("reveal", false);
                             {
-                                ui::SliderFloat("reveal spacing", &S.reveal_spacing, 0.5f, 6.f, "%.2f");
+                                ui::SliderFloat("reveal ring radius", &S.reveal_ring_radius, 0.1f, 20.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "How far the other structures stand from this\n"
-                                        "one, as a multiple of its radius.");
+                                        "Radius of the ring the other structures' seed\n"
+                                        "masks sit on, around this one's seed mask.\n"
+                                        "Tight (nearly touching) is about 1.2x a seed\n"
+                                        "mask's own max(width,height).");
+                                }
+                                ui::SliderFloat("reveal tilt (deg)", &S.reveal_tilt_deg, 0.f, 89.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Each structure's axis, tilted this many degrees\n"
+                                        "outward (away from the ring's centre, in its own\n"
+                                        "radial direction) from the live structure's own\n"
+                                        "axis -- together the hood forms a cone with the\n"
+                                        "live structure down its middle.");
                                 }
                                 ui::SliderFloat("reveal fallback seconds", &S.reveal_fallback_seconds,
                                                 0.2f, 20.f, "%.1f");
@@ -3284,6 +3316,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 {
                     ui::Checkbox("pulses on", &R.pulse.enabled);
                     ui::SliderFloat("pulse speed", &R.pulse.speed, 0.0f, 40.0f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The live structure's train runs continuously, node\n"
+                            "distance 0..N under the free-running pulse clock.\n"
+                            "A hood structure shows no pulses at all until its\n"
+                            "own Reveal marker fires (see roots/reveal); at that\n"
+                            "moment its train starts from its seed (top) mask,\n"
+                            "node distance 0, and travels outward from there.");
+                    }
                     ui::SliderFloat("pulse spacing", &R.pulse.spacing, 4.0f, 60.0f);
                     ui::SliderFloat("pulse width", &R.pulse.width, 0.5f, 12.0f);
                     ui::SliderFloat("pulse intensity", &R.pulse.intensity, 0.0f, 4.0f);

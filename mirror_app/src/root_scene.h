@@ -266,7 +266,14 @@ public:
     // its geometry was (scale, yaw about Y, translate -- addInstance's order).
     // `centre`/`radius` are its masks' bound in world space, for framing.
     struct NeighbourPlacement {
-        float translate[3]; float rotYaw; float scale;
+        float translate[3];
+        // Row-major 3x3: world direction = rot * local direction (a point
+        // also gets `scale`, applied before rot, then `translate` after --
+        // see addNeighbours' xf / uploadFaceFromMasks' xf). Built as "rotate
+        // the local axis (this structure's seed-mask normal) onto the live
+        // axis tilted outward", about the structure's own seed mask.
+        float rot[9];
+        float scale;
         int   variation;      // index into the baked variations
         int   instance;       // the renderer's instance index
         float centre[3]; float radius;
@@ -326,22 +333,23 @@ public:
     // the baked variations (structure k wears variation k % K and, through
     // the face mesh, structureFaces()[k]). Unlike buildField this keeps the
     // live system and its faces -- it is the Reveal stage of the piece, where
-    // it turns out to be one of many. Placed as a fan behind the subject, as
-    // seen from the camera that reveals them: structure k stands `spacing` x
-    // `structR` x sqrt(k+1) out from `centre` (this structure's own centre --
-    // it hangs below the origin, so a ring about the origin would put
-    // neighbours level with nothing), on the plane of it, at the azimuth that
-    // puts it at a chosen angle across the camera's view. The view angles
-    // are a golden-ratio sequence over the far half of the frame, kept out
-    // of the band the subject itself covers, so each structure that pops in
-    // is beside the ones before it rather than behind them or behind the
-    // subject -- and none is between the lens and the piece. `camAz`, `camR`
-    // and `tanH` are that camera: its azimuth, its distance from `centre`
-    // and its horizontal frustum half-extent at unit depth. Every structure
-    // starts hidden and dark; setStructureVisible/Lit bring them in. Bakes
-    // the variations first if they are not there yet.
-    void addNeighbours(int count, int variations, float spacing, float structR,
-                       const float centre[3], float camAz, float camR, float tanH);
+    // it turns out to be one of many. Placed as a tight ring: each
+    // structure's own seed mask (its variation's mask 0, which the fixed
+    // anchor pose puts at that variation's local origin) lands `ringRadius`
+    // out from the live structure's seed mask (plannedMasks()[0]), evenly
+    // spaced in angle around it in the plane perpendicular to the live axis
+    // (plannedMasks()[0].normal -- the anchor faces down the axis, see
+    // root_sim.cpp's anchor-first placement), starting from an angle seeded
+    // off the plant's own seed so the ring is stable across replacements of
+    // the same generation. Each structure is then the live axis rotated
+    // `tiltDeg` outward, toward its own position on the ring -- a rotation
+    // of the whole baked structure about its own seed mask, so the mask
+    // stays on the ring and the structure leans away from the centre -- and
+    // together the hood reads as a cone with the live structure down its
+    // middle. Every structure starts hidden and dark; setStructureVisible/
+    // Lit bring them in. Bakes the variations first if they are not there
+    // yet.
+    void addNeighbours(int count, int variations, float ringRadius, float tiltDeg);
 
     // --- the cloth: pond -> face press/release, ported from TransitionScene ---
     //

@@ -590,7 +590,12 @@ int main(int argc, char** argv) {
         if (a == "--reset-panel")  { g_panel_reset = true; g_panel_cli = true; continue; }
         if (a == "--panel-window") { g_ui_detached = true; g_panel_cli = true; continue; }
         if (a == "--no-panel")     { g_ui_visible = false; continue; }
+        // Fullscreen is the default now (see app_state.mm); --fullscreen is
+        // kept accepted, as a no-op, so existing launch scripts and the
+        // launchd plist keep working unchanged. --windowed is the dev-build
+        // opt-out, a 1280x720 titled window instead of the primary monitor.
         if (a == "--fullscreen")   { g_fullscreen = true; continue; }
+        if (a == "--windowed")     { g_fullscreen = false; continue; }
 #if MIRROR_HAVE_KINECT
         if (a == "--no-sensor")    { g_open_sensor = false; continue; }
 #endif

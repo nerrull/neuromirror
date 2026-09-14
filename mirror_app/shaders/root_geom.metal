@@ -500,18 +500,32 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     float tpar = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
     float s = mix(nodeD[seg.x], nodeD[seg.y], tpar);
     // The travelling front (RootDrawU::pulseStart): 1 behind it, 0 ahead, a
-    // pulse-width's soft edge between; 1 everywhere for a set that was
-    // never started (pulseStart < 0), which is the live system.
+    // pulse-width's soft edge between. A set that was never started
+    // (pulseStart < 0) has no front to speak of: the live system (D.lit > 0)
+    // is fully lit already, so front = 1 everywhere runs its pulse train
+    // globally, as before. A dark hood structure the Reveal hasn't reached
+    // yet is also pulseStart < 0 but D.lit <= 0 -- that set shows no pulses
+    // at all (front = 0) until its own marker starts it; without this it
+    // was drawing the free-running global pulse train, merely dimmed by
+    // unlitLevel, on every not-yet-lit structure.
     float front = 1.0;
     if (D.pulseStart >= 0.0) {
         const float head = (U.pulseTime - D.pulseStart) * U.pulseSpeed;
         front = saturate((head - s) / max(U.pulseWidth, 1e-4));
         front = front * front * (3.0 - 2.0 * front);
+    } else if (D.lit <= 0.0) {
+        front = 0.0;
     }
 
-    // travelling light pulses
+    // travelling light pulses. A started set's train is phased off its own
+    // start rather than the global clock, so the first band originates at
+    // node distance 0 (the seed mask) exactly at the marker and its head
+    // coincides with `front` above; the never-started live system keeps the
+    // free-running global phase.
     if (U.pulseEnabled == 1 && U.pulseSpacing > 0.0) {
-        float phase = s - U.pulseTime * U.pulseSpeed;
+        const float travelled = (D.pulseStart >= 0.0) ? (U.pulseTime - D.pulseStart)
+                                                        : U.pulseTime;
+        float phase = s - travelled * U.pulseSpeed;
         float d = abs(glmod(phase, U.pulseSpacing) - 0.5 * U.pulseSpacing);
         d = 0.5 * U.pulseSpacing - d;
         float band = clamp(1.0 - d / max(U.pulseWidth, 1e-4), 0.0, 1.0);

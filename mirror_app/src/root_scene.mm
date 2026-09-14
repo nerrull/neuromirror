@@ -57,6 +57,69 @@ void normalizeMesh(std::vector<float>& v) {
     for (auto& x : v) x /= m;
 }
 
+// Where the mouth sits, as an offset from the mesh centroid, in the same
+// normalised (largest coordinate 1) frame normalizeMesh() puts a drawn mesh
+// into -- i.e. exactly SimParams::faceMouthU/V/N's units (root_sim.h).
+//
+// Read off the *neutral/basis* face (FaceBasis's own neutral render mesh and
+// its dlib-68 landmark basis), not whatever capture happens to be loaded:
+// captures are only squared to the neutral by rotation (SquareCaptureToNeutral)
+// and are never each re-measured for their own mouth, so the basis is the one
+// mesh every capture's mouth offset can be assumed to share. FaceBasis::
+// neutral() and ::lmNeutral() are two evaluations of the same underlying
+// model at (alpha=0, expr=0), so they are already in the same coordinate
+// frame and units -- lmNeutral() needs no separate vertex-index mapping into
+// the render topology the way MP68Indices() would for MediaPipe's.
+//
+// Mouth = the centroid of dlib landmarks 48..67 (the whole outer+inner lip
+// contour, the standard dlib-68 mouth block -- see face_fit.cpp's
+// MP68Indices() comment for the layout). Cached after the first call: the
+// basis file does not change at runtime, and this would otherwise reload and
+// reparse it every syncFaceParams() (i.e. every regrow/replant/rebuildFace).
+// Returns false (offset left at the mesh centroid, i.e. no change from the
+// old centre-of-mask spawn) if the basis cannot be loaded.
+bool mouthOffsetFromBasis(float out[3]) {
+    static bool tried = false, ok = false;
+    static float cached[3] = {0.f, 0.f, 0.f};
+    if (!tried) {
+        tried = true;
+        mirror::FaceBasis basis;
+        std::string err;
+        if (basis.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", err)) {
+            const std::vector<float>& neutral = basis.neutral();
+            const std::vector<float>& lm = basis.lmNeutral();
+            if (neutral.size() >= 3 && lm.size() >= 68 * 3) {
+                double cx = 0, cy = 0, cz = 0;
+                const size_t n = neutral.size() / 3;
+                for (size_t i = 0; i < n; ++i) {
+                    cx += neutral[i*3]; cy += neutral[i*3+1]; cz += neutral[i*3+2];
+                }
+                cx /= (double)n; cy /= (double)n; cz /= (double)n;
+                double m = 1e-9;
+                for (size_t i = 0; i < n; ++i) {
+                    m = std::max({m, std::fabs(neutral[i*3]   - cx),
+                                     std::fabs(neutral[i*3+1] - cy),
+                                     std::fabs(neutral[i*3+2] - cz)});
+                }
+                double mx = 0, my = 0, mz = 0;
+                const int kFirst = 48, kCount = 20;   // dlib 48..67
+                for (int i = 0; i < kCount; ++i) {
+                    mx += lm[size_t(kFirst+i)*3];
+                    my += lm[size_t(kFirst+i)*3+1];
+                    mz += lm[size_t(kFirst+i)*3+2];
+                }
+                mx /= kCount; my /= kCount; mz /= kCount;
+                cached[0] = (float)((mx - cx) / m);
+                cached[1] = (float)((my - cy) / m);
+                cached[2] = (float)((mz - cz) / m);
+                ok = true;
+            }
+        }
+    }
+    out[0] = cached[0]; out[1] = cached[1]; out[2] = cached[2];
+    return ok;
+}
+
 std::vector<int> cropOvalTris(const std::vector<float>& v, const std::vector<int>& tris,
                               float rx, float ry) {
     std::vector<int> out;
@@ -286,6 +349,15 @@ void RootScene::setSpeciesIndex(int i) {
 
 void RootScene::syncFaceParams() {
     simParams_.faceScale = faceScale;
+    // Where the mouth is, in the same normalised frame -- from the neutral
+    // basis face, not whatever capture is loaded (see mouthOffsetFromBasis).
+    // Independent of faceVerts_/canonVerts_ below, so it is set even before
+    // any mesh has been loaded.
+    float mouth[3];
+    mouthOffsetFromBasis(mouth);
+    simParams_.faceMouthU = mouth[0];
+    simParams_.faceMouthV = mouth[1];
+    simParams_.faceMouthN = mouth[2];
     // The mesh is normalised about its centroid (largest coordinate 1) but
     // not symmetric about it: a chin reaches further down than a brow up.
     // The ellipsoid is centred on the mask, so each half-extent is the
@@ -496,93 +568,114 @@ void RootScene::ensureVariations(int K) {
     }
 }
 
-void RootScene::addNeighbours(int count, int variations, float spacing, float structR,
-                              const float centre[3], float camAz, float camR, float tanH) {
+void RootScene::addNeighbours(int count, int variations, float ringRadius, float tiltDeg) {
     if (!rr_ || !sim_) return;
     ensureVariations(variations);
     rr_->clearInstances();
     neighbours.clear();
     if (variations_.empty()) { rebuildFace(); return; }
 
+    const auto& pm = plannedMasks();
+    if (pm.empty()) { rebuildFace(); return; }
+    // The live structure's seed mask (mask 0) is where every structure's own
+    // seed mask lands, ringed; its normal is the growth axis (mask 0 faces
+    // down the axis, see root_sim.cpp's anchor-first placement), and its own
+    // (tangent, bitangent) already span the plane perpendicular to that axis
+    // -- exactly the ring's plane, no extra basis to build.
+    const F3 seedPos = {pm[0].pos[0], pm[0].pos[1], pm[0].pos[2]};
+    const F3 axis     = norm(F3{pm[0].normal[0], pm[0].normal[1], pm[0].normal[2]});
+    const F3 ringU    = norm(F3{pm[0].tangent[0], pm[0].tangent[1], pm[0].tangent[2]});
+    const F3 ringV    = norm(F3{pm[0].bitangent[0], pm[0].bitangent[1], pm[0].bitangent[2]});
+
+    ringRadius = std::max(0.1f, ringRadius);
+    const float tiltRad = tiltDeg * 3.14159265f / 180.f;
+    const float ct = std::cos(tiltRad), st = std::sin(tiltRad);
+
     // Yaw and a little scale per structure are the only randomness left; the
-    // pattern itself is the fan. Seeded from the plant's own seed so the
-    // hood is the same for every visitor to the same parameters.
+    // ring's starting angle is seeded from the plant's own seed too, so the
+    // hood is stable per generation rather than reshuffled on every replant.
     std::mt19937 rng(simParams_.seed * 7919u + 99u);
     std::uniform_real_distribution<float> U(0.f, 1.f);
-    constexpr float kPi = 3.14159265f;
-    constexpr float kGoldenFrac = 0.6180339887f;   // 1/phi
-
-    // The band of the view the subject itself covers: its masks' horizontal
-    // reach about the centre, as an angle from the camera. A neighbour's
-    // centre goes outside it, so what pops in is beside the subject and not
-    // hidden behind it -- the old sunflower put its first seed dead behind,
-    // where the Reveal's camera could not see it at all.
-    float halfW = 0.f;
-    for (const auto& m : plannedMasks()) {
-        const float dx = m.pos[0] - centre[0], dz = m.pos[2] - centre[2];
-        halfW = std::max(halfW, std::sqrt(dx * dx + dz * dz) + std::max(m.rWidth, m.rHeight));
-    }
-    camR = std::max(camR, 1.f);
-    const float psiEdge = std::atan(std::max(tanH, 0.1f));
-    const float psi0    = std::min(std::atan(halfW * 0.8f / camR), psiEdge * 0.5f);
-    const float psiMax  = std::max(psiEdge * 0.85f, psi0 + 0.05f);
+    const float startAngle = U(rng) * 6.2831853f;
 
     for (int k = 0; k < count; ++k) {
         const Variation& v = variations_[size_t(k) % variations_.size()];
-        const float ring = std::max(0.5f, spacing) * structR * std::sqrt(float(k + 1));
-        // Where in the view: a golden-ratio sequence over [0,1), so the
-        // structures spread evenly across the fan at any count and alternate
-        // sides; mapped onto the view angle outside the subject's band and
-        // inside the frustum's edge.
-        float u = 0.5f + float(k + 1) * kGoldenFrac;
-        u -= std::floor(u);
-        const float side = u < 0.5f ? -1.f : 1.f;
-        const float psi  = psi0 + std::fabs(2.f * u - 1.f) * (psiMax - psi0);
-        // The azimuth off the far side (theta = 0 is dead behind the subject)
-        // that puts this ring's structure at that view angle: from the eye
-        // it is ring sin(theta) across and camR + ring cos(theta) deep, and
-        // the ratio is tan(psi). The left side is monotonic in theta on
-        // [0, pi/2], so bisect; a ring too small to reach the angle while
-        // still behind the subject stops at pi/2, beside it.
-        const float t = std::tan(psi);
-        auto f = [&](float th) { return ring * std::sin(th) - t * (camR + ring * std::cos(th)); };
-        float theta = 0.5f * kPi;
-        if (f(theta) > 0.f) {
-            float lo = 0.f, hi = theta;
-            for (int it = 0; it < 40; ++it) {
-                const float mid = 0.5f * (lo + hi);
-                (f(mid) < 0.f ? lo : hi) = mid;
-            }
-            theta = 0.5f * (lo + hi);
-        }
-        const float a = camAz + kPi + side * theta;
+        const float scale = 0.9f + 0.2f * U(rng);
+        const float angle = startAngle + float(k) * (6.2831853f / std::max(1, count));
+        // Outward radial direction for this structure, in the ring's plane.
+        const F3 dir = norm(add(mul(ringU, std::cos(angle)), mul(ringV, std::sin(angle))));
+        const F3 ringPos = add(seedPos, mul(dir, ringRadius));
+        // The rotation that carries the live axis to the axis tilted
+        // `tiltDeg` outward, toward `dir`: a Rodrigues rotation by tiltRad
+        // about rotAxis = axis x dir (unit already -- axis and dir are
+        // orthogonal by construction). Applying this same rotation to every
+        // point of the structure (about its own seed mask, which every
+        // variation carries at its local origin -- the fixed anchor pose)
+        // is exactly "rotate the whole baked structure about its own seed
+        // mask so the seed mask stays on the ring and the structure leans
+        // outward": the seed mask (local origin) maps to itself under the
+        // rotation and then lands on ringPos by the translation below, and
+        // the local axis direction maps to the tilted one.
+        const F3 rotAxis = norm(cross(axis, dir));
+        // world = ringPos + R * (scale * local), local relative to the
+        // variation's own seed mask (which sits at its local origin).
+        auto xf = [&](const float p[3], bool isPoint) -> F3 {
+            F3 d = {p[0], p[1], p[2]};
+            if (isPoint) d = mul(d, scale);
+            const F3 rc = cross(rotAxis, d);
+            const float rd = dot(rotAxis, d);
+            F3 r = add(add(mul(d, ct), mul(rc, st)), mul(rotAxis, rd * (1.f - ct)));
+            return isPoint ? add(ringPos, r) : r;
+        };
 
+        std::vector<float> wnodes(v.nodes.size());
+        for (size_t i = 0; i + 2 < v.nodes.size(); i += 3) {
+            const F3 w = xf(&v.nodes[i], true);
+            wnodes[i] = w.x; wnodes[i + 1] = w.y; wnodes[i + 2] = w.z;
+        }
+
+        // Nodes are already baked to world space above, so the instance
+        // placement itself is the identity (translate 0, scale 1, no yaw).
         MetalRootRenderer::InstancePlacement pl;
-        pl.rotYaw = U(rng) * 6.2831853f;
-        pl.scale  = 0.9f + 0.2f * U(rng);
-        // Land the variation's own centre on the ring point, on the plane of
-        // `centre`: the instance is scaled about the origin and yawed before
-        // it is translated, so the translation is the ring point less the
-        // centre put through those two.
-        const float cy = std::cos(pl.rotYaw), sy = std::sin(pl.rotYaw);
-        const float lx = v.centre[0] * pl.scale, ly = v.centre[1] * pl.scale,
-                    lz = v.centre[2] * pl.scale;
-        const float want[3] = {centre[0] + std::sin(a) * ring, centre[1],
-                               centre[2] + std::cos(a) * ring};
-        pl.translate[0] = want[0] - ( lx * cy + lz * sy);
-        pl.translate[1] = want[1] -   ly;
-        pl.translate[2] = want[2] - (-lx * sy + lz * cy);
         std::vector<float> nodeDist;
-        const int inst = rr_->addInstance(v.nodes, v.segs, v.radii, pl, &nodeDist);
+        const int inst = rr_->addInstance(wnodes, v.segs, v.radii, pl, &nodeDist);
         if (inst < 0) continue;
         rr_->setInstanceVisible(inst, false);
         rr_->setInstanceLit(inst, 0.f);
+
         NeighbourPlacement np;
-        for (int c = 0; c < 3; ++c) { np.translate[c] = pl.translate[c]; np.centre[c] = want[c]; }
-        np.rotYaw = pl.rotYaw; np.scale = pl.scale;
+        np.translate[0] = ringPos.x; np.translate[1] = ringPos.y; np.translate[2] = ringPos.z;
+        // R, row-major: world direction = R * local direction (points also
+        // get `scale`, applied before R -- see xf/uploadFaceFromMasks).
+        const float ex[3] = {1.f, 0.f, 0.f}, ey[3] = {0.f, 1.f, 0.f}, ez[3] = {0.f, 0.f, 1.f};
+        const F3 rx = xf(ex, false);
+        const F3 ry = xf(ey, false);
+        const F3 rz = xf(ez, false);
+        np.rot[0] = rx.x; np.rot[1] = ry.x; np.rot[2] = rz.x;
+        np.rot[3] = rx.y; np.rot[4] = ry.y; np.rot[5] = rz.y;
+        np.rot[6] = rx.z; np.rot[7] = ry.z; np.rot[8] = rz.z;
+        np.scale = scale;
         np.variation = int(size_t(k) % variations_.size());
         np.instance = inst;
-        np.radius = v.radius * pl.scale;
+
+        // centre/radius: the masks' bound in world space, same rule as
+        // ensureVariations' v.centre/radius but through this structure's
+        // own placement (the orbit framing reads these).
+        F3 wcentre = {0.f, 0.f, 0.f};
+        std::vector<F3> wmasks(v.masks.size());
+        for (size_t j = 0; j < v.masks.size(); ++j) {
+            wmasks[j] = xf(v.masks[j].pos, true);
+            wcentre = add(wcentre, mul(wmasks[j], 1.f / float(v.masks.size())));
+        }
+        float wradius = 0.f;
+        for (size_t j = 0; j < v.masks.size(); ++j) {
+            const F3 dv = sub(wmasks[j], wcentre);
+            wradius = std::max(wradius, std::sqrt(dot(dv, dv))
+                               + std::max(v.masks[j].rWidth, v.masks[j].rHeight) * scale);
+        }
+        np.centre[0] = wcentre.x; np.centre[1] = wcentre.y; np.centre[2] = wcentre.z;
+        np.radius = wradius;
+
         np.visible = false; np.lit = false;
         np.pulseStart = -1.f;
         np.maskLit.assign(v.masks.size(), 0);
@@ -590,25 +683,19 @@ void RootScene::addNeighbours(int count, int variations, float spacing, float st
         // among the nodes within the mask's reach (its bound, and a little
         // more -- the dwell wraps the cavity, so the first arrival is just
         // outside it), the nearest node when none is that close. The nodes
-        // are placed the way addInstance placed them (scale, yaw,
-        // translate), so this is measured in the same world the pulses run
-        // in. The anchor (mask 0) has no root arriving at it: 0.
+        // are placed the way addInstance placed them (already baked to
+        // world above), so this is measured in the same world the pulses
+        // run in. The anchor (mask 0) has no root arriving at it: 0.
         np.maskDist.assign(v.masks.size(), 0.f);
         for (size_t j = 1; j < v.masks.size(); ++j) {
             const auto& sm = v.masks[j];
-            const float lx = sm.pos[0] * pl.scale, ly = sm.pos[1] * pl.scale, lz = sm.pos[2] * pl.scale;
-            const float mx = lx * cy + lz * sy + pl.translate[0];
-            const float my = ly + pl.translate[1];
-            const float mz = -lx * sy + lz * cy + pl.translate[2];
-            const float reach = std::max(sm.rWidth, sm.rHeight) * pl.scale * 1.5f;
+            const F3 mp = wmasks[j];
+            const float reach = std::max(sm.rWidth, sm.rHeight) * scale * 1.5f;
             float best = 1e30f, nearestD = 0.f, nearest = 1e30f;
-            for (size_t n = 0; n + 2 < v.nodes.size() && n / 3 < nodeDist.size(); n += 3) {
-                const float nx = v.nodes[n] * pl.scale, ny = v.nodes[n + 1] * pl.scale,
-                            nz = v.nodes[n + 2] * pl.scale;
-                const float wx = nx * cy + nz * sy + pl.translate[0];
-                const float wy = ny + pl.translate[1];
-                const float wz = -nx * sy + nz * cy + pl.translate[2];
-                const float d = std::sqrt((wx - mx) * (wx - mx) + (wy - my) * (wy - my) + (wz - mz) * (wz - mz));
+            for (size_t n = 0; n + 2 < wnodes.size() && n / 3 < nodeDist.size(); n += 3) {
+                const F3 wp = {wnodes[n], wnodes[n + 1], wnodes[n + 2]};
+                const F3 dv = sub(wp, mp);
+                const float d = std::sqrt(dot(dv, dv));
                 const float nd = nodeDist[n / 3];
                 if (d < nearest) { nearest = d; nearestD = nd; }
                 if (d <= reach) best = std::min(best, nd);
@@ -744,13 +831,17 @@ void RootScene::uploadFaceFromMasks() {
         ++k;
         if (!pl.visible) continue;
         if (pl.variation < 0 || pl.variation >= (int)variations_.size()) continue;
-        const float cy = std::cos(pl.rotYaw), sy = std::sin(pl.rotYaw);
+        // world = R * (scale * local) [+ translate for a point] -- the same
+        // rotate-about-its-own-seed-mask placement addNeighbours baked the
+        // instance's nodes with (see its `xf`); pl.rot is that R, row-major.
         auto xf = [&](const float v[3], bool isPoint) {
             const float s = isPoint ? pl.scale : 1.f;
             const float lx = v[0] * s, ly = v[1] * s, lz = v[2] * s;
-            return F3{lx * cy + lz * sy + (isPoint ? pl.translate[0] : 0.f),
-                      ly            + (isPoint ? pl.translate[1] : 0.f),
-                     -lx * sy + lz * cy + (isPoint ? pl.translate[2] : 0.f)};
+            F3 r{pl.rot[0] * lx + pl.rot[1] * ly + pl.rot[2] * lz,
+                 pl.rot[3] * lx + pl.rot[4] * ly + pl.rot[5] * lz,
+                 pl.rot[6] * lx + pl.rot[7] * ly + pl.rot[8] * lz};
+            if (isPoint) { r.x += pl.translate[0]; r.y += pl.translate[1]; r.z += pl.translate[2]; }
+            return r;
         };
         int ni = -1;
         for (const auto& sm : variations_[size_t(pl.variation)].masks) {

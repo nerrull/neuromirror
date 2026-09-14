@@ -135,7 +135,8 @@ struct RootSim::Impl {
     std::vector<std::pair<double, double>> maskUV;   // per mask, when there is a host
     // masks[0] stands on the host's axis rather than on its surface (see
     // reset()): its maskUV entry is then not a surface coordinate, and the
-    // hop that leaves it starts from its front rather than behind its chin.
+    // hop that leaves it starts in front of its mouth rather than just
+    // behind it.
     bool anchorAxis = false;
 
     // The travelling root's own growth law, read off the species file once:
@@ -209,6 +210,17 @@ struct RootSim::Impl {
         return len > 0.9 * tapLmax + 0.9 * latLmax;
     }
 
+    // The mouth point on a mask: pos, offset along the mask's own frame by
+    // the mouth's normalised-mesh-frame position (SimParams::faceMouthU/V/N),
+    // scaled the same way the cavity radii are (faceScale x faceUnit == fs,
+    // see reset()'s cavity-sizing block).
+    Vector3d mouthPoint(const MaskNode& m) const {
+        const double fs = std::max(0.05, (double)p.faceScale) * maskR;
+        return m.pos.plus(m.tangent.times((double)p.faceMouthU * fs))
+                    .plus(m.bitangent.times((double)p.faceMouthV * fs))
+                    .plus(m.normal.times((double)p.faceMouthN * fs));
+    }
+
     // Where the travelling root starts a hop: just behind the mask it is
     // leaving, or the seed for the first one.
     Vector3d hopStart(int h) const {
@@ -232,16 +244,16 @@ struct RootSim::Impl {
             }
         }
         const MaskNode& m = masks[from];
+        const Vector3d mouth = mouthPoint(m);
         // The on-axis anchor faces down the axis, and the chain runs that
-        // way: the root leaves straight out of the face's front. spawnRim
-        // and spawnBehind are for a mask on a surface the root has to get
-        // round; this one has nothing behind it to come round from.
+        // way: the root leaves straight out of the mouth's front, just
+        // anchorSpawn past it.
         if (from == 0 && anchorAxis)
-            return m.pos.plus(m.normal.times(m.r_depth + (double)p.anchorSpawn));
-        // Behind the surface, and down at the chin: emerging from the rim is
-        // what makes it read as growing out of this face.
-        return m.pos.minus(m.normal.times(m.r_depth + (double)p.spawnBehind))
-                    .minus(m.bitangent.times(m.r_height * (double)p.spawnRim));
+            return mouth.plus(m.normal.times((double)p.anchorSpawn));
+        // Just behind the surface at the mouth: emerging from the mouth is
+        // what makes it read as growing out of this face, rather than out of
+        // its centre or its chin.
+        return mouth.minus(m.normal.times((double)p.spawnBehind));
     }
 
     // Which mask a hop leaves from -- the same choice as hopStart, for the
@@ -300,17 +312,28 @@ struct RootSim::Impl {
     }
 
     void rebuildTropism(double mainW, double latW, bool travel, double dwellThreshold) {
-        // The hop out of an on-axis anchor starts inside the keep-clear tube
-        // in front of that face (hopStart), and a tube the tip is inside
-        // only ever pushes it sideways, across the face. That one travel
-        // goes without the anchor's tube; the anchor is localRevealed[0]
-        // (revealed first, at reset) and every later hop has it back.
-        int noTube = -1;
-        if (travel && anchorAxis && p.growFromFirstMask && hopFrom(hop) == 0 &&
-            !localRevealed.empty())
-            noTube = 0;
+        // Every hop now starts at its source mask's *mouth* (hopStart), which
+        // sits inside that mask's own keep-clear tube (the anchor, leaving
+        // straight out its front) or close enough to its own cavity ellipsoid
+        // (a surface mask, leaving just behind the mouth) that the geometry
+        // would otherwise call the freshly spawned root "already inside a
+        // disallowed region" -- which the tropism then spends the whole
+        // travel fighting instead of steering toward the next mask. So the
+        // hop's own source mask -- localRevealed[hopFrom(hop)], since masks
+        // are revealed in index order and localRevealed mirrors that -- is
+        // left out of the confinement geometry entirely (cavity and tube
+        // both) for that one travel, leaving the root free to clear the
+        // mouth outward along the normal before any cavity repulsion (this
+        // mask's or another's) applies. Dwell (travel=false) always gets the
+        // full geometry back, including this mask's own cavity.
+        int noCavity = -1;
+        if (travel) {
+            const int from = hopFrom(hop);
+            if (from >= 0 && from < (int)localRevealed.size())
+                noCavity = from;
+        }
         auto geom = buildCavityGeometry(localRevealed, p.R0, p.Hh, false, 2.0,
-                                        tipRadius, p.viewCylLen, 0.9, p.taperPower, noTube);
+                                        tipRadius, p.viewCylLen, 0.9, p.taperPower, noCavity);
         // The travel shell: intersecting the cavity-avoidance geometry with a
         // thin shell around the cone makes the root crawl over the surface
         // rather than cut through the middle. It only constrains the radial
@@ -587,7 +610,7 @@ bool RootSim::reset(const SimParams& p) {
     // host's maskAt gave it (a fixed oval that was 1.5x the default face and
     // did not follow faceScale -- the nest wrapped air). Everything the nest
     // is built from reads these: the cavity, the keep-clear tube's radius,
-    // the rim attractors, the spawn point at the chin and the arrival test.
+    // the rim attractors, the spawn point at the mouth and the arrival test.
     {
         const double fs = std::max(0.05, (double)p.faceScale) * maskR;
         const double m = 1.0 + std::max(0.0, (double)p.cavityMargin);
