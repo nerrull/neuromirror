@@ -217,6 +217,13 @@ int g_view_override = -1;
 // and restarts from the top when it is switched back on: pausing keeps the
 // phase and its clock and resumes into them.
 bool g_show_paused = false;
+// The root sequence, as the panel sees it. g_root_stage is main.mm's per-frame
+// readout of RootSequence::stage() while the sequence is running (Transition
+// or Roots up, and a layout to run on), -1 otherwise; g_root_jump is the
+// panel's request for RootSequence::jumpTo, a Stage value, -1 for none --
+// main.mm honours it at the top of the next root frame and clears it.
+int g_root_stage = -1;
+int g_root_jump  = -1;
 // Mean landmark error, in pixels, of the one-shot identity/mesh fit.
 // Diagnostic only: nothing about the show is gated on the mesh fit any more
 // (it still runs once, during Fitting, to personalize the Roots-phase mesh --

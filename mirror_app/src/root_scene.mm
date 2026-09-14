@@ -365,6 +365,39 @@ int RootScene::growthStepEstimate() const {
 
 bool RootScene::simDone() const { return sim_ && sim_->done(); }
 
+void RootScene::finishGrowth() {
+    if (!useSim_ || !sim_) return;
+    // Same ceiling as growthStepEstimate's probe: a sim that never reports
+    // done must not hang the panel.
+    int steps = 0;
+    while (!sim_->done() && steps < 200000) { sim_->step(); ++steps; }
+    if (steps == 0) return;
+    std::vector<float> nodes, radii; std::vector<int> segs;
+    sim_->geometry(nodes, segs, radii);
+    if (rr_) rr_->uploadSegments(nodes, segs, radii);
+    updateBounds(nodes);
+    uploadFaceFromMasks();
+}
+
+void RootScene::resetGrowth() {
+    if (!sim_) return;
+    simParams_.paramDir = ROOTSIM_PARAM_DIR;
+    useSim_ = sim_->reset(simParams_);
+    simAvailable_ = simAvailable_ || useSim_;
+    ++growGeneration_;
+    // The uploaded plant and the placed hood -- see replant() for why each
+    // has to be undone here rather than left to the next growth step.
+    if (rr_) { rr_->uploadSegments({}, {}, {}); rr_->clearInstances(); }
+    neighbours.clear();
+    maskFlagged_.clear();
+    idleCentre_[0] = idleCentre_[1] = idleCentre_[2] = 0.f;
+    idleExtent_ = 10.f;
+    // The masks as the fresh sim reveals them (the anchor alone), now rather
+    // than on the next advance(): the frame the jump lands on is the one the
+    // operator is looking at.
+    uploadFaceFromMasks();
+}
+
 const std::vector<rootsim::SimMask>& RootScene::plannedMasks() const {
     static const std::vector<rootsim::SimMask> kNone;
     return sim_ ? sim_->plannedMasks() : kNone;
@@ -1692,7 +1725,10 @@ void RootScene::advance(double dt) {
     // Ahead of the face upload below: clothPressOffset_ (the anchor mask's
     // current retraction while the cloth press is running) has to be current
     // before uploadFaceFromMasks reads it for the anchor's placement.
-    advanceCloth(dt);
+    // Not on a held frame (dt 0 -- see the header): the cloth's step is a
+    // constraint solve that goes on relaxing the sheet even with no time
+    // passing, and a paused fall has to resume from exactly where it was.
+    if (dt > 0.0) advanceCloth(dt);
 
     // Live growth: advance a few steps, then re-upload geometry + revealed masks.
     // Held for as long as there is any film on screen at all -- not merely

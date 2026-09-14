@@ -29,6 +29,13 @@ public:
     bool valid() const { return rr_ && rr_->valid(); }
 
     void ensureSize(int w, int h);
+    // dt of 0 is a held frame: none of the clocks (fog drift, pulses, the
+    // datamosh's postTime) move, the cloth is not stepped -- a zero-dt cloth
+    // step would still run its constraint projection and go on relaxing --
+    // and the sim runs only if simPaused is off. Everything that reads the
+    // scene's *parameters* (lighting, framing, fog anchors, the face upload,
+    // the cloth's pack) still runs, so a panel change shows on the held
+    // frame. main.mm's pause uses this.
     void advance(double dt);
     id<MTLTexture> render(id<MTLCommandBuffer> cb);
 
@@ -217,6 +224,19 @@ public:
     // frames on, so the shot does not step every time one lands.
     const std::vector<rootsim::SimMask>& plannedMasks() const;
     bool simDone()   const;
+    // Run the growth to completion now, synchronously, and upload the result
+    // -- the whole chain in one call, for RootSequence::jumpTo (an operator
+    // wanting the Turn or a later stage without waiting out Grow). Nothing
+    // else about the scene changes; the cloth, faces and hood are left as
+    // they are.
+    void finishGrowth();
+    // The plant back to its seed, keeping everything that is not the plant:
+    // the faces (this sitting's on mask 0 and the bank's on the rest), the
+    // cloth state and the baked variations. What goes is what replant()
+    // drops of the *growth*: the uploaded segments, the placed hood, the
+    // flagged masks. Bumps the growth generation so a Reveal after it
+    // re-places the hood. For RootSequence::jumpTo going back to Face/Grow.
+    void resetGrowth();
 
     // Hold the growth where it is without tearing anything down: the opening
     // stage of the piece is a face that has not grown yet.

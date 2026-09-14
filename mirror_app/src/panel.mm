@@ -373,9 +373,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 // Pause freezes the timeline where it stands. Distinct from
                 // unticking "run the show", which is a mode and re-arms from
                 // the top: this holds the current phase, at its current time,
-                // and resumes into it.
+                // and resumes into it. In the root scene it holds the scene
+                // itself too (main.mm's rootHold), which is why it is also
+                // offered with the show off while that scene is up: the
+                // sequence runs off the phase, not the show mode.
                 ImGui::SameLine();
-                const bool can_pause = g_show_on;
+                const bool can_pause = g_show_on || g_root_stage >= 0;
                 ImGui::BeginDisabled(!can_pause);
                 if (g_show_paused) ImGui::PushStyleColor(ImGuiCol_Button,
                                                          ImVec4(0.55f, 0.42f, 0.16f, 1.f));
@@ -385,11 +388,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip(
-                        g_show_on ? "Hold the timeline where it is. The phase and\n"
+                        can_pause ? "Hold the timeline where it is. The phase and\n"
                                     "its clock keep their values and resume from\n"
-                                    "them; the scene carries on rendering."
-                                  : "Nothing to pause: the show is not running.\n"
-                                    "The phase buttons drive it by hand.");
+                                    "them. In Transition/Roots the scene holds too:\n"
+                                    "sequence, growth, cloth, face playback and\n"
+                                    "fog fade all stand still, still rendering, so\n"
+                                    "lighting and material changes show on the\n"
+                                    "held frame. Idle and Fitting keep animating."
+                                  : "Nothing to pause: the show is not running and\n"
+                                    "the root scene is not up. The phase buttons\n"
+                                    "drive it by hand.");
 
                 ImGui::SameLine();
                 ImGui::TextDisabled("| %.1fs", g_show.phaseTime());
@@ -561,6 +569,52 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             // (BeginHeader adds no path level), so every key is
                             // a flat `show/roots/<label>`.
                             RootSequenceParams& S = g_root_seq;
+                            // Jump to a stage: actions, not parameters, so raw
+                            // ImGui buttons (nothing registers, nothing is
+                            // saved -- the same way the sound tab's cue
+                            // buttons are done). The request goes through
+                            // g_root_jump to main.mm, which owns the sequence
+                            // and honours it before the next step; g_root_stage
+                            // is its readout of where the sequence is.
+                            {
+                                const bool live = g_root_stage >= 0;
+                                ImGui::TextUnformatted("jump to:");
+                                ImGui::BeginDisabled(!live);
+                                struct JumpBtn { const char* name; RootSequence::Stage s; };
+                                const JumpBtn jumps[] = {
+                                    {"face",   RootSequence::Stage::Face},
+                                    {"grow",   RootSequence::Stage::Grow},
+                                    {"turn",   RootSequence::Stage::Turn},
+                                    {"reveal", RootSequence::Stage::Reveal},
+                                    {"orbit",  RootSequence::Stage::Orbit},
+                                    {"outro",  RootSequence::Stage::Outro},
+                                };
+                                bool hovered = false;
+                                for (const JumpBtn& j : jumps) {
+                                    ImGui::SameLine();
+                                    const bool on = live && g_root_stage == (int)j.s;
+                                    if (on) ImGui::PushStyleColor(ImGuiCol_Button,
+                                                                  ImVec4(0.26f, 0.45f, 0.30f, 1.f));
+                                    if (ImGui::Button(j.name)) g_root_jump = (int)j.s;
+                                    if (on) ImGui::PopStyleColor();
+                                    hovered = hovered ||
+                                              ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+                                }
+                                ImGui::EndDisabled();
+                                if (hovered) {
+                                    ImGui::SetTooltip(
+                                        live ? "Cut to the start of this stage, snapped: the\n"
+                                               "chain grown or reseeded, the hood placed or\n"
+                                               "dropped, the camera on the stage's opening\n"
+                                               "pose. The stage then runs on from there --\n"
+                                               "pause to hold the frame. Reveal still lights\n"
+                                               "one mask per marker after a jump."
+                                             : "The root sequence is not running: it only\n"
+                                               "runs while the phase is Transition or Roots\n"
+                                               "(and the plant has a layout). Jump there\n"
+                                               "from the phase row first.");
+                                }
+                            }
                             ui::BeginHeader("face", false);
                             {
                                 ui::SliderFloat("face seconds", &S.face_seconds, 0.2f, 20.f, "%.1f");

@@ -2723,6 +2723,36 @@ int main(int argc, char** argv) {
                     kFogClearVisibility + (target - kFogClearVisibility) * ft;
             };
 
+            // Pause, in the root scene, holds the *scene*: not only the show's
+            // phase clock (see g_show.advance above) but the sequence, the
+            // sim, the cloth, the face playback and recording, the fog fade
+            // and the mirror under the Transition -- so the operator can dial
+            // in lighting and materials on one frame. The scene still
+            // advances with dt 0 and renders every frame (RootScene::advance's
+            // header), so every panel change shows on the held frame.
+            const bool rootHold = g_show_paused;
+            const double rootDt = rootHold ? 0.0 : dt;
+            // The panel's jump row (g_root_jump): a cut to the start of a
+            // stage, honoured here before the sequence steps so the frame it
+            // lands on is this one. Only while the sequence is running -- the
+            // panel greys the row out otherwise, but the request is cleared
+            // regardless so a click from an inactive phase cannot fire later.
+            auto honourRootJump = [&]() {
+                const int want = g_root_jump;
+                g_root_jump = -1;
+                if (want < 0 || want >= (int)RootSequence::Stage::Done) return;
+                if (!rootSeqActive || !rootSeq.valid()) return;
+                rootSeq.jumpTo((RootSequence::Stage)want, roots, g_root_seq, rootsClock);
+                // Past Face the film is over (jumpTo retired it), so the
+                // Transition's own gate on the cut to Roots is met now
+                // rather than a clear-tail later.
+                if (want > (int)RootSequence::Stage::Face) {
+                    if (clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
+                    clothClearHoldElapsed = true;
+                }
+            };
+            g_root_stage = -1;   // set below by whichever root branch renders
+
             // Hand the captured neural texture over. The mirror is not running
             // by the time the mask is on screen -- only one sim runs at a time
             // -- so there is no live texture left to sample; what the mask
@@ -2803,7 +2833,7 @@ int main(int argc, char** argv) {
                 // a handoff, and a fit that kept moving during it would
                 // change the sheet's skin mid-fall.
                 mirror.ensureSize(compW / std::max(1, downscale), compH / std::max(1, downscale));
-                mirror.advance(dt);
+                if (!rootHold) mirror.advance(dt);
                 roots.setPondTexture(mirror.render());
 
                 // The mask's *shape*, re-sent every frame rather than latched
@@ -2821,7 +2851,7 @@ int main(int argc, char** argv) {
                 // going -- RootFaceSequence plays it back later).
                 const bool viewerDrivesMask =
                     !rootSeq.valid() || rootSeq.stage() == RootSequence::Stage::Face;
-                if (g_fitter.valid() && g_track_on && g_face.valid) {
+                if (g_fitter.valid() && g_track_on && g_face.valid && !rootHold) {
                     if (viewerDrivesMask) {
                         roots.setFittedFace(g_fitter.vertices(),
                                             rootFaceTrisUploaded ? std::vector<int>()
@@ -2852,23 +2882,29 @@ int main(int argc, char** argv) {
                 // The sequence is always what drives the camera here; only a
                 // layout with no masks at all (the synthetic stand-in) leaves
                 // it invalid and the fallback framing in charge.
-                rootsClock += dt;
+                rootsClock += rootDt;
+                honourRootJump();
                 const bool cleared = roots.clothCleared();
                 if (cleared && clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
-                clothClearHoldElapsed = clothClearAtPreWarm >= 0.0 &&
-                    rootsClock >= clothClearAtPreWarm + g_root_seq.face_clear_tail_seconds;
-                {
+                clothClearHoldElapsed = clothClearHoldElapsed || (clothClearAtPreWarm >= 0.0 &&
+                    rootsClock >= clothClearAtPreWarm + g_root_seq.face_clear_tail_seconds);
+                if (!rootHold) {
                     RootSequence::Inputs in;
                     in.clothCleared = cleared;
                     in.markerHit    = rootMarkerHit;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
+                } else {
+                    // The sequence owns simPaused and re-decides it on the
+                    // next step; held for this frame only.
+                    roots.simPaused = true;
                 }
+                if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
                                  compH / std::max(1, rootDownscale));
                 applyFogFade(rootsClock);
-                roots.advance(dt);
+                roots.advance(rootDt);
                 sceneTex = roots.render(cb);
             } else if (scene == (int)Scene::Roots && roots.valid()) {
                 // The roots pass is overdraw-bound (per-fragment ray-capsule
@@ -2907,7 +2943,7 @@ int main(int argc, char** argv) {
                     // actually about. rootFaceSeq.step() below does the
                     // per-frame upload.
                 } else if (g_drive_roots && g_track_on && g_fitter.valid() && g_face.valid &&
-                           viewerDrivesMask) {
+                           viewerDrivesMask && !rootHold) {
                     // ...and the live tracker only while the sequence is
                     // still on Face: from Grow on the mask is the sitting's,
                     // not whoever is in front of the sensor now.
@@ -2934,8 +2970,9 @@ int main(int argc, char** argv) {
                 // continuous across the pre-warm -> literal-Roots cut -- the
                 // same clock RootSequence and (while it is still active)
                 // faceTrackRec.record() use below.
-                rootsClock += dt;
-                if (rootSeqActive) {
+                rootsClock += rootDt;
+                honourRootJump();
+                if (rootSeqActive && !rootHold) {
                     // No wantOutro: the visitor leaving does not shorten the
                     // piece (see the Signals block above). The outro comes
                     // when the orbit has run its authored seconds.
@@ -2949,9 +2986,9 @@ int main(int argc, char** argv) {
                     in.markerHit    = rootMarkerHit;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
-                    if (rootSeq.stage() == RootSequence::Stage::Outro ||
-                        rootSeq.stage() == RootSequence::Stage::Done)
-                        g_screen_fade = rootSeq.fade();
+                    // fade() is 0 outside the outro, so this also takes the
+                    // fade back off after a jump out of the Outro.
+                    g_screen_fade = rootSeq.fade();
                     // The sequence has run its whole arc -- the orbit timed
                     // out, or the visitor left and the fade has landed. Move
                     // the show on if its own timeline has not already: the
@@ -2959,8 +2996,13 @@ int main(int argc, char** argv) {
                     // FaceAbsent edge that may never come.
                     if (rootSeq.done() && g_show.phase() == show::Phase::Roots)
                         g_show.goTo(show::Phase::Idle);
+                } else if (rootHold) {
+                    // Held: the sequence owns simPaused and re-decides it on
+                    // the next step; this frame the growth stands still.
+                    roots.simPaused = true;
                 }
-                if (rootFaceSeq.valid())
+                if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
+                if (rootFaceSeq.valid() && !rootHold)
                     rootFaceSeq.step(roots, g_show.phaseTime(), dt);
                 // The live tracker keeps recording, for as long as the same
                 // visitor is still actually present -- see the phase-agnostic
@@ -2969,12 +3011,13 @@ int main(int argc, char** argv) {
                 // exactly where Transition's own g_show.phaseTime()-based
                 // timestamps left off, not rootsClock (which is
                 // RootSequence's own clock, zeroed at pre-warm entry).
-                if (faceTrackRecActive && g_track_on && g_face.valid && g_fitter.valid())
+                if (faceTrackRecActive && g_track_on && g_face.valid && g_fitter.valid() &&
+                    !rootHold)
                     faceTrackRec.record(transitionExitPhaseTime + g_show.phaseTime(), g_fitter);
 
                 applyFogFade(rootsClock);
 
-                roots.advance(dt);
+                roots.advance(rootDt);
                 sceneTex = roots.render(cb);   // encodes geometry + fog passes into cb
             }
 

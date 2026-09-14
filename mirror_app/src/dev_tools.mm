@@ -2450,6 +2450,49 @@ int seqshot(const char* prefix, int W, int H,
             break;
         }
     }
+    // The operator's jumps (RootSequence::jumpTo), on the re-begun sequence:
+    // each one has to land in its stage, survive one step + advance, and
+    // render -- and the two that place the hood have to leave it dark
+    // (Reveal) or lit (Orbit). Run out of order on purpose, so the
+    // back-jumps (Outro -> Face, Reveal -> Turn) exercise the reseed.
+    {
+        using S = RootSequence::Stage;
+        struct Jump { S s; int wantLit; };   // wantLit: -1 don't care, else lit == visible?
+        const Jump jumps[] = {{S::Turn, -1}, {S::Reveal, 0}, {S::Orbit, 1}, {S::Outro, 1},
+                              {S::Face, -1}, {S::Grow, -1}, {S::Reveal, 0}, {S::Turn, -1}};
+        int jumpBad = 0;
+        for (const Jump& j : jumps) {
+            clock += dt;
+            seq.jumpTo(j.s, roots, sp, clock);
+            const S landed = seq.stage();
+            RootSequence::Inputs in;
+            in.clothCleared = roots.clothCleared();
+            seq.step(roots, clock, dt, sp, in);
+            roots.advance(dt);
+            bool rendered = false;
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                rendered = roots.render(cb) != nil;
+                [cb commit]; [cb waitUntilCompleted];
+            }
+            int vis = 0, lit = 0;
+            for (const auto& n : roots.neighbours) { vis += n.visible; lit += n.lit; }
+            bool ok = landed == j.s && rendered;
+            if (j.s == S::Turn) ok = ok && roots.simDone() && seq.stage() == S::Turn;
+            if (j.s == S::Grow) ok = ok && !roots.simDone();
+            if (j.wantLit == 0) ok = ok && vis > 0 && lit == 0;
+            if (j.wantLit == 1) ok = ok && vis > 0 && lit == vis;
+            printf("seqshot: jump %-6s -> landed %-6s, after a step %-6s  sim done %d  "
+                   "structures %zu visible %d lit %d  cam r=%.1f az=%.2f el=%.2f  %s\n",
+                   RootSequence::stageName(j.s), RootSequence::stageName(landed),
+                   RootSequence::stageName(seq.stage()), roots.simDone() ? 1 : 0,
+                   roots.neighbours.size(), vis, lit, roots.radius, roots.azimuth,
+                   roots.elevation, ok ? "OK" : "FAIL");
+            if (!ok) ++jumpBad;
+        }
+        printf("seqshot: jumps %s\n", jumpBad ? "FAIL" : "OK");
+        if (jumpBad) return 1;
+    }
     printf("seqshot: %d shots, %d frames, bake %.2f s\n", shot, frame, bakeSeconds);
     return 0;
 }

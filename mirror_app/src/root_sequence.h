@@ -44,6 +44,8 @@
 // roots.simStepsPerFrame, forces roots.autoFrame off, -- in WhenFramed
 // reveal mode -- flags planned masks visible, and in Reveal places the other
 // structures and steps them visible/lit. Nothing else on the scene.
+// jumpTo() is the operator's cut to the start of any stage (see its comment):
+// it does to the scene what the skipped stages would have, at once.
 #pragma once
 #ifndef __OBJC__
 #error "root_sequence.h is ObjC++ only"
@@ -391,34 +393,7 @@ public:
             // variations behind the placement are cached one level down, in
             // RootScene, and survive the replant.
             stepGrowth(roots, fdt);
-            if (neighboursGen_ != roots.growGeneration()) {
-                const int fromBank = roots.structureCount() > 0 ? roots.structureCount()
-                                                                : P.reveal_min_structures;
-                const int count = std::clamp(P.reveal_structures > 0 ? P.reveal_structures : fromBank,
-                                             1, 64);
-                float tanH, tanV;
-                tanHV(roots, tanH, tanV);
-                roots.addNeighbours(count, std::max(1, P.reveal_max_structures),
-                                    std::max(0.5f, P.reveal_spacing), structR_, centroid_,
-                                    curAz_, curR_, tanH);
-                roots.renderer().instanceCullPx = 0.5f;
-                roots.renderer().lodBias = 0.5f;
-                roots.renderer().subpixelCull = false;
-                neighboursGen_ = roots.growGeneration();
-                roots.setAllStructuresVisible(true);
-                // The lighting order: every (structure, mask) once, shuffled
-                // on a fixed seed so a rerun lights the same faces in the
-                // same order.
-                revealOrder_.clear();
-                for (int k = 0; k < (int)roots.neighbours.size(); ++k)
-                    for (int j = 0; j < roots.neighbours[size_t(k)].maskCount(); ++j)
-                        revealOrder_.push_back({k, j});
-                std::mt19937 rng(0x5eed1u);
-                std::shuffle(revealOrder_.begin(), revealOrder_.end(), rng);
-                revealStep_  = 0;
-                revealLastT_ = clock;
-                revealWantR_ = curR_;
-            }
+            if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P, clock);
             const int total = (int)revealOrder_.size();
             const bool fire = in.markerHit ||
                               (clock - revealLastT_) >= std::max(0.1, (double)P.reveal_fallback_seconds);
@@ -439,16 +414,8 @@ public:
             // can, but a wide hood at a tall structure's framing has its
             // outer ones past the edge, and a structure that lights out of
             // frame has not been revealed.
-            {
-                std::vector<Bound> bs;
-                bs.push_back({{centroid_[0], centroid_[1], centroid_[2]}, structR_});
-                for (const auto& pl : roots.neighbours)
-                    if (pl.visible) bs.push_back({{pl.centre[0], pl.centre[1], pl.centre[2]}, pl.radius});
-                const float need = fitRadius(roots, curT_, curAz_, curEl_, bs.data(), (int)bs.size(),
-                                             P.frame_margin);
-                revealWantR_ = std::max(revealWantR_, need);
-                easeTo(curR_, revealWantR_, kEase);
-            }
+            revealWantR_ = std::max(revealWantR_, revealFitRadius(roots, P));
+            easeTo(curR_, revealWantR_, kEase);
             if (revealStep_ >= total) {
                 enter(Stage::Orbit, clock);
                 orbitBound(roots, P);
@@ -552,6 +519,117 @@ public:
         }
     }
 
+    // Cut to the start of a stage, for the operator dialling in a look on a
+    // frame the show would otherwise take minutes to reach (the panel's
+    // `show/roots` jump row; pause holds the frame once it lands). Everything
+    // the earlier stages would have done to the scene is done here at once,
+    // and everything a later stage did is undone:
+    //
+    //   Face    the plant back to its seed (RootScene::resetGrowth -- faces
+    //           and cloth kept), camera on the Face pose.
+    //   Grow    the cloth retired if it is still up, the plant reseeded, hop
+    //           1 about to start off the Face pose.
+    //   Turn    the whole chain grown now (RootScene::finishGrowth), camera
+    //           on the pose Grow ends on, the Turn about to begin.
+    //   Reveal  ...and the camera on the Turn-end pose; the hood is placed
+    //           on the next step() (all structures visible, dark) and lights
+    //           one mask per marker from there exactly as in the show.
+    //   Orbit   ...and the hood placed and every structure lit.
+    //   Outro   as Orbit; the datamosh fires on the next step().
+    //
+    // Every pose is snapped: no ease, no angular clamp on the cut. `clock` is
+    // the host's sequence clock, as for step(); the stage's own time starts
+    // from it. Nothing happens when the sequence is not valid.
+    void jumpTo(Stage s, RootScene& roots, const RootSequenceParams& P, double clock) {
+        if (!valid_ || s == Stage::Done) return;
+        jumpState(s, roots, P, clock);
+        // The pose onto the scene now, not at the next step(): a jump made
+        // while the host holds the scene (pause) has to show.
+        roots.target[0] = curT_[0];
+        roots.target[1] = curT_[1];
+        roots.target[2] = curT_[2];
+        roots.radius    = std::max(0.1f, curR_);
+        roots.azimuth   = curAz_;
+        roots.elevation = std::clamp(curEl_, -1.5f, 1.5f);
+    }
+private:
+    void jumpState(Stage s, RootScene& roots, const RootSequenceParams& P, double clock) {
+
+        // Nothing before Done is faded or moshing; the head pan and the
+        // angular clamp start over from the cut.
+        roots.renderer().cancelDatamosh();
+        fade_ = 0.f;
+        moshFired_ = false;
+        panAz_ = panEl_ = 0.f;
+        prevValid_ = false;
+        roots.autoFrame = false;
+
+        // Going back to before the chain exists, or restarting Grow, is a
+        // reseed; so is coming back from a placed hood to a stage before
+        // Reveal, since the Reveal re-places the hood only for a new
+        // generation and the plant is the cheap part of that.
+        const bool reseed = s == Stage::Face ||
+                            (s == Stage::Grow && stage_ != Stage::Face) ||
+                            (s <= Stage::Turn && neighboursGen_ == roots.growGeneration());
+        if (reseed) roots.resetGrowth();
+        // ...and, going back into Reveal from Orbit/Outro with the hood still
+        // placed, the hood dark again so there is something to reveal.
+        if (s == Stage::Reveal && neighboursGen_ == roots.growGeneration())
+            for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
+                roots.setStructureVisible(k, true);
+                roots.setStructureLit(k, false);
+            }
+
+        // The Face pose is where every stage starts from.
+        curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
+        for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
+        growStepAcc_ = 0.f;
+        clothClearAt_ = -1.0;
+
+        if (s == Stage::Face) {
+            roots.simPaused = true;
+            enter(Stage::Face, clock);
+            return;
+        }
+        // Grow onward: the film is over.
+        if (roots.clothActive()) roots.skipCloth();
+        if (s == Stage::Grow) { enter(Stage::Grow, clock); return; }
+
+        // Turn onward: the chain is complete and the camera is where Grow
+        // left it.
+        roots.finishGrowth();
+        roots.simPaused = true;
+        growEndPose(roots, P);
+        turnFromAz_ = curAz_; turnFromEl_ = curEl_; turnFromR_ = curR_;
+        for (int k = 0; k < 3; ++k) turnFromT_[k] = curT_[k];
+        if (s == Stage::Turn) { enter(Stage::Turn, clock); return; }
+
+        // Reveal onward: the Turn's end pose.
+        turnEndPose(roots, P);
+        revealLastT_ = clock;
+        revealWantR_ = curR_;
+        if (s == Stage::Reveal) {
+            // A hood already standing (back from Orbit) keeps its lighting
+            // order and starts it over; a new one is placed by step().
+            revealStep_ = 0;
+            enter(Stage::Reveal, clock);
+            return;
+        }
+
+        // Orbit onward: the hood placed and lit, the camera backed off to
+        // frame it as the Reveal's end would have.
+        if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P, clock);
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
+            roots.setStructureVisible(k, true);
+            roots.setStructureLit(k, true);
+        }
+        revealStep_ = (int)revealOrder_.size();
+        curR_ = std::max(curR_, revealFitRadius(roots, P));
+        enter(s == Stage::Orbit ? Stage::Orbit : Stage::Outro, clock);
+        orbitBound(roots, P);
+    }
+public:
+
     bool  valid() const { return valid_; }
     Stage stage() const { return stage_; }
     bool  done()  const { return stage_ == Stage::Done; }
@@ -586,6 +664,74 @@ private:
         growStepAcc_ -= float(steps);
         roots.simPaused = steps <= 0;
         roots.simStepsPerFrame = std::max(1, steps);
+    }
+
+    // Reveal's entry: place the other structures about this one from the
+    // current pose, show them all dark, and draw the lighting order. Gated
+    // by the caller on the plant's generation -- see the Reveal branch of
+    // step() for why generation rather than "this visit".
+    void placeHood(RootScene& roots, const RootSequenceParams& P, double clock) {
+        const int fromBank = roots.structureCount() > 0 ? roots.structureCount()
+                                                        : P.reveal_min_structures;
+        const int count = std::clamp(P.reveal_structures > 0 ? P.reveal_structures : fromBank,
+                                     1, 64);
+        float tanH, tanV;
+        tanHV(roots, tanH, tanV);
+        roots.addNeighbours(count, std::max(1, P.reveal_max_structures),
+                            std::max(0.5f, P.reveal_spacing), structR_, centroid_,
+                            curAz_, curR_, tanH);
+        roots.renderer().instanceCullPx = 0.5f;
+        roots.renderer().lodBias = 0.5f;
+        roots.renderer().subpixelCull = false;
+        neighboursGen_ = roots.growGeneration();
+        roots.setAllStructuresVisible(true);
+        // The lighting order: every (structure, mask) once, shuffled on a
+        // fixed seed so a rerun lights the same faces in the same order.
+        revealOrder_.clear();
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k)
+            for (int j = 0; j < roots.neighbours[size_t(k)].maskCount(); ++j)
+                revealOrder_.push_back({k, j});
+        std::mt19937 rng(0x5eed1u);
+        std::shuffle(revealOrder_.begin(), revealOrder_.end(), rng);
+        revealStep_  = 0;
+        revealLastT_ = clock;
+        revealWantR_ = curR_;
+    }
+    // The radius that frames this structure and every visible neighbour from
+    // the current pose, each as its own bound -- what Reveal backs off to.
+    float revealFitRadius(const RootScene& roots, const RootSequenceParams& P) const {
+        std::vector<Bound> bs;
+        bs.push_back({{centroid_[0], centroid_[1], centroid_[2]}, structR_});
+        for (const auto& pl : roots.neighbours)
+            if (pl.visible) bs.push_back({{pl.centre[0], pl.centre[1], pl.centre[2]}, pl.radius});
+        return fitRadius(roots, curT_, curAz_, curEl_, bs.data(), (int)bs.size(), P.frame_margin);
+    }
+    // The pose Grow's last hop settles on once the root has arrived: square
+    // on the last mask, at it, far enough out to hold it, the mask before it
+    // and the tip. Snapped into cur*, for jumpTo.
+    void growEndPose(const RootScene& roots, const RootSequenceParams& P) {
+        const auto& pm = roots.plannedMasks();
+        if (pm.empty()) return;
+        const rootsim::SimMask& tm = pm.back();
+        const rootsim::SimMask& fm = pm[pm.size() >= 2 ? pm.size() - 2 : 0];
+        azelFromDir(tm.normal, curAz_, curEl_);
+        for (int k = 0; k < 3; ++k) curT_[k] = tm.pos[k];
+        Bound pts[3];
+        int np = 0;
+        pts[np++] = {{tm.pos[0], tm.pos[1], tm.pos[2]}, std::max(tm.rWidth, tm.rHeight)};
+        pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
+        float tip[3];
+        if (roots.growthTip(tip)) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
+        curR_ = std::max(fitRadius(roots, curT_, curAz_, curEl_, pts, np, P.grow_margin), tightR_);
+    }
+    // The pose the Turn ends on: the Grow azimuth, the authored low
+    // elevation, the whole structure framed about its centre. Snapped.
+    void turnEndPose(const RootScene& roots, const RootSequenceParams& P) {
+        const Bound whole = {{centroid_[0], centroid_[1], centroid_[2]}, structR_};
+        curAz_ = turnFromAz_;
+        curEl_ = P.turn_end_elevation_deg * kDeg;
+        for (int k = 0; k < 3; ++k) curT_[k] = centroid_[k];
+        curR_ = fitRadius(roots, centroid_, curAz_, curEl_, &whole, 1, P.frame_margin);
     }
 
     static float smoothstep(double u) {
