@@ -1866,7 +1866,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         // load would apply both and whichever declared last won.
                         // A second handle on a control is a convenience; a second
                         // *name* for it is a bug.
-                        ImGui::SliderFloat("z rate /s", &P.z_rate, -2.f, 2.f);
+                        ImGui::SliderFloat("z rate /s", &P.z_rate, 0.f, 0.2f,
+                                          "%.4f");
                         ImGui::EndDisabled();
 
                         ImGui::SetNextItemWidth(110);
@@ -2859,11 +2860,41 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ImGui::Text("z phase = %6.2f  (circular morph)", P.z);
                 ImGui::DragFloat("z", &P.z, 0.02f);
                 ui::SliderFloat("z amplitude", &P.z_amp, 0.0f, 3.0f);
-                ui::SliderFloat("z auto-rate /s", &P.z_rate, -2.0f, 2.0f);
+                // Range narrowed from -2..2: at that scale nearly the whole
+                // slider was unusable (the pond tears apart well under 1/s),
+                // so a range of 0..0.2 is plenty and gives four times the
+                // precision across the values anyone actually dials in. This
+                // does not clamp values a preset already holds outside the
+                // new range -- ImGui sliders never clamp unless AlwaysClamp
+                // is set -- it only narrows the widget's drag span.
+                ui::SliderFloat("z auto-rate /s", &P.z_rate, 0.0f, 0.2f, "%.4f");
                 ui::SliderFloat("z step size", &P.z_step, 0.01f, 1.0f);
                 if (ImGui::Button("z - step")) P.z -= P.z_step; ImGui::SameLine();
                 if (ImGui::Button("z + step")) P.z += P.z_step; ImGui::SameLine();
                 if (ImGui::Button("z = 0")) P.z = 0.0f;
+                ui::SliderFloat("drops add z speed /s", &P.z_drop_boost, 0.0f, 0.5f,
+                                "%.4f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Each landed drop (an onset, a MIDI hit, the 'drop\n"
+                        "one' button -- not the passive rain scheduler) bumps\n"
+                        "a decaying envelope by this much times the drop's\n"
+                        "strength (0..1; an unspecified strength counts as a\n"
+                        "full hit). The envelope adds on top of the z\n"
+                        "auto-rate above while it is live, so a run of drops\n"
+                        "briefly speeds up the latent travel. Only active\n"
+                        "while raindrops are on.");
+                }
+                ui::SliderFloat("drop boost decay s", &P.z_drop_boost_tau, 0.05f,
+                                5.0f, "%.3f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Time constant the drop-boost envelope decays back\n"
+                        "toward zero with after a drop lands. The envelope's\n"
+                        "attack -- how fast it rises to a bump -- eases in\n"
+                        "over a quarter of this, so a hit ramps the z speed\n"
+                        "up rather than stepping it.");
+                }
                 }
                 ui::EndHeader();
                 ui::PopSection();

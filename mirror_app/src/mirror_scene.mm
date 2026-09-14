@@ -32,7 +32,14 @@ void MirrorScene::ensureSize(int w, int h) {
 void MirrorScene::advance(double dt) {
     if (!params_.paused) {
         t_ += dt * params_.time_scale;
-        params_.z += dt * params_.z_rate;
+        // The envelope keeps decaying/easing every unpaused frame regardless
+        // of drops_on, so it never holds a stale jump for the moment drops
+        // turn back on -- only its *contribution* to z below is gated on
+        // that.
+        pond_.advanceZBoost(dt, params_);
+        const float z_rate_eff = params_.z_rate +
+            (params_.drops_on ? pond_.zBoostEnv() : 0.f);
+        params_.z += dt * z_rate_eff;
     }
     if (params_.trans_auto)
         params_.transition = std::min(1.0f, std::max(0.0f, params_.transition + (float)dt * params_.trans_rate));

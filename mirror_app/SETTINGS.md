@@ -237,7 +237,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `text/x` | float | -2 .. 2 | 0 |
 | `text/y` | float | -1 .. 1 | 0 |
 
-## mirror (60 parameters)
+## mirror (62 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -298,8 +298,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/ripple phase` | float | 0 .. 6.28319 | 0 |
 | `mirror/ripple speed` | float | 0 .. 6 | 1.905 |
 | `mirror/soft centers (anti-alias)` | bool | -- | 1 |
+| `mirror/z/drop boost decay s` | float | 0.05 .. 5 | 0.8 |
+| `mirror/z/drops add z speed -s` | float | 0 .. 0.5 | 0.02 |
 | `mirror/z/z amplitude` | float | 0 .. 3 | 1 |
-| `mirror/z/z auto-rate -s` | float | -2 .. 2 | 0.063 |
+| `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.063 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
 
 ## roots (187 parameters)

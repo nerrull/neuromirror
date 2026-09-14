@@ -12,6 +12,7 @@
 // Needs a Metal device, no fixtures. Exit 0 on pass.
 #include "drop_spawner.h"
 #include "mirror_render.h"
+#include "pond_state.h"
 
 #include <cmath>
 #include <cstdio>
@@ -358,6 +359,75 @@ void test_reject() {
           "a hit above it still lands, and still counts");
 }
 
+// A landed drop should briefly speed up the z latent, then relax back --
+// exercising Pond::triggerDrop / advanceZBoost / zBoostEnv (pond_state.h),
+// which is what MirrorScene::advance adds to z_rate each frame.
+void test_z_drop_boost() {
+    std::printf("\na landed drop speeds up z travel, then decays back\n");
+    mirror::Pond pond(1);
+    mirror::PondParams p;
+    p.drops_on = true;
+    p.z_rate = 0.05f;
+    p.z_drop_boost = 0.08f;
+    p.z_drop_boost_tau = 0.4f;
+
+    // Nothing has landed yet: the envelope contributes nothing.
+    pond.advanceZBoost(0.2, p);
+    check(pond.zBoostEnv() < 1e-6f, "no drop yet -> no boost");
+
+    // A full-strength hit lands. The envelope eases toward its target rather
+    // than jumping there in one step, so right after the trigger it should be
+    // above zero but still well short of the target.
+    pond.triggerDrop(1.f, 0.f);
+    const double step = 1.0 / 60.0;
+    pond.advanceZBoost(step, p);
+    const float just_after = pond.zBoostEnv();
+    check(just_after > 0.f, "the envelope moves on the very next frame");
+    check(just_after < 0.5f * p.z_drop_boost,
+          "...but the attack is eased, not an instant jump to the target");
+
+    // Advancing further at 60fps, the envelope should keep climbing for a
+    // while, past what it already reached one frame in. It will *not* reach
+    // the full bump -- the raw target it is chasing is decaying with tau at
+    // the same time the envelope eases toward it with tau/4, so the peak is
+    // a fraction of the bump (analytically, tau/(tau-a) * a fraction < 1 for
+    // a=tau/4 works out to ~63% here) rather than the bump itself.
+    float peak_env = just_after;
+    for (int i = 0; i < 30; ++i) {
+        pond.advanceZBoost(step, p);
+        peak_env = std::max(peak_env, pond.zBoostEnv());
+    }
+    char msg[160];
+    std::snprintf(msg, sizeof msg,
+                  "climbs well past the first frame, short of the raw bump "
+                  "(%.4f, vs %.4f one frame in, vs bump %.4f)",
+                  peak_env, just_after, p.z_drop_boost);
+    check(peak_env > 2.f * just_after && peak_env < p.z_drop_boost,
+          msg);
+
+    // The effective rate a frame would use (as MirrorScene::advance computes
+    // it) is above z_rate while the boost is live.
+    check(p.z_rate + peak_env > p.z_rate + 0.5f * p.z_drop_boost,
+          "effective z rate (z_rate + envelope) is raised above z_rate alone");
+
+    // Now let it run for several decay time constants with no further drops:
+    // it should relax back down toward (not necessarily all the way to,
+    // depending on float noise) zero, i.e. back toward z_rate alone.
+    for (int i = 0; i < 60 * 5; ++i) pond.advanceZBoost(step, p);
+    char msg2[128];
+    std::snprintf(msg2, sizeof msg2, "decays back toward z_rate (envelope now %.6f)",
+                  pond.zBoostEnv());
+    check(pond.zBoostEnv() < 0.02f * p.z_drop_boost, msg2);
+
+    // Off switch: the envelope still tracks internally (advanceZBoost doesn't
+    // know about drops_on), but MirrorScene only adds it in when drops_on is
+    // set -- confirm the raw envelope math itself is independent of that flag
+    // by checking a second trigger still raises it the same way.
+    pond.triggerDrop(1.f, 0.f);
+    pond.advanceZBoost(step, p);
+    check(pond.zBoostEnv() > 0.f, "a second drop lands and boosts again");
+}
+
 }  // namespace
 
 int main() {
@@ -369,6 +439,7 @@ int main() {
     test_triggers();
     test_reject();
     test_clock_moved_back();
+    test_z_drop_boost();
     std::printf("%s\n", g_fail == 0 ? "PASS" : "FAIL");
     return g_fail == 0 ? 0 : 1;
 }

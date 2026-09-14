@@ -7,7 +7,9 @@
 #pragma once
 
 #include <mlx/mlx.h>
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <vector>
 
@@ -76,6 +78,12 @@ struct PondParams {
     float z_amp = 1.0f;
     float z_rate = 0.0f;             // auto-advance /s
     float z_step = 0.10f;
+    // Each landed drop (triggerDrop -- an audio onset, MIDI, the manual
+    // button; not the passive rain scheduler) adds this much, times the
+    // drop's strength, to a decaying envelope that rides on top of z_rate.
+    // See Pond::triggerDrop / Pond::advanceZBoost for the smoothing.
+    float z_drop_boost = 0.02f;      // /s added per full-strength drop
+    float z_drop_boost_tau = 0.8f;   // envelope decay time constant, s
     // --- the fit region, and what it holds still ---------------------------
     //
     // A live fit is a person the network is reproducing surrounded by a field
@@ -170,10 +178,47 @@ public:
     // Spawn a drop right now: an audio onset, a MIDI hit, a button. `strength`
     // is 0..1 (negative means "you choose"), `pan` -1..1 across the frame. Takes
     // effect on the next render(), which is where drops learn what time it is.
+    //
+    // Also bumps the z-latent drop-boost envelope (see advanceZBoost/
+    // zBoostEnv below) by z_drop_boost * strength -- an unspecified strength
+    // (< 0, "you choose") counts as a full hit, same as a manual button press.
+    // z_drop_boost itself is cached from the last render() rather than passed
+    // in here, since every caller of triggerDrop() already has a Pond and
+    // none of them carry a PondParams to hand it.
     void triggerDrop(float strength = -1.f, float pan = 0.f) {
+        const float s = (strength >= 0.f) ? std::clamp(strength, 0.f, 1.f) : 1.f;
+        z_boost_target_ = std::min(z_boost_target_ + last_z_drop_boost_ * s,
+                                   4.f * last_z_drop_boost_);
         spawner_.trigger(strength, pan);
     }
     const DropSpawner& spawner() const { return spawner_; }
+
+    // Advance the drop-boost envelope by dt seconds and cache p.z_drop_boost
+    // for the next triggerDrop(). Call once per frame (MirrorScene::advance
+    // does, alongside the z_rate step).
+    //
+    // Two states, both un-clamped presets, neither one saved:
+    //   z_boost_target_  the raw bump triggerDrop() adds to, decaying
+    //                    exponentially with time constant z_drop_boost_tau.
+    //   z_boost_env_     what actually gets added to z_rate; eases toward
+    //                    the target with a *quarter* of that time constant,
+    //                    so a drop ramps the z speed up over a few dozen
+    //                    milliseconds instead of stepping it. A simple
+    //                    two-pole smoother -- target decays, envelope
+    //                    chases -- rather than an explicit spring model.
+    void advanceZBoost(double dt, const PondParams& p) {
+        last_z_drop_boost_ = std::max(p.z_drop_boost, 0.f);
+        const float tau = std::max(p.z_drop_boost_tau, 1e-3f);
+        const float dtf = (float)dt;
+        z_boost_target_ *= std::exp(-dtf / tau);
+        const float attack_tau = std::max(tau * 0.25f, 1e-3f);
+        z_boost_env_ += (z_boost_target_ - z_boost_env_) *
+                        (1.f - std::exp(-dtf / attack_tau));
+    }
+    // This frame's smoothed drop-boost, to add to z_rate. The caller decides
+    // whether drops_on gates it (advanceZBoost keeps running either way, so
+    // toggling drops back on does not resume from a stale jump).
+    float zBoostEnv() const { return z_boost_env_; }
 
     // The ripple sources the last render() actually used.
     //
@@ -229,6 +274,11 @@ private:
     // The latent the fit was begun at, held for as long as the fit lives.
     float fit_z_ = 0.f;
     std::vector<RippleSource> last_src_;
+
+    // z-latent drop-boost envelope; see triggerDrop/advanceZBoost/zBoostEnv.
+    float z_boost_target_ = 0.f;
+    float z_boost_env_ = 0.f;
+    float last_z_drop_boost_ = 0.02f;
     void rebuildFitFeatures(const PondParams& p);
     const mx::array& coord_grid(int lh, int lw, float asp);
 
