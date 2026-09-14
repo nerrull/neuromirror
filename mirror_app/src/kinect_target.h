@@ -74,8 +74,20 @@ public:
     std::string error() const override;
     uint64_t frames() const override;
 
-    // Mirror the image horizontally. On by default: a mirror should show you
-    // your own left hand on your left, and the sensor does not do that.
+    // Whether the presented image behaves like a mirror: move left, see
+    // yourself move left. On by default.
+    //
+    // This is *not* "flip the frame" -- confirmed empirically with
+    // --feedshot (dev_tools.mm), the Kinect v2's colour frame arrives from
+    // libfreenect2 already mirror-flipped relative to a normal camera (the
+    // sensor does not hand back what a photograph taken from the same spot
+    // would show). So mirrored(true), the default, leaves the raw frame
+    // alone; mirrored(false) is what applies the horizontal flip, undoing
+    // the sensor's own mirroring for the rare case that needs a true camera
+    // view instead. The naming used to be backwards -- setMirrored(true)
+    // flipped an already-mirrored frame, which produced exactly the "camera
+    // view, not a mirror" symptom this comment now exists to prevent
+    // regressing.
     void setMirrored(bool m);
     bool mirrored() const;
 

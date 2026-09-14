@@ -1381,8 +1381,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 if (ui::Checkbox("mirror image", &mir)) g_kinect.setMirrored(mir);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "A mirror should put your left hand on your\n"
-                        "left. The sensor does not.");
+                        "On: behave like a mirror -- move left, see\n"
+                        "yourself move left. The sensor's raw frame\n"
+                        "already reads this way (confirmed with\n"
+                        "--feedshot), so this leaves it alone. Off\n"
+                        "flips it into a plain camera view instead.");
                 }
             }
             ui::EndGate();

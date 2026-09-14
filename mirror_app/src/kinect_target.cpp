@@ -447,16 +447,20 @@ bool KinectFitTarget::lastFrameRGB8(int w, int h,
 
     const bool rgbx = (f.format == libfreenect2::Frame::RGBX);
     const SrcRect r = ComputeFeedRect(f.width, f.height, w, h, impl_->crop);
-    // Mirrored to match what poll() produced, so landmark coordinates line up
-    // with the fit target's pixels.
+    // The resampler's own `mirror` flag means "flip the raw frame"; ours
+    // means "behave like a mirror" -- and libfreenect2's raw frame already
+    // does (see setMirrored's comment in the header), so the two are
+    // inverses of each other. Matches poll() below, so landmark coordinates
+    // line up with the fit target's pixels.
+    const bool flip = !impl_->mirrored;
     if (filtered) {
         DownsampleRectToRGB8(f.data.data(), f.width, f.height, f.bytes_per_pixel,
                              rgbx ? 0 : 2, rgbx ? 2 : 0, r, w, h, rgb,
-                             DstRect{}, impl_->mirrored);
+                             DstRect{}, flip);
     } else {
         PointSampleRectToRGB8(f.data.data(), f.width, f.height, f.bytes_per_pixel,
                               rgbx ? 0 : 2, rgbx ? 2 : 0, r, w, h, rgb,
-                              impl_->mirrored);
+                              flip);
     }
 
     DownsampleCache& slot = impl_->cache[impl_->cache_next];
@@ -479,9 +483,11 @@ bool KinectFitTarget::lastFrameRGBF(int w, int h, std::vector<float>& rgb,
 
     const bool rgbx = (f.format == libfreenect2::Frame::RGBX);
     const SrcRect r = ComputeFeedRect(f.width, f.height, w, h, impl_->crop);
+    // See the "flip" comment in lastFrameRGB8 above -- inverted for the same
+    // reason.
     DownsampleRectRGB8(f.data.data(), f.width, f.height, f.bytes_per_pixel,
                        rgbx ? 0 : 2, rgbx ? 2 : 0, r, w, h, rgb, fill,
-                       impl_->mirrored);
+                       !impl_->mirrored);
     return true;
 }
 
@@ -519,10 +525,15 @@ bool KinectFitTarget::poll(int w, int h, std::vector<float>& rgb,
     // and with only part of the frame written the opposite number is stale.
     // Reading the source columns backwards produces the same image and touches
     // only the pixels being filled.
+    //
+    // Inverted: libfreenect2's raw frame already reads like a mirror (see
+    // setMirrored's comment in the header), so mirrored=true -- the default,
+    // "behave like a mirror" -- must leave it alone, and it is mirrored=false
+    // that asks for the column reversal.
     DownsampleRectRGB8(f.data.data(), f.width, f.height, f.bytes_per_pixel,
                        r_off, b_off,
                        ComputeFeedRect(f.width, f.height, w, h, impl_->crop),
-                       w, h, rgb, fill, impl_->mirrored);
+                       w, h, rgb, fill, !impl_->mirrored);
     return true;
 }
 
