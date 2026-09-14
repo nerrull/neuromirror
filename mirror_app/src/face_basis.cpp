@@ -1,5 +1,6 @@
 #include "face_basis.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -125,6 +126,12 @@ void FaceBasis::reconstruct(const std::vector<float>& alpha,
     accumulate(ex_, expr, size_t(n_ex_), nv3, out);
 }
 
+int FaceBasis::expressionIndex(const std::string& name) const {
+    for (size_t i = 0; i < ex_names_.size(); ++i)
+        if (ex_names_[i] == name) return (int)i;
+    return -1;
+}
+
 void FaceBasis::reconstructLandmarks(const std::vector<float>& alpha,
                                      const std::vector<float>& expr,
                                      std::vector<float>& out) const {
@@ -133,6 +140,34 @@ void FaceBasis::reconstructLandmarks(const std::vector<float>& alpha,
     if (out.size() != lm3) return;
     accumulate(lm_id_, alpha, size_t(n_id_), lm3, out);
     accumulate(lm_ex_, expr, size_t(n_ex_), lm3, out);
+}
+
+int jawOpenModeIndex(const FaceBasis& basis, bool* usedFallback) {
+    if (usedFallback) *usedFallback = false;
+    const int idx = basis.expressionIndex("jawOpen");
+    if (idx >= 0) return idx;
+    if (usedFallback) *usedFallback = true;
+
+    const std::vector<float>& lmEx = basis.lmExpression();
+    const int n = basis.expressionModes();
+    const size_t lm3 = size_t(FaceBasis::kLandmarks) * 3;
+    int best = -1;
+    float bestGap = 0.f;
+    for (int k = 0; k < n; ++k) {
+        if (lmEx.size() < size_t(k + 1) * lm3) break;
+        const float* m = &lmEx[size_t(k) * lm3];
+        float upperY = 0.f, lowerY = 0.f;
+        for (int i : {61, 62, 63}) upperY += m[size_t(i) * 3 + 1];
+        for (int i : {65, 66, 67}) lowerY += m[size_t(i) * 3 + 1];
+        upperY /= 3.f;
+        lowerY /= 3.f;
+        const float gap = std::fabs(upperY - lowerY);
+        if (gap > bestGap) {
+            bestGap = gap;
+            best = k;
+        }
+    }
+    return best;
 }
 
 }  // namespace mirror

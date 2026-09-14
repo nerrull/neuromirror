@@ -729,6 +729,37 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 }
                             }
                             ui::EndHeader();
+                            ui::BeginHeader("mouth", false);
+                            {
+                                ui::SliderFloat("mouth open amount", &S.mouth_open_amount, 0.f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The root leaves mask 0 through its mouth, so\n"
+                                        "the jaw is forced open before it emerges -- the\n"
+                                        "jawOpen coefficient at full open. Only ever\n"
+                                        "raises the jaw (max against the live/replayed\n"
+                                        "value), so a visitor already talking is not\n"
+                                        "clamped shut. The spawn point itself tracks this\n"
+                                        "opened mouth, not the neutral one.");
+                                }
+                                ui::SliderFloat("mouth open seconds", &S.mouth_open_seconds, 0.1f, 5.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The ease-in. Held open through Grow/Turn/Orbit\n"
+                                        "once reached -- the root is coming out of the\n"
+                                        "mouth the whole time.");
+                                }
+                                ui::SliderFloat("mouth open lead (s)", &S.mouth_open_lead, 0.f, 5.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How long before Grow begins the mouth starts\n"
+                                        "opening -- during the last part of Face. Floored\n"
+                                        "at \"mouth open seconds\" so the ease actually\n"
+                                        "finishes by the time Grow starts rather than\n"
+                                        "still being mid-open when the root needs it.");
+                                }
+                            }
+                            ui::EndHeader();
                             ui::BeginHeader("camera easing", false);
                             {
                                 ui::SliderFloat("cam ease seconds", &S.cam_ease_seconds, 0.05f, 5.f, "%.2f");

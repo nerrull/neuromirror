@@ -2211,6 +2211,34 @@ int seqshot(const char* prefix, int W, int H,
     RootSequence seq;
     seq.begin(roots, sp);
     if (!seq.valid()) { fprintf(stderr, "seqshot: no masks\n"); return 1; }
+
+    // Mask 0's forced jaw-open (root_sequence.h's mouth_open_*): this harness
+    // has no live fitter/track, so drive mask 0 the same neutral-basis way
+    // main.mm's uploadLiveFace() would with nobody in front of the sensor
+    // (alpha all-zero) -- reconstructed fresh every frame from
+    // seq.mouthOpenRamp() * sp.mouth_open_amount, so the checks below are
+    // exercising the real ramp, not a stand-in.
+    mirror::FaceBasis mouthBasis;
+    {
+        std::string err;
+        mouthBasis.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", err);
+    }
+    const int mouthJawIdx = mouthBasis.valid() ? mirror::jawOpenModeIndex(mouthBasis) : -1;
+    bool mouthTrisUploaded = false;
+    float mouthTargetLast = 0.f;   // this frame's forced coefficient, for the checks below
+    auto driveMouth = [&](double clockNow) {
+        if (mouthJawIdx < 0) return;
+        mouthTargetLast = seq.mouthOpenRamp(clockNow, sp) * std::max(0.f, sp.mouth_open_amount);
+        std::vector<float> expr(size_t(mouthJawIdx) + 1, 0.f);
+        expr[size_t(mouthJawIdx)] = mouthTargetLast;
+        std::vector<float> verts;
+        mouthBasis.reconstruct({}, expr, verts);
+        roots.setFittedFace(verts, mouthTrisUploaded ? std::vector<int>() : mouthBasis.triangles());
+        mouthTrisUploaded = true;
+    };
+    if (mouthJawIdx < 0)
+        fprintf(stderr, "seqshot: mouth-open: no mode found in face_basis.bin; the mouth-open "
+                        "checks below are skipped\n");
     // The pacing the sequence derived, and the pose it will grow from --
     // the numbers behind the Grow stills.
     {
@@ -2307,6 +2335,7 @@ int seqshot(const char* prefix, int W, int H,
         seq.step(roots, clock, dt, sp, in);
         const double stepSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;   // the hood's bake stall lands wherever placeHood() runs (Turn's entry)
+        driveMouth(clock);
         roots.advance(dt);
         if (seq.stage() != last) {
             printf("seqshot: frame %d  %s -> %s\n", frame, RootSequence::stageName(last),
@@ -2314,7 +2343,24 @@ int seqshot(const char* prefix, int W, int H,
             // The Face pose as Grow takes over, and the Grow pose as the
             // Turn takes over (the whole chain grown, the camera as far back
             // as the tip pushed it).
-            if (seq.stage() == RootSequence::Stage::Grow) { growT0 = clock; if (!snap("face_end")) return 1; }
+            if (seq.stage() == RootSequence::Stage::Grow) {
+                growT0 = clock;
+                // The mouth-open ramp (root_sequence.h's mouth_open_*): by
+                // this, the first Grow frame, mask 0's forced jaw-open
+                // should be almost all the way open -- the ease is floored
+                // at mouth_open_seconds (see mouthOpenRamp), so it finishes
+                // by Grow's start whenever the ease is the longer of the two
+                // knobs (the ordinary case). "00_face_end" is this same
+                // frame (the snapshot taken right on the Face -> Grow cut),
+                // so the same value is what that still shows.
+                const float amount = std::max(0.f, sp.mouth_open_amount);
+                const float ratio = amount > 1e-6f ? mouthTargetLast / amount : 1.f;
+                printf("seqshot: mouth-open at face_end / first grow frame: coeff %.3f "
+                       "(amount %.3f, ratio %.2f) => %s\n",
+                       mouthTargetLast, amount, ratio,
+                       (mouthJawIdx < 0 || ratio >= 0.9f) ? "OK" : "FAIL");
+                if (!snap("face_end")) return 1;
+            }
             if (seq.stage() == RootSequence::Stage::Turn) {
                 printf("seqshot: grow took %.1f s (growth ran for %.1f s after a %.1f s hold); sim done %d\n",
                        clock - growT0, growStartedT >= 0 ? clock - growStartedT : 0.0,

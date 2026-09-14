@@ -48,6 +48,9 @@ public:
     // ARKit-style expression names, in the order the expression modes are
     // stored ("mouthSmile_L", "jawOpen", ...).
     const std::vector<std::string>& expressionNames() const { return ex_names_; }
+    // Index of the expression mode named `name`, or -1 if the basis does not
+    // carry one by that exact (case-sensitive, ARKit-spelled) name.
+    int expressionIndex(const std::string& name) const;
 
     // Neutral render mesh, 3 floats per vertex.
     const std::vector<float>& neutral() const { return neutral_; }
@@ -79,5 +82,18 @@ private:
     std::vector<int> tris_;
     std::vector<std::string> ex_names_;
 };
+
+// Which expression mode should drive a forced "open the mouth" (root_scene.mm/
+// root_face_sequence.h -- the root leaves mask 0 through its mouth, so it is
+// opened as the root is about to emerge): "jawOpen" by name when the basis
+// carries it -- every export so far does, see tools/export_face_basis.py's
+// ARKit-named list -- otherwise the mode whose unit activation most separates
+// dlib's inner-lip landmarks (60-67; the upper-centre points 61-63 against
+// the lower-centre 65-67 -- 60/64 are the mouth corners, which barely move on
+// a jaw drop). -1 only if the basis has no expression modes at all.
+// `usedFallback`, if given, reports which path was taken; the caller logs it
+// once at startup so a basis missing "jawOpen" is visible rather than a
+// silent guess.
+int jawOpenModeIndex(const FaceBasis& basis, bool* usedFallback = nullptr);
 
 }  // namespace mirror

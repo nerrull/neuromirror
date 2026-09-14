@@ -3006,6 +3006,56 @@ int main(int argc, char** argv) {
             // uploaded yet it wore the flat fallback material for the whole
             // reveal, then changed appearance at the cut to Roots -- the face
             // arriving one phase after the face was revealed.
+            // Shared by uploadLiveFace() and both rootFaceSeq.step() calls
+            // below, so the live path and the replay path apply exactly the
+            // same target -- see RootSequenceParams' mouth_open_* comment.
+            auto rootMouthOpenTarget = [&]() -> float {
+                if (!rootSeq.valid()) return 0.f;
+                return rootSeq.mouthOpenRamp(rootsClock, g_root_seq) *
+                       std::max(0.f, g_root_seq.mouth_open_amount);
+            };
+            // The live tracker's mesh onto mask 0, with the jaw forced open
+            // once the sequence's mouth-open ramp calls for it (root_sequence.h's
+            // mouth_open_* -- the root leaves mask 0 through its mouth, so it
+            // is opened before Grow needs it). Only while the sequence is
+            // still on Face does this path drive the mask at all
+            // (viewerDrivesMask at each call site); Grow onward is
+            // RootFaceSequence's replay, overridden the same way in its own
+            // step() call below.
+            //
+            // expr[jawOpen] = max(live, ramp * amount): raises the jaw,
+            // never clamps it, so a visitor still talking through the ramp's
+            // start is not cut off. When no override is needed (ramp at 0, or
+            // the basis's live expression is already past the target) this
+            // is exactly the old setFittedFace(g_fitter.vertices(), ...) call.
+            auto uploadLiveFace = [&]() {
+                static int jawIdx = -1;
+                static bool jawTried = false;
+                if (!jawTried) {
+                    jawTried = true;
+                    if (g_fitter.valid()) jawIdx = mirror::jawOpenModeIndex(g_fitter.basis());
+                }
+                const float target = rootMouthOpenTarget();
+                const std::vector<float>& liveExpr = g_fitter.expression();
+                const bool needOverride =
+                    jawIdx >= 0 && target > 0.f &&
+                    (jawIdx >= (int)liveExpr.size() || liveExpr[size_t(jawIdx)] < target);
+                if (needOverride) {
+                    std::vector<float> expr = liveExpr;
+                    if ((int)expr.size() <= jawIdx) expr.resize(size_t(jawIdx) + 1, 0.f);
+                    expr[size_t(jawIdx)] = std::max(expr[size_t(jawIdx)], target);
+                    std::vector<float> verts;
+                    g_fitter.basis().reconstruct(g_fitter.alpha(), expr, verts);
+                    mirror::RotateAboutCentroid(verts, g_fitter.rotation());
+                    roots.setFittedFace(verts, rootFaceTrisUploaded ? std::vector<int>()
+                                                                    : g_fitter.basis().triangles());
+                } else {
+                    roots.setFittedFace(g_fitter.vertices(),
+                                        rootFaceTrisUploaded ? std::vector<int>()
+                                                             : g_fitter.basis().triangles());
+                }
+                rootFaceTrisUploaded = true;
+            };
             auto uploadFaceColorsIfFresh = [&]() {
                 if (g_capture_loaded.empty() && g_face_colors_fresh &&
                     !g_face_colors.empty()) {
@@ -3092,10 +3142,7 @@ int main(int argc, char** argv) {
                     !rootSeq.valid() || rootSeq.stage() == RootSequence::Stage::Face;
                 if (g_fitter.valid() && g_track_on && g_face.valid && !rootHold) {
                     if (viewerDrivesMask) {
-                        roots.setFittedFace(g_fitter.vertices(),
-                                            rootFaceTrisUploaded ? std::vector<int>()
-                                                                 : g_fitter.basis().triangles());
-                        rootFaceTrisUploaded = true;
+                        uploadLiveFace();
                     }
                     // Same live fit, kept rather than thrown away this time --
                     // see faceTrackRec's declaration above.
@@ -3143,7 +3190,7 @@ int main(int argc, char** argv) {
                 // too so mask 0 does not sit frozen on the tracker's last
                 // frame for that gap.
                 if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt);
+                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
@@ -3192,10 +3239,7 @@ int main(int argc, char** argv) {
                     // ...and the live tracker only while the sequence is
                     // still on Face: from Grow on the mask is the sitting's,
                     // not whoever is in front of the sensor now.
-                    roots.setFittedFace(g_fitter.vertices(),
-                                        rootFaceTrisUploaded ? std::vector<int>()
-                                                             : g_fitter.basis().triangles());
-                    rootFaceTrisUploaded = true;
+                    uploadLiveFace();
                 } else if (!g_drive_roots && roots.usingFittedFace()) {
                     roots.clearFittedFace();
                     // clearFittedFace() puts faceTris_ back to the canonical
@@ -3257,7 +3301,7 @@ int main(int argc, char** argv) {
                 squareAnchorMaskOnLeavingFace(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
                 if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt);
+                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
                 // The live tracker keeps recording, for as long as the same
                 // visitor is still actually present -- see the phase-agnostic
                 // finish() trigger above, which ends this once they're gone.

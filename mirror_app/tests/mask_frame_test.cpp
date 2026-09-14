@@ -357,6 +357,52 @@ void firstHopStraight() {
     check(maxDev < tol, "every node of the first root stays close to the axis line (no shell/cavity forces on hop 1)");
 }
 
+// The forced mouth-open (root_sequence.h's mouth_open_*, root_scene.mm's
+// mouthOffsetFromBasis): does raising the jawOpen (or its fallback) mode's
+// coefficient actually open the mouth, monotonically? "Open" is measured the
+// same way jawOpenModeIndex's fallback path measures it -- the vertical gap
+// between the inner lip's upper-centre and lower-centre dlib landmarks
+// (61-63 vs 65-67) -- not just asserting the chosen mode has *a* nonzero
+// entry there, so a mode that grew the gap the wrong way (or barely at all)
+// would fail this even if it were the one jawOpenModeIndex picked.
+void jawOpenMonotonic() {
+    printf("jaw open monotonic\n");
+    mirror::FaceBasis basis;
+    std::string err;
+    const std::string path = std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin";
+    if (!basis.load(path, err)) { printf("  skip: %s\n", err.c_str()); return; }
+
+    bool usedFallback = false;
+    const int jawIdx = mirror::jawOpenModeIndex(basis, &usedFallback);
+    printf("  chosen mode %d (%s)%s\n", jawIdx,
+           (jawIdx >= 0 && jawIdx < (int)basis.expressionNames().size())
+               ? basis.expressionNames()[size_t(jawIdx)].c_str() : "?",
+           usedFallback ? " -- fallback (no \"jawOpen\" in this basis)" : "");
+    check(jawIdx >= 0, "a mode was found to drive the forced mouth-open");
+    if (jawIdx < 0) return;
+
+    auto innerLipGap = [&](float coeff) {
+        std::vector<float> expr(size_t(jawIdx) + 1, 0.f);
+        expr[size_t(jawIdx)] = coeff;
+        std::vector<float> lm;
+        basis.reconstructLandmarks({}, expr, lm);
+        double upperY = 0.0, lowerY = 0.0;
+        for (int i : {61, 62, 63}) upperY += lm[size_t(i) * 3 + 1];
+        for (int i : {65, 66, 67}) lowerY += lm[size_t(i) * 3 + 1];
+        upperY /= 3.0; lowerY /= 3.0;
+        return std::fabs(upperY - lowerY);
+    };
+
+    const double gap0  = innerLipGap(0.f);
+    const double gap40 = innerLipGap(0.4f);
+    const double gap80 = innerLipGap(0.8f);
+    const double gap12 = innerLipGap(1.2f);
+    printf("  inner-lip gap at coeff 0/0.4/0.8/1.2: %.4f / %.4f / %.4f / %.4f\n",
+           gap0, gap40, gap80, gap12);
+    check(gap40 > gap0 + 1e-6 && gap80 > gap40 + 1e-6 && gap12 > gap80 + 1e-6,
+          "the inner-lip gap grows monotonically with the coefficient");
+}
+
 }  // namespace
 
 int main() {
@@ -365,6 +411,7 @@ int main() {
     spawnAtMouth(/*anchorOnAxis=*/false);
     firstHopStraight();
     bankPose();
+    jawOpenMonotonic();
     printf("mask_frame_test: %s\n", g_fail ? "FAIL" : "OK");
     return g_fail ? 1 : 0;
 }

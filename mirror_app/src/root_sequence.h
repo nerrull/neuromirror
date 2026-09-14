@@ -62,6 +62,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 #include <vector>
 
@@ -202,6 +203,31 @@ struct RootSequenceParams {
     float orbit_zoom          = 0.55f;
     float orbit_target_lift   = 0.f;
 
+    // --- mouth open (Grow onward) ------------------------------------------
+    // The root leaves mask 0 through its mouth (root_scene.mm's
+    // mouthOffsetFromBasis), so the jaw is forced open as the root is about
+    // to emerge -- otherwise the hole it grows out of is a closed mouth the
+    // root clips through. Applied each frame as
+    // expr[jawOpen] = max(replayed_or_live, ramp * mouth_open_amount): the
+    // override only ever raises the jaw, so a visitor already talking is not
+    // clamped shut. Held open through Grow/Turn/Orbit (the root is coming out
+    // of it the whole time).
+    //
+    // The ramp starts mouth_open_lead seconds before Grow -- floored at
+    // mouth_open_seconds so the ease actually finishes by the time Grow
+    // begins whenever the ease is the longer of the two knobs (the ordinary
+    // case: a sub-2s ease against a many-second face hold) -- and eases over
+    // mouth_open_seconds from there. Face's own end
+    // (RootSequence::mouthOpenRamp; clothClearAt_ + face_hold_after_cloth_seconds)
+    // is known well ahead of when it happens, the moment the cloth clears, so
+    // this is not a guess. A jump straight into Grow/Turn/Orbit (no Face
+    // traversed, so that end time was never seen) starts the ramp at the
+    // moment Face was left instead -- logged once, since that is the "not
+    // knowable" fallback the plan calls for.
+    float mouth_open_amount  = 0.8f;   // the jawOpen coefficient at full open
+    float mouth_open_seconds = 1.2f;   // the ease-in
+    float mouth_open_lead    = 0.5f;   // seconds before Grow the ease starts
+
     // --- Outro -------------------------------------------------------------
     float datamosh_seconds = 3.0f;
     float fade_seconds     = 2.0f;
@@ -256,6 +282,8 @@ public:
         panAz_ = panEl_ = 0.f;
         prevAz_ = prevEl_ = 0.f;
         prevValid_ = false;
+        faceLeftAt_ = -1.0;
+        mouthOpenFallbackLogged_ = false;
         // A hood still placed from a previous run on the same plant (the
         // operator re-entering the phase without a replant) starts hidden
         // and dark again, so the Orbit has something to reveal. No-ops when
@@ -647,6 +675,46 @@ public:
     bool  done()  const { return stage_ == Stage::Done; }
     // 0..1, how far into the outro's screen-fade the sequence is.
     float fade()  const { return fade_; }
+
+    // 0..1 smoothstep ramp toward the forced jaw-open (see
+    // RootSequenceParams' mouth_open_* comment for the timing). The caller
+    // multiplies by mouth_open_amount and applies it as
+    // expr[jawOpen] = max(replayed_or_live, ramp * amount) -- this method
+    // only computes the ramp, not the override itself, since the two places
+    // that apply it (main.mm's live path, RootFaceSequence's replay) reach
+    // the mesh differently.
+    float mouthOpenRamp(double clock, const RootSequenceParams& P) {
+        const double ease = std::max(0.01f, P.mouth_open_seconds);
+        double start;
+        if (clothClearAt_ >= 0.0) {
+            const double end = std::max((double)P.face_seconds,
+                                        clothClearAt_ + (double)P.face_hold_after_cloth_seconds);
+            // Floored at `ease`, not just `lead`: the ease should actually be
+            // done by the time Grow starts whenever it is the longer of the
+            // two knobs (a sub-2s ease against a many-second face hold is the
+            // ordinary case) -- otherwise the mouth would still be mid-open
+            // the instant the root is meant to be emerging from it.
+            start = end - std::max((double)std::max(0.f, P.mouth_open_lead), ease);
+        } else if (stage_ != Stage::Face) {
+            // Face was left without the cloth ever having been seen to clear
+            // -- a phase jump, not the show's own path (which always sees
+            // ClothCleared well before Face ends). The end time this ramp
+            // would otherwise anchor to was never known, so start it at the
+            // moment Face was left instead.
+            if (!mouthOpenFallbackLogged_) {
+                std::fprintf(stderr,
+                    "mouth-open: Face's cloth-clear time was never seen (a phase jump) -- "
+                    "starting the ramp at the Face->%s cut instead of %.2fs before it.\n",
+                    stageName(stage_), (double)P.mouth_open_lead);
+                mouthOpenFallbackLogged_ = true;
+            }
+            start = faceLeftAt_;
+        } else {
+            return 0.f;   // still in Face, cloth not cleared yet -- not open
+        }
+        const double u = (clock - start) / ease;
+        return smoothstep(std::clamp(u, 0.0, 1.0));
+    }
     static const char* stageName(Stage s) {
         switch (s) {
             case Stage::Face:   return "face";
@@ -663,7 +731,15 @@ private:
     static constexpr float kDeg = 3.14159265f / 180.f;
     struct Bound { float p[3]; float r; };
 
-    void enter(Stage s, double clock) { stage_ = s; stageT0_ = clock; }
+    void enter(Stage s, double clock) {
+        // The mouth-open ramp's fallback anchor (see mouthOpenRamp): the
+        // instant Face is actually left, whatever cut it every visit's own
+        // clothClearAt_ + face_hold_after_cloth_seconds -- so a jump that
+        // skips Face's ordinary cloth-clear detection still has something to
+        // start the ramp from.
+        if (stage_ == Stage::Face && s != Stage::Face) faceLeftAt_ = clock;
+        stage_ = s; stageT0_ = clock;
+    }
 
     // Deal this frame's sim steps: growStepsPerSec_ x dt, carried as a
     // fraction between frames so the rate is honoured below one step per
@@ -960,6 +1036,13 @@ private:
     double clothClearAt_ = -1.0;   // first clock clothCleared was seen true, -1 until then
     float  fade_ = 0.f;
     bool   moshFired_ = false;
+
+    // Mouth-open ramp state (see mouthOpenRamp): the clock Face was actually
+    // left (enter()'s Face -> anything edge), used as the fallback anchor
+    // when clothClearAt_ was never seen, and whether that fallback has
+    // already been logged this sitting.
+    double faceLeftAt_ = -1.0;
+    bool   mouthOpenFallbackLogged_ = false;
 
     rootsim::SimMask anchor_{};
     float anchorExt_ = 1.f, tightR_ = 1.f, structR_ = 1.f;

@@ -1,6 +1,7 @@
 #include "root_scene.h"
 #include "metal_context.h"
 #include "face_basis.h"
+#include "app_state.h"   // g_root_seq.mouth_open_amount -- see syncFaceParams
 
 #include <algorithm>
 #include <cmath>
@@ -73,51 +74,76 @@ void normalizeMesh(std::vector<float>& v) {
 //
 // Mouth = the centroid of dlib landmarks 48..67 (the whole outer+inner lip
 // contour, the standard dlib-68 mouth block -- see face_fit.cpp's
-// MP68Indices() comment for the layout). Cached after the first call: the
-// basis file does not change at runtime, and this would otherwise reload and
-// reparse it every syncFaceParams() (i.e. every regrow/replant/rebuildFace).
+// MP68Indices() comment for the layout). The basis and the neutral mesh's own
+// centroid/normalising factor are loaded/computed once (the file does not
+// change at runtime, and this would otherwise reload and reparse it every
+// syncFaceParams() -- i.e. every regrow/replant/rebuildFace); the mouth
+// centroid itself is re-evaluated per call against `jawOpenAmount` since
+// that is cheap (one non-zero expression coefficient -- FaceBasis::accumulate
+// skips zero ones) and is how the spawn point tracks a forced-open jaw (see
+// RootScene::syncFaceParams).
+//
+// jawOpenAmount = 0 (the default) is the old neutral-mouth behaviour.
 // Returns false (offset left at the mesh centroid, i.e. no change from the
 // old centre-of-mask spawn) if the basis cannot be loaded.
-bool mouthOffsetFromBasis(float out[3]) {
+bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
     static bool tried = false, ok = false;
-    static float cached[3] = {0.f, 0.f, 0.f};
+    static mirror::FaceBasis basis;
+    static double neutralCx = 0, neutralCy = 0, neutralCz = 0, neutralM = 1e-9;
+    static int jawIdx = -1;
     if (!tried) {
         tried = true;
-        mirror::FaceBasis basis;
         std::string err;
         if (basis.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", err)) {
             const std::vector<float>& neutral = basis.neutral();
-            const std::vector<float>& lm = basis.lmNeutral();
-            if (neutral.size() >= 3 && lm.size() >= 68 * 3) {
-                double cx = 0, cy = 0, cz = 0;
+            if (neutral.size() >= 3 && basis.lmNeutral().size() >= 68 * 3) {
                 const size_t n = neutral.size() / 3;
                 for (size_t i = 0; i < n; ++i) {
-                    cx += neutral[i*3]; cy += neutral[i*3+1]; cz += neutral[i*3+2];
+                    neutralCx += neutral[i*3]; neutralCy += neutral[i*3+1]; neutralCz += neutral[i*3+2];
                 }
-                cx /= (double)n; cy /= (double)n; cz /= (double)n;
-                double m = 1e-9;
+                neutralCx /= (double)n; neutralCy /= (double)n; neutralCz /= (double)n;
                 for (size_t i = 0; i < n; ++i) {
-                    m = std::max({m, std::fabs(neutral[i*3]   - cx),
-                                     std::fabs(neutral[i*3+1] - cy),
-                                     std::fabs(neutral[i*3+2] - cz)});
+                    neutralM = std::max({neutralM, std::fabs(neutral[i*3]   - neutralCx),
+                                          std::fabs(neutral[i*3+1] - neutralCy),
+                                          std::fabs(neutral[i*3+2] - neutralCz)});
                 }
-                double mx = 0, my = 0, mz = 0;
-                const int kFirst = 48, kCount = 20;   // dlib 48..67
-                for (int i = 0; i < kCount; ++i) {
-                    mx += lm[size_t(kFirst+i)*3];
-                    my += lm[size_t(kFirst+i)*3+1];
-                    mz += lm[size_t(kFirst+i)*3+2];
-                }
-                mx /= kCount; my /= kCount; mz /= kCount;
-                cached[0] = (float)((mx - cx) / m);
-                cached[1] = (float)((my - cy) / m);
-                cached[2] = (float)((mz - cz) / m);
                 ok = true;
+                bool usedFallback = false;
+                jawIdx = mirror::jawOpenModeIndex(basis, &usedFallback);
+                fprintf(stderr,
+                    "mouth-open: spawn point tracks expression mode %d (%s)%s\n", jawIdx,
+                    (jawIdx >= 0 && jawIdx < (int)basis.expressionNames().size())
+                        ? basis.expressionNames()[size_t(jawIdx)].c_str() : "?",
+                    usedFallback ? " -- no \"jawOpen\" in this basis, chose the mode that "
+                                   "most separates the inner lip instead" : "");
             }
         }
+        if (!ok) {
+            fprintf(stderr, "mouth-open: face basis unavailable (%s); mouth spawn stays at the "
+                            "mesh centroid\n", err.c_str());
+        }
     }
-    out[0] = cached[0]; out[1] = cached[1]; out[2] = cached[2];
-    return ok;
+    if (!ok) { out[0] = out[1] = out[2] = 0.f; return false; }
+
+    std::vector<float> expr;
+    if (jawIdx >= 0) {
+        expr.assign(size_t(jawIdx) + 1, 0.f);
+        expr[size_t(jawIdx)] = jawOpenAmount;
+    }
+    std::vector<float> lm;
+    basis.reconstructLandmarks({}, expr, lm);
+    double mx = 0, my = 0, mz = 0;
+    const int kFirst = 48, kCount = 20;   // dlib 48..67
+    for (int i = 0; i < kCount; ++i) {
+        mx += lm[size_t(kFirst+i)*3];
+        my += lm[size_t(kFirst+i)*3+1];
+        mz += lm[size_t(kFirst+i)*3+2];
+    }
+    mx /= kCount; my /= kCount; mz /= kCount;
+    out[0] = (float)((mx - neutralCx) / neutralM);
+    out[1] = (float)((my - neutralCy) / neutralM);
+    out[2] = (float)((mz - neutralCz) / neutralM);
+    return true;
 }
 
 std::vector<int> cropOvalTris(const std::vector<float>& v, const std::vector<int>& tris,
@@ -349,12 +375,19 @@ void RootScene::setSpeciesIndex(int i) {
 
 void RootScene::syncFaceParams() {
     simParams_.faceScale = faceScale;
-    // Where the mouth is, in the same normalised frame -- from the neutral
-    // basis face, not whatever capture is loaded (see mouthOffsetFromBasis).
+    // Where the mouth is, in the same normalised frame -- from the basis
+    // face, not whatever capture is loaded (see mouthOffsetFromBasis).
     // Independent of faceVerts_/canonVerts_ below, so it is set even before
     // any mesh has been loaded.
+    //
+    // With the jaw forced open (root_sequence.h's mouth_open_*), not neutral:
+    // the root is grown after the mouth is opened (RootSequence's Face stage
+    // ramps it open well before Grow starts), and the hole it should spawn
+    // through is where the opened lips actually are, not where a closed
+    // mouth's centroid sits. syncFaceParams runs at reset()/replant(), before
+    // any of that sitting's growth, so this is the one point to pick it up.
     float mouth[3];
-    mouthOffsetFromBasis(mouth);
+    mouthOffsetFromBasis(mouth, g_root_seq.mouth_open_amount);
     simParams_.faceMouthU = mouth[0];
     simParams_.faceMouthV = mouth[1];
     simParams_.faceMouthN = mouth[2];

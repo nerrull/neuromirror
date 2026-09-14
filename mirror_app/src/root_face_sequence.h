@@ -57,9 +57,19 @@ public:
         uploadedTris_ = false;
         valid_ = track_.valid() && basis_->valid();
         if (valid_) computeMeanRot();
+        // Which mode the forced jaw-open (mouthOpenTarget below) drives --
+        // see face_basis.h's jawOpenModeIndex. Looked up once per sitting
+        // rather than logged here: main.mm logs the choice once at startup,
+        // against the same basis.
+        jawIdx_ = valid_ ? mirror::jawOpenModeIndex(*basis_) : -1;
     }
 
-    void step(RootScene& roots, double phaseTime, double dt) {
+    // `mouthOpenTarget` is RootSequence::mouthOpenRamp(...) * mouth_open_amount
+    // for this frame, precomputed by the caller (main.mm) -- this class does
+    // not know about RootSequenceParams. Applied as
+    // expr[jawOpen] = max(recorded, mouthOpenTarget): raises the jaw, never
+    // clamps it, so a visitor caught mid-word on the recording still reads.
+    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f) {
         (void)dt;
         if (!valid_) return;
 
@@ -82,7 +92,16 @@ public:
             --lo;
         const mirror::FaceTrackFrame& frame = frames[lo];
 
-        basis_->reconstruct(track_.alpha, frame.expr, verts_);
+        // Copy-and-raise, not a mutation of the recorded frame: the track on
+        // disk stays the visitor's own, untouched, recording.
+        if (jawIdx_ >= 0 && mouthOpenTarget > 0.f) {
+            exprScratch_ = frame.expr;
+            if ((int)exprScratch_.size() <= jawIdx_) exprScratch_.resize(size_t(jawIdx_) + 1, 0.f);
+            exprScratch_[size_t(jawIdx_)] = std::max(exprScratch_[size_t(jawIdx_)], mouthOpenTarget);
+            basis_->reconstruct(track_.alpha, exprScratch_, verts_);
+        } else {
+            basis_->reconstruct(track_.alpha, frame.expr, verts_);
+        }
         // Delta from the recording's own mean pose, not the frame's raw
         // (absolute) rotation -- see the class comment. rot' = frame.rot *
         // meanRot^T: identity when frame.rot == meanRot_, so a frame at
@@ -153,4 +172,6 @@ private:
     bool uploadedTris_ = false;
     std::vector<float> verts_;
     float meanRot_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    int jawIdx_ = -1;                 // see begin()/jawOpenModeIndex
+    std::vector<float> exprScratch_;   // scratch for the forced-open copy, see step()
 };

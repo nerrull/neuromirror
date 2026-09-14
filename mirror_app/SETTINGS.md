@@ -84,7 +84,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (97 parameters)
+## show (100 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -130,6 +130,9 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/head pan tau (s)` | float | 0.05 .. 3 | 0.6 |
 | `show/roots/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
 | `show/roots/min` | float | 0 .. 120 | 40 |
+| `show/roots/mouth open amount` | float | 0 .. 1.5 | 0.8 |
+| `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.5 |
+| `show/roots/mouth open seconds` | float | 0.1 .. 5 | 1.2 |
 | `show/roots/orbit bound frac` | float | 0.1 .. 1 | 0.53 |
 | `show/roots/orbit elevation (deg)` | float | -60 .. 80 | 25 |
 | `show/roots/orbit max radius` | float | 20 .. 400 | 73 |
