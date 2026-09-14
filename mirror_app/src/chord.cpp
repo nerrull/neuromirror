@@ -28,6 +28,13 @@ float NoteToHz(float midi) {
     return 440.f * std::pow(2.f, (midi - 69.f) / 12.f);
 }
 
+// Exact inverse of NoteToHz -- unrounded, so a Hz that isn't sitting on a
+// standard equal-tempered pitch (e.g. the pluck's raw center-override Hz)
+// still converts to a precise fractional MIDI note rather than snapping.
+float HzToNote(float hz) {
+    return 69.f + 12.f * std::log2(hz / 440.f);
+}
+
 // Snap a linear target to the nearest actual chord tone of `stage`, searching
 // each voice's offset across the octave above and below (never wider -- see
 // the header on `Comb_Tuning`'s range). This is what keeps the pluck sounding
@@ -61,8 +68,7 @@ float Chord::StageThreshold(int stage) const {
 
 float Chord::NearestNoteHz(float hz) {
     hz = std::max(1.f, hz);
-    const float midi = 69.f + 12.f * std::log2(hz / 440.f);
-    return NoteToHz(std::round(midi));
+    return NoteToHz(std::round(HzToNote(hz)));
 }
 
 void Chord::reset() {
@@ -80,20 +86,24 @@ void Chord::reset() {
 
     // --- root continuity: pick up the note idle was just sounding ----------
     //
-    // `v_.pluck_note` still holds the pluck's actual *target* note (MIDI) as
-    // of the frame just before this call -- the snapped chord tone update()
-    // computed, before any of the pinned-pluck exploration below it shaded
-    // `comb_hz` for the ear. That shading (wander's continuous two-sine
-    // drift, the center-frequency override) is a Hz-only detune the comb
-    // rings with; it was never a note this visitor's chord should continue,
-    // only noise around the note that already was. What the room actually
-    // *tuned to* is the target note plus this visitor's own per-visitor
-    // offset (`pluck_offset_semitones_`, semitones, only if
-    // `pluck_offset_enabled` -- that one *is* a real pitch, not noise; see
-    // its comment in chord.h). Composed directly in semitones, never by
-    // round-tripping through Hz and back (NoteToHz then log2), so a
-    // fractional offset survives exactly instead of picking up floating-point
-    // drift. Read before anything here overwrites it.
+    // The room's idle centre is `v_.pluck_note` -- the snapped chord tone
+    // update() computed -- unless the pinned pluck's center-frequency
+    // override was on, in which case the override *is* the chosen centre and
+    // replaces it (`HzToNote(cfg_.pluck_center_hz)`), exactly mirroring the
+    // order update() itself builds `comb_hz` in: the override replaces the
+    // Hz first, and only then does the per-visitor offset apply on top of it
+    // (see update()'s pinned-pluck-exploration block). Wander's continuous
+    // two-sine drift is the one piece left out -- it is a Hz-only detune the
+    // comb rings with, never a note this visitor's chord should continue,
+    // only noise around the centre that already was. So what the room
+    // actually *tuned to* is the centre (override if enabled, else the
+    // snapped chord tone) plus this visitor's own per-visitor offset
+    // (`pluck_offset_semitones_`, semitones, only if `pluck_offset_enabled`
+    // -- that one *is* a real pitch, not noise; see its comment in chord.h).
+    // The offset is added directly in semitones, never by round-tripping
+    // through Hz and back, so a fractional offset survives exactly instead
+    // of picking up floating-point drift. Read before anything here
+    // overwrites it.
     //
     // Only trusted when `last_update_was_idle_` -- i.e. the frame that left
     // this pluck_note behind was itself an idle-style one (fit <= 0). Two
@@ -103,7 +113,10 @@ void Chord::reset() {
     // was still actively above 0 -- climbing or stalled -- right up to the
     // handoff, so there was no genuine idle pin to continue).
     if (cfg_.root_follows_idle_tuning && last_update_was_idle_) {
-        const float idle_note = v_.pluck_note +
+        const float centre_note = cfg_.pluck_center_override_enabled
+            ? HzToNote(cfg_.pluck_center_hz)
+            : v_.pluck_note;
+        const float idle_note = centre_note +
             (cfg_.pluck_offset_enabled ? pluck_offset_semitones_ : 0.f);
         // Whole octaves only -- the note class continues, the register
         // stays the pad's designed one (nearest octave to the configured
@@ -132,7 +145,7 @@ void Chord::reset() {
     // See the "pinned-pluck exploration" comment in chord.h: the wander's
     // clock restarts clean, and a fresh per-visitor offset is drawn whether
     // or not it's currently enabled. This is *this* visitor's own draw, not
-    // the departing one's -- the one baked into `idle_hz` above already
+    // the departing one's -- the one baked into `idle_note` above already
     // belonged to whoever just left and is spent the moment it is folded
     // into `visitor_root_delta_`, so applying this fresh draw here is not
     // reapplying that same offset, it is the ordinary per-visitor draw every

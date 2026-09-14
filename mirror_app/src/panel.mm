@@ -1126,13 +1126,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "The next visitor's chord starts on the pinned\n"
-                            "pluck's target note at the end of Idle -- the\n"
-                            "snapped chord tone plus the per-visitor offset if\n"
-                            "that was on -- carried into the pad's own\n"
-                            "register. Wander and the center-Hz override are\n"
-                            "left out: they only shade the Hz the comb rang,\n"
-                            "not the note itself. Off is the old behaviour:\n"
-                            "every visitor starts on the key.");
+                            "pluck's centre at the end of Idle -- the snapped\n"
+                            "chord tone, or the center-Hz override's note when\n"
+                            "that's enabled -- plus the per-visitor offset if\n"
+                            "that was on, carried into the pad's own register.\n"
+                            "Wander is left out: it only shades the Hz the\n"
+                            "comb rang, not the note itself. Off is the old\n"
+                            "behaviour: every visitor starts on the key.");
                     }
                 }
                 ui::EndHeader();

@@ -207,16 +207,18 @@ public:
         // --- root continuity ------------------------------------------------
         //
         // The visitor who just left stood through the whole idle wait hearing
-        // the pinned pluck -- wander and center override folded into the Hz
-        // the comb actually rang, per-visitor offset folded into the note
-        // itself. If true, the next visitor's chord does not start over on
-        // the plain configured `root`: reset() reads the pluck's target note
-        // (the snapped chord tone, plus the per-visitor offset if that was
-        // on -- not the wander/override Hz-shading, which is ear noise
-        // around the note rather than the note itself) as of the instant
-        // Fitting took over, and carries that note's pitch class into the
-        // pad's own register (see reset()'s comment). Off is the old
-        // behaviour -- every visitor's chord starts on `root`, full stop.
+        // the pinned pluck -- wander folded into the Hz the comb actually
+        // rang, the center override (when enabled) standing in as the chosen
+        // centre itself, per-visitor offset folded into the note on top of
+        // that. If true, the next visitor's chord does not start over on the
+        // plain configured `root`: reset() reads the pluck's centre (the
+        // snapped chord tone, or the centre override's note when that was
+        // enabled) plus the per-visitor offset if that was on -- not wander,
+        // which is ear noise around the centre rather than the centre itself
+        // -- as of the instant Fitting took over, and carries that note's
+        // pitch class into the pad's own register (see reset()'s comment).
+        // Off is the old behaviour -- every visitor's chord starts on `root`,
+        // full stop.
         bool root_follows_idle_tuning = true;
     };
 

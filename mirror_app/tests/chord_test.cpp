@@ -34,6 +34,7 @@ void hold(mirror::Chord& c, float fit, float movement, float secs) {
 }
 
 float NoteToHz(float midi) { return 440.f * std::pow(2.f, (midi - 69.f) / 12.f); }
+float HzToNote(float hz) { return 69.f + 12.f * std::log2(hz / 440.f); }
 
 }  // namespace
 
@@ -408,6 +409,39 @@ int main() {
         check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
               "the per-visitor offset -- possibly fractional -- is carried into the "
               "continued root exactly, unlike wander/override");
+    }
+
+    // --- root follows idle tuning: the center override IS the continued -----
+    // centre (not excluded like wander)
+    //
+    // Unlike wander, the pinned pluck's center-frequency override is a
+    // deliberate choice of centre, not ear noise -- see the Config comment on
+    // `pluck_center_override_enabled`. With the override on, offset off, and
+    // wander on (to prove wander really is excluded even when it's the only
+    // other thing shading `comb_hz`), reset()'s continued root should be
+    // `HzToNote(pluck_center_hz)`, transposed by whole octaves into the pad's
+    // register -- not the snapped chord tone `pluck_note` would otherwise
+    // give, and not the wander-shaded Hz either.
+    {
+        mirror::Chord c;
+        c.config().pluck_center_override_enabled = true;
+        c.config().pluck_center_hz = 100.f;  // deliberately not a chord tone
+        c.config().pluck_offset_enabled = false;
+        c.config().pluck_wander_enabled = true;
+        c.config().pluck_wander_period_s = 1.f;
+        c.config().pluck_wander_depth = 0.3f;
+        hold(c, 0.f, 0.3f, 3.f);
+        check(std::fabs(c.voicing().comb_hz - 100.f) > 1.f,
+              "wander actually moved comb_hz well off the override's 100 Hz");
+
+        c.reset();
+        const float centre_note = HzToNote(100.f);
+        const float octaves = std::round((centre_note - c.config().root) / 12.f);
+        const float want_root = centre_note - octaves * 12.f;
+        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-3f,
+              "with the override on, reset()'s root continues HzToNote(pluck_center_hz) "
+              "-- the override IS the chosen centre -- transposed into the pad's "
+              "register, ignoring wander entirely");
     }
 
     if (failures == 0) std::printf("chord_test: OK\n");
