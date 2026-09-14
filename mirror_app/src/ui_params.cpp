@@ -113,6 +113,12 @@ const BankRule kBankRules[] = {
     {"sound",         Bank::Show},
 
     {"text",          Bank::Look},
+    // The press's cloth: its timings (hold/press/settle/release/fall), its
+    // physics and the film's look. The panel section was renamed from
+    // "transition" when the controls moved onto RootScene's cloth; the rule
+    // here was not, so every cloth/* key spent a while in no bank at all --
+    // drawn, editable, and silently dropped on save.
+    {"cloth",         Bank::Look},
     {"transition",    Bank::Look},
 
     {"mirror",        Bank::Mirror},

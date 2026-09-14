@@ -21,47 +21,6 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## Unassigned (35)
-
-These belong to no bank, so they are saved only in a whole-registry
-dump and load into nothing banked. Add a rule for their section.
-
-- `cloth/lock when the press starts`
-- `cloth/save a capture on lock`
-- `cloth/hold`
-- `cloth/press`
-- `cloth/settle`
-- `cloth/release`
-- `cloth/fall`
-- `cloth/clear distance (world units)`
-- `cloth/side force delay (s into release)`
-- `cloth/side force magnitude`
-- `cloth/refraction`
-- `cloth/film relief`
-- `cloth/film sheen`
-- `cloth/press depth`
-- `cloth/mask relief`
-- `cloth/shading span`
-- `cloth/align mask`
-- `cloth/mask scale x`
-- `cloth/mask scale y`
-- `cloth/mask offset x`
-- `cloth/mask offset y`
-- `cloth/show cloth`
-- `cloth/show mask`
-- `cloth/wireframe`
-- `cloth/gravity back (-z)`
-- `cloth/gravity down (-y)`
-- `cloth/friction`
-- `cloth/stretch`
-- `cloth/set (plasticity)`
-- `cloth/damping`
-- `cloth/relief shading`
-- `cloth/sheet oversize`
-- `cloth/substeps`
-- `cloth/iterations`
-- `cloth/sheet res`
-
 ## machine (18 parameters)
 
 | parameter | type | range | value |
@@ -124,7 +83,7 @@ dump and load into nothing banked. Add a rule for their section.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (92 parameters)
+## show (94 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -158,13 +117,14 @@ dump and load into nothing banked. Add a rule for their section.
 | `show/roots/fog fade seconds` | float | 0 .. 20 | 2 |
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/roots/frame margin` | float | 0 .. 1.5 | 0.25 |
-| `show/roots/grow face seconds` | float | 0.5 .. 30 | 4 |
+| `show/roots/grow face seconds` | float | 0.5 .. 60 | 10 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
 | `show/roots/grow rate max (steps-s)` | float | 1 .. 2000 | 1200 |
-| `show/roots/grow rate min (steps-s)` | float | 1 .. 2000 | 20 |
+| `show/roots/grow rate min (steps-s)` | float | 1 .. 2000 | 1 |
+| `show/roots/grow swing gate` | float | 0 .. 1 | 0.7 |
 | `show/roots/grow swing seconds` | float | 0 .. 10 | 3 |
 | `show/roots/grow timeout mult` | float | 1 .. 4 | 1.5 |
-| `show/roots/grow view tilt (deg)` | float | 0 .. 90 | 45 |
+| `show/roots/grow view tilt (deg)` | float | 0 .. 90 | 60 |
 | `show/roots/head pan` | bool | -- | 1 |
 | `show/roots/head pan (deg)` | float | -30 .. 30 | 5 |
 | `show/roots/head pan tau (s)` | float | 0.05 .. 3 | 0.6 |
@@ -180,6 +140,7 @@ dump and load into nothing banked. Add a rule for their section.
 | `show/roots/reveal min structures` | int | 0 .. 32 | 3 |
 | `show/roots/reveal mode` | int | 0 .. 1 | 0 |
 | `show/roots/reveal spacing` | float | 0.5 .. 6 | 1.2 |
+| `show/roots/reveal structures` | int | 0 .. 32 | 0 |
 | `show/roots/turn end elevation (deg)` | float | -60 .. 60 | 5 |
 | `show/roots/turn seconds` | float | 0.5 .. 20 | 6 |
 | `show/run the show` | bool | -- | 1 |
@@ -221,10 +182,45 @@ dump and load into nothing banked. Add a rule for their section.
 | `sound/wander cycle (s)` | float | 1 .. 300 | 126.1 |
 | `sound/wander depth` | float | 0.001 .. 0.5 | 0.01 |
 
-## look (14 parameters)
+## look (49 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
+| `cloth/align mask` | bool | -- | 0 |
+| `cloth/clear distance (world units)` | float | 0.2 .. 5 | 1.5 |
+| `cloth/damping` | float | 0.9 .. 1 | 0.985 |
+| `cloth/fall` | float | 0.5 .. 6 | 1.8 |
+| `cloth/film relief` | float | 0 .. 3 | 0.8 |
+| `cloth/film sheen` | float | 0 .. 1.5 | 0.35 |
+| `cloth/friction` | float | 0 .. 1 | 0.07 |
+| `cloth/gravity back (-z)` | float | 0 .. 20 | 6 |
+| `cloth/gravity down (-y)` | float | 0 .. 8 | 0 |
+| `cloth/hold` | float | 0 .. 3 | 0.5 |
+| `cloth/iterations` | int | 4 .. 64 | 24 |
+| `cloth/lock when the press starts` | bool | -- | 1 |
+| `cloth/mask offset x` | float | -0.2 .. 0.2 | 0 |
+| `cloth/mask offset y` | float | -0.2 .. 0.2 | 0 |
+| `cloth/mask relief` | float | 0.2 .. 4 | 2.2 |
+| `cloth/mask scale x` | float | 0.6 .. 1.4 | 1 |
+| `cloth/mask scale y` | float | 0.6 .. 1.4 | 1 |
+| `cloth/press` | float | 0.2 .. 6 | 1.6 |
+| `cloth/press depth` | float | 0 .. 0.4 | 0.22 |
+| `cloth/refraction` | float | 0 .. 0.25 | 0.05 |
+| `cloth/release` | float | 0.05 .. 3 | 0.7 |
+| `cloth/relief shading` | float | 0 .. 1 | 0.55 |
+| `cloth/save a capture on lock` | bool | -- | 1 |
+| `cloth/set (plasticity)` | float | 0 .. 8 | 2 |
+| `cloth/settle` | float | 0 .. 20 | 0 |
+| `cloth/shading span` | float | 1 .. 10 | 4 |
+| `cloth/sheet oversize` | float | 1 .. 1.3 | 1.08 |
+| `cloth/sheet res` | int | 16 .. 128 | 72 |
+| `cloth/show cloth` | bool | -- | 1 |
+| `cloth/show mask` | bool | -- | 1 |
+| `cloth/side force delay (s into release)` | float | 0 .. 30 | 17 |
+| `cloth/side force magnitude` | float | 0 .. 15 | 4 |
+| `cloth/stretch` | float | 0 .. 0.98 | 0.8 |
+| `cloth/substeps` | int | 1 .. 8 | 2 |
+| `cloth/wireframe` | bool | -- | 0 |
 | `text/edge softness` | float | 0.2 .. 3 | 1 |
 | `text/inversion` | float | 0 .. 1 | 1 |
 | `text/raster px` | int | 64 .. 1024 | 256 |

@@ -1460,7 +1460,8 @@ int main(int argc, char** argv) {
     auto dealBankFaces = [&](const std::string& excludeId) {
         if (!roots.valid()) return;
         const int N = std::max(1, roots.simParams().N);
-        const int want = (N - 1) + std::max(0, g_root_seq.reveal_max_structures) * N;
+        const int hood = std::max(g_root_seq.reveal_max_structures, g_root_seq.reveal_structures);
+        const int want = (N - 1) + std::max(0, hood) * N;
         std::vector<mirror::FaceCapture> bank;
         // g_capture_ids is oldest first (ListCaptures); the bank is newest first.
         for (auto it = g_capture_ids.rbegin();
@@ -1484,7 +1485,7 @@ int main(int argc, char** argv) {
             bank.push_back(c->second);
         }
         roots.assignBankFaces(bank, g_root_seq.reveal_max_structures,
-                              g_root_seq.reveal_min_structures);
+                              g_root_seq.reveal_min_structures, g_root_seq.reveal_structures);
     };
     // The auto-capture, at the Transition -> Roots cut: the live fit, its
     // colours as sampled off the mirror (what mask 0 has been wearing through

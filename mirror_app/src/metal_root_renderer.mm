@@ -657,6 +657,19 @@ void MetalRootRenderer::triggerDatamosh(float seconds) {
     moshStart_ = postTime;
 }
 
+void MetalRootRenderer::cancelDatamosh() {
+    moshTriggered_ = false;
+    moshUntil_ = postTime;
+    // The feedback buffer holds the last frame the effect wrote, and the
+    // rising-edge reset that would normally discard it only fires when the
+    // effect is seen to switch on -- which, with a trigger that outlived the
+    // scene, it never was seen to switch off. Both go here, so the next run
+    // starts from its own first frame whatever the last one left behind.
+    moshHistValid_ = false;
+    moshWasOn_ = false;
+    prevViewProjValid_ = false;
+}
+
 bool MetalRootRenderer::datamoshActive() const {
     return post.mosh || (moshTriggered_ && postTime < moshUntil_);
 }

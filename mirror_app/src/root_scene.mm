@@ -439,7 +439,7 @@ void RootScene::ensureVariations(int K) {
 }
 
 void RootScene::addNeighbours(int count, int variations, float spacing, float structR,
-                              const float centre[3], float keepClearAz) {
+                              const float centre[3], float camAz, float camR, float tanH) {
     if (!rr_ || !sim_) return;
     ensureVariations(variations);
     rr_->clearInstances();
@@ -447,36 +447,57 @@ void RootScene::addNeighbours(int count, int variations, float spacing, float st
     if (variations_.empty()) { rebuildFace(); return; }
 
     // Yaw and a little scale per structure are the only randomness left; the
-    // pattern itself is the phyllotaxis. Seeded from the plant's own seed so
-    // the hood is the same for every visitor to the same parameters.
+    // pattern itself is the fan. Seeded from the plant's own seed so the
+    // hood is the same for every visitor to the same parameters.
     std::mt19937 rng(simParams_.seed * 7919u + 99u);
     std::uniform_real_distribution<float> U(0.f, 1.f);
-    constexpr float kGoldenAngle = 2.39996323f;   // pi (3 - sqrt 5)
     constexpr float kPi = 3.14159265f;
+    constexpr float kGoldenFrac = 0.6180339887f;   // 1/phi
+
+    // The band of the view the subject itself covers: its masks' horizontal
+    // reach about the centre, as an angle from the camera. A neighbour's
+    // centre goes outside it, so what pops in is beside the subject and not
+    // hidden behind it -- the old sunflower put its first seed dead behind,
+    // where the Reveal's camera could not see it at all.
+    float halfW = 0.f;
+    for (const auto& m : plannedMasks()) {
+        const float dx = m.pos[0] - centre[0], dz = m.pos[2] - centre[2];
+        halfW = std::max(halfW, std::sqrt(dx * dx + dz * dz) + std::max(m.rWidth, m.rHeight));
+    }
+    camR = std::max(camR, 1.f);
+    const float psiEdge = std::atan(std::max(tanH, 0.1f));
+    const float psi0    = std::min(std::atan(halfW * 0.8f / camR), psiEdge * 0.5f);
+    const float psiMax  = std::max(psiEdge * 0.85f, psi0 + 0.05f);
+
     for (int k = 0; k < count; ++k) {
         const Variation& v = variations_[size_t(k) % variations_.size()];
-        // Sunflower: the k-th seed at k golden angles round and sqrt(k+1)
-        // out, which packs structures evenly at any count -- spacing is the
-        // multiple of this structure's radius between neighbours. Turned so
-        // seed 0, the first to pop in and the nearest, stands directly
-        // *behind* the subject from the camera (keepClearAz is the camera's
-        // azimuth, i.e. where the eye is; +pi is the far side), where the
-        // Reveal's held camera can see it over the subject's shoulder rather
-        // than beside the lens.
-        float a = keepClearAz + kPi + float(k) * kGoldenAngle;
         const float ring = std::max(0.5f, spacing) * structR * std::sqrt(float(k + 1));
-        // Keep out of the wedge the camera is looking through. The camera
-        // looks roughly horizontally at the hanging structure, so a structure
-        // behind the subject is fine and one in front of it is a wall across
-        // the frame. Rather than nudging such a placement sideways -- which
-        // at the near rings still leaves it a few units from the lens, out
-        // of frame until the orbit sweeps a wall through it -- it is put
-        // straight across to the far side, where it is one more structure
-        // standing behind the subject.
-        float rel = a - keepClearAz;
-        while (rel >  kPi) rel -= 2.f * kPi;
-        while (rel < -kPi) rel += 2.f * kPi;
-        if (std::fabs(rel) < 1.0f) a += kPi;
+        // Where in the view: a golden-ratio sequence over [0,1), so the
+        // structures spread evenly across the fan at any count and alternate
+        // sides; mapped onto the view angle outside the subject's band and
+        // inside the frustum's edge.
+        float u = 0.5f + float(k + 1) * kGoldenFrac;
+        u -= std::floor(u);
+        const float side = u < 0.5f ? -1.f : 1.f;
+        const float psi  = psi0 + std::fabs(2.f * u - 1.f) * (psiMax - psi0);
+        // The azimuth off the far side (theta = 0 is dead behind the subject)
+        // that puts this ring's structure at that view angle: from the eye
+        // it is ring sin(theta) across and camR + ring cos(theta) deep, and
+        // the ratio is tan(psi). The left side is monotonic in theta on
+        // [0, pi/2], so bisect; a ring too small to reach the angle while
+        // still behind the subject stops at pi/2, beside it.
+        const float t = std::tan(psi);
+        auto f = [&](float th) { return ring * std::sin(th) - t * (camR + ring * std::cos(th)); };
+        float theta = 0.5f * kPi;
+        if (f(theta) > 0.f) {
+            float lo = 0.f, hi = theta;
+            for (int it = 0; it < 40; ++it) {
+                const float mid = 0.5f * (lo + hi);
+                (f(mid) < 0.f ? lo : hi) = mid;
+            }
+            theta = 0.5f * (lo + hi);
+        }
+        const float a = camAz + kPi + side * theta;
 
         MetalRootRenderer::InstancePlacement pl;
         pl.rotYaw = U(rng) * 6.2831853f;
@@ -1229,7 +1250,7 @@ RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
 }
 
 void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
-                                int maxStructures, int minStructures) {
+                                int maxStructures, int minStructures, int forceStructures) {
     bankFaces_.clear();
     chainFaces_.clear();
     structureFaces_.clear();
@@ -1269,12 +1290,16 @@ void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
     int count = std::min(older / N, std::max(0, maxStructures));
     bool placeholder = false;
     if (count <= 0) { count = std::max(0, minStructures); placeholder = true; }
+    // The operator's count overrides the bank's: exactly this many, dealt
+    // the older captures in order and then round the whole bank again.
+    if (forceStructures > 0) { count = forceStructures; placeholder = false; }
     for (int s = 0; s < count; ++s) {
         StructureFaces sf;
         sf.captureIdx.assign(size_t(N), -1);
         for (int j = 0; j < N; ++j) {
-            if (!placeholder) sf.captureIdx[size_t(j)] = first + s * N + j;
-            else if (have > 0) sf.captureIdx[size_t(j)] = (s * N + j) % have;
+            if (have <= 0) continue;
+            const int idx = placeholder ? s * N + j : first + s * N + j;
+            sf.captureIdx[size_t(j)] = idx < have ? idx : idx % have;
         }
         structureFaces_.push_back(std::move(sf));
     }

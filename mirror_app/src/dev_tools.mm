@@ -2121,10 +2121,13 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 
 // --seqshot <prefix> [W H] [growth fields...]
 //
-// The root timeline from Grow to Orbit, offscreen, with stills at the moments
-// the Reveal is about: the Turn's end pose before anything has popped in,
-// the hood half-way (some structures dark, some lit), all of it lit, and a
-// frame into the Orbit. The live path needs a visitor and the show clock;
+// The root timeline from Grow to the Outro, offscreen, with stills at the
+// moments the stages are about: the chain at 25/50/75 % grown (with the
+// tip's and the anchor's distances from the eye, so "toward the lens" is a
+// number), the Turn's end pose before anything has popped in, the hood
+// half-way (some structures dark, some lit), all of it lit, and a frame into
+// the Orbit; then the Outro is run and the datamosh's state checked through
+// the fade and across a re-entry. The live path needs a visitor and the show clock;
 // this runs the same RootSequence against the canonical mask with no film
 // (skipCloth), the stages retimed short so the growth is a few hundred sim
 // frames rather than a minute, and a marker fed in every `markerEvery`
@@ -2133,10 +2136,12 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 // own preset (N=6, hopDays=60 ...) rather than the constructor's defaults.
 // SEQSHOT_POST takes the same keys as GROWSHOT_POST, SEQSHOT_FACES=<amount>
 // deals test identities out so the structures wear different faces,
-// SEQSHOT_STRUCTURES=<n> is how many stand around (the placeholder minimum,
-// there being no bank), and SEQSHOT_SEQ overrides the sequence's framing
-// knobs (see below). Also reports how long the variations took to bake, which
-// is the one-off stall the plan accepts on the first Reveal.
+// SEQSHOT_STRUCTURES=<n> is how many stand around (reveal_structures, the
+// operator's count -- there is no bank here), SEQSHOT_SEQ overrides the
+// sequence's framing knobs (see below), and SEQSHOT_REALTIME=1 runs Face ->
+// Turn at the show's own timings and 60 fps to measure Grow's real length
+// against what the params promise. Also reports how long the variations took
+// to bake, which is the one-off stall the plan accepts on the first Reveal.
 int seqshot(const char* prefix, int W, int H,
             const std::vector<std::pair<std::string, std::string>>& fields) {
     MetalContext ctx;
@@ -2150,14 +2155,24 @@ int seqshot(const char* prefix, int W, int H,
     roots.skipCloth();
 
     RootSequenceParams sp;
-    sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
-    sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f; sp.grow_swing_seconds = 0.5f;
-    sp.turn_seconds = 1.0f;
+    // SEQSHOT_REALTIME=1 runs Face -> Grow -> Turn at the show's own timings
+    // and frame rate (60 fps, no stills but the Grow quarters) and reports
+    // how long Grow actually took against what the params promise: the
+    // pacing check. Otherwise the stages are compressed for stills.
+    const bool realtime = getenv("SEQSHOT_REALTIME") && atoi(getenv("SEQSHOT_REALTIME")) != 0;
+    if (!realtime) {
+        sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
+        sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f; sp.grow_swing_seconds = 0.5f;
+        sp.turn_seconds = 1.0f;
+        sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
+    } else {
+        sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
+    }
     sp.reveal_fallback_seconds = 1e9f;   // markers only, so the stills are deterministic
     // No bank here, so the count is the placeholder minimum; SEQSHOT_STRUCTURES
-    // sets it, up to reveal_max_structures' worth of variations.
-    if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_min_structures = atoi(n);
-    sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
+    // is the operator's count (reveal_structures), up to reveal_max_structures'
+    // worth of variations.
+    if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_structures = atoi(n);
     // SEQSHOT_SEQ="tilt=45,spacing=1.3,margin=0.3,orbitEl=15,orbitFrac=0.85,
     // orbitMax=130,growMargin=0.35" overrides the framing knobs being tuned,
     // so a still can be re-shot without a rebuild.
@@ -2186,14 +2201,47 @@ int seqshot(const char* prefix, int W, int H,
     RootSequence seq;
     seq.begin(roots, sp);
     if (!seq.valid()) { fprintf(stderr, "seqshot: no masks\n"); return 1; }
+    // The pacing the sequence derived, and the pose it will grow from --
+    // the numbers behind the Grow stills.
+    {
+        const auto& pm = roots.plannedMasks();
+        const int hops = std::max(1, (int)pm.size() - 1);
+        printf("seqshot: growth %d sim steps over %d hops; %.1f s/face -> %.1f steps/s "
+               "(swing %.1f s, gate %.2f) -> expect grow %.1f s\n",
+               roots.growthStepEstimate(), hops, sp.grow_face_seconds,
+               float(roots.growthStepEstimate()) / hops / sp.grow_face_seconds,
+               sp.grow_swing_seconds, sp.grow_swing_gate,
+               sp.grow_face_seconds * hops + sp.grow_swing_seconds * sp.grow_swing_gate);
+        float A[3] = {0, 0, 0}, n[3] = {pm[0].normal[0], pm[0].normal[1], pm[0].normal[2]};
+        for (const auto& m : pm) for (int k = 0; k < 3; ++k) A[k] += (m.pos[k] - pm[0].pos[k]) / pm.size();
+        const float la = std::sqrt(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]);
+        const float ln = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const float cosNA = (A[0] * n[0] + A[1] * n[1] + A[2] * n[2]) / std::max(1e-6f, la * ln);
+        printf("seqshot: axis A (%.2f %.2f %.2f) normal n (%.2f %.2f %.2f) angle(n,A) %.0f deg\n",
+               A[0] / la, A[1] / la, A[2] / la, n[0] / ln, n[1] / ln, n[2] / ln,
+               std::acos(std::clamp(cosNA, -1.f, 1.f)) * 57.2958f);
+    }
 
-    const double dt = 1.0 / 30.0;
+    const double dt = realtime ? 1.0 / 60.0 : 1.0 / 30.0;
     const int markerEvery = 6;
     double clock = 0.0;
     int frame = 0, shot = 0, revealFrames = 0;
     RootSequence::Stage last = seq.stage();
-    double bakeSeconds = 0.0, orbitT0 = -1.0;
-    bool placedShot = false, halfShot = false, growShot = false;
+    double bakeSeconds = 0.0, orbitT0 = -1.0, growT0 = -1.0, growStartedT = -1.0;
+    bool placedShot = false, halfShot = false, wantOutro = false;
+    bool moshBeforeFade = true;
+    int  moshDuringFade = 0, fadeFrames = 0;
+    int growQuarter = 0;   // stills at 25/50/75 % of the hops
+    // The Grow pose, for the eye: the camera's direction against the axis.
+    auto camDotAxis = [&]() {
+        const auto& pm = roots.plannedMasks();
+        float A[3] = {0, 0, 0};
+        for (const auto& m : pm) for (int k = 0; k < 3; ++k) A[k] += (m.pos[k] - pm[0].pos[k]) / pm.size();
+        const float la = std::sqrt(A[0] * A[0] + A[1] * A[1] + A[2] * A[2]);
+        const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
+        const float d[3] = {ce * std::sin(roots.azimuth), se, ce * std::cos(roots.azimuth)};
+        return (d[0] * A[0] + d[1] * A[1] + d[2] * A[2]) / std::max(1e-6f, la);
+    };
     auto snap = [&](const char* tag) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
@@ -2215,6 +2263,7 @@ int seqshot(const char* prefix, int W, int H,
         clock += dt;
         RootSequence::Inputs in;
         in.clothCleared = roots.clothCleared();
+        in.wantOutro = wantOutro;
         in.markerHit = seq.stage() == RootSequence::Stage::Reveal && revealFrames > 0 &&
                        (revealFrames % markerEvery) == 0;
         // The Reveal's first step is the one that bakes and places, and it is
@@ -2230,21 +2279,43 @@ int seqshot(const char* prefix, int W, int H,
             // The Face pose as Grow takes over, and the Grow pose as the
             // Turn takes over (the whole chain grown, the camera as far back
             // as the tip pushed it).
-            if (seq.stage() == RootSequence::Stage::Grow && !snap("face_end")) return 1;
-            if (seq.stage() == RootSequence::Stage::Turn && !snap("grow_end")) return 1;
+            if (seq.stage() == RootSequence::Stage::Grow) { growT0 = clock; if (!snap("face_end")) return 1; }
+            if (seq.stage() == RootSequence::Stage::Turn) {
+                printf("seqshot: grow took %.1f s (growth ran for %.1f s after a %.1f s hold); sim done %d\n",
+                       clock - growT0, growStartedT >= 0 ? clock - growStartedT : 0.0,
+                       growStartedT >= 0 ? growStartedT - growT0 : 0.0, roots.simDone() ? 1 : 0);
+                if (!snap("grow_end")) return 1;
+                if (realtime) break;
+            }
             // Into Orbit means the last structure has just been lit; the
             // camera has not moved off the Turn pose yet.
             if (seq.stage() == RootSequence::Stage::Orbit && !snap("reveal_all_lit")) return 1;
             last = seq.stage();
         }
-        // Half-way through the chain: the growth heading for the middle
-        // target, so the still shows the anchor, the tip and the target mask
-        // the pushed-back radius is fitting.
-        if (seq.stage() == RootSequence::Stage::Grow && !growShot &&
-            roots.currentMask() >= std::max(1, roots.simParams().N / 2)) {
-            growShot = true;
-            printf("seqshot: grow  current mask %d  tip pushed r=%.1f\n", roots.currentMask(), roots.radius);
-            if (!snap("grow_mid")) return 1;
+        // Quarter-way stills through the chain, with where the tip is on
+        // screen against the anchor: growing *toward* the lens means the
+        // tip's depth from the eye shrinks and it drops in frame.
+        if (seq.stage() == RootSequence::Stage::Grow) {
+            if (growStartedT < 0.0 && !roots.simPaused) growStartedT = clock;
+            const int hops = std::max(1, roots.simParams().N - 1);
+            const int q = roots.currentMask() * 4 / std::max(1, hops + 1);
+            if (q > growQuarter && growQuarter < 3) {
+                growQuarter = q;
+                float tip[3] = {0, 0, 0};
+                roots.growthTip(tip);
+                const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
+                const float eye[3] = {roots.target[0] + roots.radius * ce * std::sin(roots.azimuth),
+                                      roots.target[1] + roots.radius * se,
+                                      roots.target[2] + roots.radius * ce * std::cos(roots.azimuth)};
+                const float dTip = std::sqrt((tip[0] - eye[0]) * (tip[0] - eye[0]) + (tip[1] - eye[1]) * (tip[1] - eye[1]) + (tip[2] - eye[2]) * (tip[2] - eye[2]));
+                const auto& a = roots.plannedMasks()[0];
+                const float dAnc = std::sqrt((a.pos[0] - eye[0]) * (a.pos[0] - eye[0]) + (a.pos[1] - eye[1]) * (a.pos[1] - eye[1]) + (a.pos[2] - eye[2]) * (a.pos[2] - eye[2]));
+                printf("seqshot: grow %d%%  current mask %d  r=%.1f el=%.2f  cam.A=%.2f  eye->anchor %.1f  eye->tip %.1f\n",
+                       q * 25, roots.currentMask(), roots.radius, roots.elevation, camDotAxis(), dAnc, dTip);
+                char tag[32];
+                snprintf(tag, sizeof(tag), "grow_%d", q * 25);
+                if (!snap(tag)) return 1;
+            }
         }
         if (seq.stage() == RootSequence::Stage::Reveal) {
             ++revealFrames;
@@ -2290,10 +2361,42 @@ int seqshot(const char* prefix, int W, int H,
                 printf("seqshot: orbit eye (%.1f %.1f %.1f) target (%.1f %.1f %.1f)  nearest structure %d at %.1f (bound surface)\n",
                        eye[0], eye[1], eye[2], roots.target[0], roots.target[1], roots.target[2], ni, nearest);
                 if (!snap("orbit")) return 1;
-                break;
+                wantOutro = true;   // the visitor leaves: outro from here
             }
         }
-        if (seq.stage() == RootSequence::Stage::Outro || seq.done()) break;
+        // The outro, watched rather than shot: the datamosh has to be on
+        // from its trigger right through the fade, and off again -- with
+        // nothing left in its feedback buffer -- on the next visit's first
+        // frame. A trigger that expired as the fade began left the fade
+        // clean, and one still owing time when the scene cut came back
+        // running on the next visitor.
+        if (seq.stage() == RootSequence::Stage::Outro) {
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                roots.render(cb);
+                [cb commit]; [cb waitUntilCompleted];
+            }
+            const bool on = roots.renderer().datamoshActive();
+            if (seq.fade() <= 0.f) moshBeforeFade = moshBeforeFade && on;
+            else { fadeFrames++; if (on) moshDuringFade++; }
+        }
+        if (seq.done()) {
+            const bool onAtDone = roots.renderer().datamoshActive();
+            // Re-enter: begin() is the next visitor's first frame.
+            seq.begin(roots, sp);
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                roots.render(cb);
+                [cb commit]; [cb waitUntilCompleted];
+            }
+            const bool onAfterBegin = roots.renderer().datamoshActive();
+            printf("seqshot: outro  mosh on through the pre-fade %d, on for %d/%d fade frames, on at done %d, "
+                   "on after re-entry %d  => %s\n",
+                   moshBeforeFade ? 1 : 0, moshDuringFade, fadeFrames, onAtDone ? 1 : 0,
+                   onAfterBegin ? 1 : 0,
+                   (moshBeforeFade && moshDuringFade == fadeFrames && !onAfterBegin) ? "OK" : "FAIL");
+            break;
+        }
     }
     printf("seqshot: %d shots, %d frames, bake %.2f s\n", shot, frame, bakeSeconds);
     return 0;

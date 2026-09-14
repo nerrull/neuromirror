@@ -486,6 +486,12 @@ public:
     // panel button -- while post.mosh is the latch for holding it open by hand.
     // Re-triggering while one is running restarts both the run and the freeze.
     void triggerDatamosh(float seconds);
+    // Drop a running trigger and the feedback history behind it, so the next
+    // frame is clean and the next trigger starts from scratch. The latch
+    // (post.mosh) is the operator's and is left alone. postTime only moves
+    // while the scene renders, so a trigger with time left when the scene
+    // stopped would otherwise still be running when it came back.
+    void cancelDatamosh();
     // True while either the latch or a trigger has the effect engaged.
     bool datamoshActive() const;
 

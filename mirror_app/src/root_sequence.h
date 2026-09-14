@@ -14,9 +14,10 @@
 //           it, so the axis reads vertical on screen.
 //   Reveal  the other structures -- baked variations of this plant, wearing
 //           previous visitors' faces -- stand around this one on a
-//           phyllotaxis. Each pops in dark on a Wwise marker and lights on
-//           the next (or on a timer where no marker comes); the camera holds
-//           the Turn's end pose. Ends when the last of them is lit.
+//           fan behind it. Each pops in dark on a Wwise marker and lights on
+//           the next (or on a timer where no marker comes); the camera keeps
+//           the Turn's angles and backs off to keep what has come in framed.
+//           Ends when the last of them is lit.
 //   Orbit   a slow orbit of everything, until it has run its time or the
 //           visitor has left.
 //   Outro   the datamosh, then the screen fade. Done when the fade lands.
@@ -71,21 +72,34 @@ struct RootSequenceParams {
     // step count (RootScene::growthStepEstimate) so the growth lands on the
     // stage boundary whatever the layout, then clamped into [min, max]
     // steps/s so an unusually large layout cannot run past a believable
-    // growth speed.
-    float grow_face_seconds  = 4.0f;
-    float grow_rate_min      = 20.f;
+    // growth speed. The show's plant is ~190 steps over 5 hops, so at 10 s a
+    // face the rate is under 4 steps/s: the floor has to sit below that (it
+    // was 20, and with the steps rounded up to one per frame the whole chain
+    // grew in the three seconds of the swing).
+    float grow_face_seconds  = 10.0f;
+    float grow_rate_min      = 1.f;
     float grow_rate_max      = 1200.f;
-    // How far the camera is swung off the anchor's normal toward the
-    // structure's axis, degrees. 0 is the Face pose (square to the anchor,
-    // the chain growing straight away from the lens); 90 is on the axis, the
-    // chain growing toward the lens and the faces edge-on. Measured from the
-    // normal rather than from the axis because the axis is not perpendicular
-    // to it -- on the cone the chain runs down *and back*, ~115 degrees off
-    // the anchor's normal, so a fixed angle off the axis landed the camera
-    // directly underneath, looking up through the fog's floor.
-    float grow_view_tilt_deg = 45.f;
-    // The swing from the Face pose to the Grow pose at Grow entry.
+    // Where the camera stands for the growth, as an angle off the structure's
+    // axis toward the anchor's normal, degrees. The axis A runs from the
+    // anchor to the centroid of the chain -- the direction the growth heads
+    // in -- and the camera direction is A swung toward the normal by this:
+    // 0 is dead on the axis (the chain grows straight at the lens, the faces
+    // edge-on), 90 is square to the axis. Measured off the *axis* and not off
+    // the normal, because what the stage is about is the chain coming toward
+    // the lens: on the cone the axis runs ~115 degrees off the anchor's
+    // normal, so a tilt of 45 off the normal left the camera 70 off the axis
+    // with the chain running mostly sideways -- and at the start of the
+    // swing, straight away. 60 puts half the growth toward the lens (cos 60)
+    // with the anchor read at ~55 off its normal; lower, and the chain
+    // foreshortens into one cluster (at 45 the finished chain is a blob
+    // seen end-on from underneath), higher and it runs across the frame.
+    float grow_view_tilt_deg = 60.f;
+    // The swing from the Face pose to the Grow pose at Grow entry. The
+    // growth itself is held until the swing is grow_swing_gate of the way
+    // through, so the first hop is seen from the Grow pose and not from
+    // square-on, where it heads away from the lens.
     float grow_swing_seconds = 3.0f;
+    float grow_swing_gate    = 0.7f;
     // Margin around the anchor / tip / target-mask bound, as a fraction of
     // its extent, when computing the pushed-back radius.
     float grow_margin        = 0.35f;
@@ -122,8 +136,12 @@ struct RootSequenceParams {
     // cue-carrying audio, neither of which every dev machine has).
     float reveal_spacing          = 1.2f;
     float reveal_fallback_seconds = 2.5f;
-    // How many other structures stand around this one; see the plan's "face
-    // bank" for where the count really comes from (older captures, capped).
+    // How many other structures stand around this one. reveal_structures
+    // is the operator's say: 0 leaves it to the face bank (one structure per
+    // N older captures, at least min, at most max -- see the plan's "face
+    // bank"), anything else is exactly that many, wearing the bank's faces
+    // round again when it is short.
+    int   reveal_structures       = 0;
     int   reveal_min_structures   = 3;
     int   reveal_max_structures   = 12;
 
@@ -197,6 +215,7 @@ public:
         panAz_ = panEl_ = 0.f;
         prevAz_ = prevEl_ = 0.f;
         prevValid_ = false;
+        revealWantR_ = 0.f;
         // A hood still placed from a previous run on the same plant (the
         // operator re-entering the phase without a replant) starts hidden
         // and dark again, so Reveal has something to reveal. No-ops when the
@@ -205,6 +224,14 @@ public:
             roots.setStructureVisible(k, false);
             roots.setStructureLit(k, false);
         }
+        // The last visit's outro must not be running on this one's first
+        // frame. The datamosh is timed on the renderer's own clock, which
+        // only advances while the scene renders: a visit cut short while the
+        // mosh still had time left (the show's absence edge landing before
+        // the fade did) came back with that time still owing, and the
+        // feedback buffer still holding the last smeared frame of the
+        // previous visitor. Face has to be clean.
+        roots.renderer().cancelDatamosh();
 
         const auto& planned = roots.plannedMasks();
         if (planned.empty()) { valid_ = false; return; }
@@ -229,38 +256,45 @@ public:
 
         // The Grow pose. The structure's axis A runs from the anchor to the
         // centroid of the layout -- the direction the chain grows in. The
-        // camera direction is the anchor's normal swung toward A by
-        // grow_view_tilt_deg, in the plane of the two: from the Face pose
-        // the chain would grow straight away from the lens, on the axis it
-        // would grow toward it with the faces edge-on, and the swing is what
-        // lets the faces be seen while the chain still comes on.
+        // camera stands on A swung toward the anchor's normal by
+        // grow_view_tilt_deg, in the plane of the two: on the axis the chain
+        // would grow straight at the lens with the faces edge-on, square to
+        // it the faces would read but the growth would run across the frame
+        // (or, from the Face pose, straight away), and the tilt is the
+        // compromise. Measured off the axis so that whatever the layout, the
+        // growth has cos(tilt) of itself coming toward the lens.
         float A[3] = {centroid_[0] - anchor_.pos[0], centroid_[1] - anchor_.pos[1],
                       centroid_[2] - anchor_.pos[2]};
         float n[3] = {anchor_.normal[0], anchor_.normal[1], anchor_.normal[2]};
         normalize3(n);
         if (!normalize3(A)) { A[0] = n[0]; A[1] = n[1]; A[2] = n[2]; }
-        // The component of the axis perpendicular to the normal is the
-        // swing's direction; if the axis is (anti)parallel to the normal
-        // there is no preferred way to swing and the Face pose stands.
+        // The component of the normal perpendicular to the axis is the
+        // swing's direction; if the two are (anti)parallel there is no
+        // preferred way to swing and the camera sits on the axis.
         const float nA = n[0] * A[0] + n[1] * A[1] + n[2] * A[2];
-        float perp[3] = {A[0] - nA * n[0], A[1] - nA * n[1], A[2] - nA * n[2]};
-        float d[3] = {n[0], n[1], n[2]};
+        float perp[3] = {n[0] - nA * A[0], n[1] - nA * A[1], n[2] - nA * A[2]};
+        float d[3] = {A[0], A[1], A[2]};
         if (normalize3(perp)) {
             const float t = std::clamp(P.grow_view_tilt_deg, 0.f, 90.f) * kDeg;
             const float ct = std::cos(t), st = std::sin(t);
-            for (int k = 0; k < 3; ++k) d[k] = n[k] * ct + perp[k] * st;
+            for (int k = 0; k < 3; ++k) d[k] = A[k] * ct + perp[k] * st;
         }
         azelFromDir(d, growAz_, growEl_);
 
         // Growth pacing: the whole run's steps spread over the N-1 target
         // faces at grow_face_seconds each, in steps per *second* so it holds
-        // at any frame rate.
+        // at any frame rate. The steps are dealt out as a fractional
+        // accumulator (growStepAcc_), so a rate under one step per frame is
+        // honoured rather than rounded up to one -- at show speed the plant
+        // takes a few thousand steps over a minute, well under 60/s.
         const int simSteps = roots.growthStepEstimate();
         const int hops = std::max(1, (int)planned.size() - 1);
         const float perFace = std::max(1e-3f, P.grow_face_seconds);
         growStepsPerSec_ = std::clamp(float(simSteps) / float(hops) / perFace,
                                       P.grow_rate_min, std::max(P.grow_rate_min, P.grow_rate_max));
-        growTimeout_ = perFace * float(hops) * std::max(1.f, P.grow_timeout_mult);
+        growStepAcc_ = 0.f;
+        growTimeout_ = perFace * float(hops) * std::max(1.f, P.grow_timeout_mult)
+                     + P.grow_swing_seconds * std::clamp(P.grow_swing_gate, 0.f, 1.f);
 
         // The camera starts on the Face pose, snapped: there is nothing to
         // ease from yet.
@@ -306,15 +340,19 @@ public:
             break;
         }
         case Stage::Grow: {
-            roots.simPaused = false;
-            roots.simStepsPerFrame = std::max(1, (int)std::lround(growStepsPerSec_ * dt));
-
             // The swing: Face pose to Grow pose, smoothstepped, angles only.
             // Radius and target ease exponentially below like everywhere
             // else, so the swing reads as one move rather than two.
-            const float u = smoothstep(tIn / std::max(1e-3, (double)P.grow_swing_seconds));
+            const double swingU = tIn / std::max(1e-3, (double)P.grow_swing_seconds);
+            const float u = smoothstep(swingU);
             curAz_ = az0_ + wrapPi(growAz_ - az0_) * u;
             curEl_ = el0_ + (growEl_ - el0_) * u;
+
+            // The growth, once the swing is mostly done: from the Face pose
+            // the first hop heads straight away from the lens, and the
+            // point of the swing is that it is seen coming on instead.
+            const bool growing = swingU >= (double)std::clamp(P.grow_swing_gate, 0.f, 1.f);
+            stepGrowth(roots, growing ? fdt : 0.f);
 
             // Where the growth is: the current target mask and the tip.
             const auto& pm = roots.plannedMasks();
@@ -354,8 +392,7 @@ public:
             // hanging pose: azimuth unchanged, elevation down to
             // turn_end_elevation_deg, the whole structure framed. Everything
             // blends on one smoothstep so the move has a single shape.
-            roots.simPaused = false;
-            roots.simStepsPerFrame = std::max(1, (int)std::lround(growStepsPerSec_ * dt));
+            stepGrowth(roots, fdt);
             const float u = smoothstep(tIn / std::max(1e-3, (double)P.turn_seconds));
             const Bound whole = {{centroid_[0], centroid_[1], centroid_[2]}, structR_};
             const float endEl = P.turn_end_elevation_deg * kDeg;
@@ -379,18 +416,24 @@ public:
             // generation, having dropped the last visitor's hood. The
             // variations behind the placement are cached one level down, in
             // RootScene, and survive the replant.
-            roots.simPaused = false;
+            stepGrowth(roots, fdt);
             if (neighboursGen_ != roots.growGeneration()) {
-                const int count = std::clamp(roots.structureCount() > 0 ? roots.structureCount()
-                                                                        : P.reveal_min_structures, 1, 64);
+                const int fromBank = roots.structureCount() > 0 ? roots.structureCount()
+                                                                : P.reveal_min_structures;
+                const int count = std::clamp(P.reveal_structures > 0 ? P.reveal_structures : fromBank,
+                                             1, 64);
+                float tanH, tanV;
+                tanHV(roots, tanH, tanV);
                 roots.addNeighbours(count, std::max(1, P.reveal_max_structures),
-                                    std::max(0.5f, P.reveal_spacing), structR_, centroid_, curAz_);
+                                    std::max(0.5f, P.reveal_spacing), structR_, centroid_,
+                                    curAz_, curR_, tanH);
                 roots.renderer().instanceCullPx = 0.5f;
                 roots.renderer().lodBias = 0.5f;
                 roots.renderer().subpixelCull = false;
                 neighboursGen_ = roots.growGeneration();
                 revealStep_  = 0;
                 revealLastT_ = clock;
+                revealWantR_ = curR_;
             }
             const int total = 2 * (int)roots.neighbours.size();
             const bool fire = in.markerHit ||
@@ -401,6 +444,23 @@ public:
                 else                        roots.setStructureLit(k, true);
                 ++revealStep_;
                 revealLastT_ = clock;
+            }
+            // The camera holds the Turn's angles and target but gives ground
+            // as the hood comes in: the radius that frames this structure
+            // and every neighbour shown so far, each as its own bound, and
+            // it never comes back in. The placement keeps the hood in the
+            // Turn-end frustum where it can, but a wide hood at a tall
+            // structure's framing has its outer ones past the edge, and a
+            // structure that pops in out of frame has not been revealed.
+            {
+                std::vector<Bound> bs;
+                bs.push_back({{centroid_[0], centroid_[1], centroid_[2]}, structR_});
+                for (const auto& pl : roots.neighbours)
+                    if (pl.visible) bs.push_back({{pl.centre[0], pl.centre[1], pl.centre[2]}, pl.radius});
+                const float need = fitRadius(roots, curT_, curAz_, curEl_, bs.data(), (int)bs.size(),
+                                             P.frame_margin);
+                revealWantR_ = std::max(revealWantR_, need);
+                easeTo(curR_, revealWantR_, kEase);
             }
             if (revealStep_ >= total) {
                 enter(Stage::Orbit, clock);
@@ -414,7 +474,7 @@ public:
             // in to frame the whole hood. The orbit keeps running through the
             // outro -- the datamosh reads camera motion, and a camera that
             // froze the moment it fired would have nothing to smear.
-            roots.simPaused = false;
+            stepGrowth(roots, fdt);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
             easeAngle(curEl_, wantEl, kEase);
@@ -430,8 +490,16 @@ public:
                 // has had its time. The host owns the screen-wide fade
                 // uniform -- fade() is this stage's opinion of where it
                 // should be.
+                // Triggered for the mosh's own time *and* the fade's (and a
+                // moment more, so the frame the black lands on is still
+                // smeared): the fade begins the moment the mosh's time is
+                // up, and a trigger of only that length expired on the same
+                // frame, so the picture snapped clean just as it started to
+                // go. Whatever is left owing when the show cuts to Idle is
+                // cancelled at the next begin().
                 if (!moshFired_) {
-                    roots.renderer().triggerDatamosh(std::max(0.f, P.datamosh_seconds));
+                    roots.renderer().triggerDatamosh(std::max(0.f, P.datamosh_seconds) +
+                                                     std::max(0.f, P.fade_seconds) + 0.5f);
                     moshFired_ = true;
                 }
                 if (tIn >= (double)P.datamosh_seconds) {
@@ -520,6 +588,18 @@ private:
     struct Bound { float p[3]; float r; };
 
     void enter(Stage s, double clock) { stage_ = s; stageT0_ = clock; }
+
+    // Deal this frame's sim steps: growStepsPerSec_ x dt, carried as a
+    // fraction between frames so the rate is honoured below one step per
+    // frame (RootScene::advance runs at least one step whenever the sim is
+    // not paused, so a frame owed none pauses it). dt of 0 holds the growth.
+    void stepGrowth(RootScene& roots, float dt) {
+        growStepAcc_ += growStepsPerSec_ * std::max(0.f, dt);
+        const int steps = (int)std::floor(growStepAcc_);
+        growStepAcc_ -= float(steps);
+        roots.simPaused = steps <= 0;
+        roots.simStepsPerFrame = std::max(1, steps);
+    }
 
     static float smoothstep(double u) {
         u = std::clamp(u, 0.0, 1.0);
@@ -672,8 +752,10 @@ private:
     float az0_ = 0.f, el0_ = 0.f;          // the Face pose, down the anchor's normal
     float growAz_ = 0.f, growEl_ = 0.f;    // the Grow pose, along the axis + tilt
     float growStepsPerSec_ = 100.f;
+    float growStepAcc_ = 0.f;              // fractional steps owed, see stepGrowth
     float growTimeout_ = 30.f;
     float growWantR_ = 0.f;                // the pushed-back radius, monotonic
+    float revealWantR_ = 0.f;              // Reveal's framing radius, monotonic
 
     // Where the Turn started from, captured at its entry.
     float turnFromAz_ = 0.f, turnFromEl_ = 0.f, turnFromR_ = 0.f;

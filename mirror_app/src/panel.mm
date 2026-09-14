@@ -587,13 +587,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             ui::EndHeader();
                             ui::BeginHeader("grow", false);
                             {
-                                ui::SliderFloat("grow face seconds", &S.grow_face_seconds, 0.5f, 30.f, "%.1f");
+                                ui::SliderFloat("grow face seconds", &S.grow_face_seconds, 0.5f, 60.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
                                         "Seconds per target face. The growth rate is\n"
                                         "derived from the plant's own step count so it\n"
                                         "lands on time whatever the layout, then clamped\n"
-                                        "into the rate range below.");
+                                        "into the rate range below. The whole chain takes\n"
+                                        "(masks - 1) x this, after the swing.");
                                 }
                                 ui::SliderFloat("grow rate min (steps-s)", &S.grow_rate_min, 1.f, 2000.f,
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
@@ -602,12 +603,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 ui::SliderFloat("grow view tilt (deg)", &S.grow_view_tilt_deg, 0.f, 90.f, "%.0f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "The camera swings off the anchor's normal\n"
-                                        "toward the structure's axis by this much: at 0\n"
-                                        "the chain grows straight away from the lens, at\n"
-                                        "90 toward it with the faces edge-on.");
+                                        "Where the camera stands for the growth, as an\n"
+                                        "angle off the structure's axis toward the anchor's\n"
+                                        "normal: at 0 the chain grows straight at the lens\n"
+                                        "with the faces edge-on, at 90 it runs across the\n"
+                                        "frame. Lower is more \"toward the viewer\", higher\n"
+                                        "reads the faces better.");
                                 }
                                 ui::SliderFloat("grow swing seconds", &S.grow_swing_seconds, 0.f, 10.f, "%.1f");
+                                ui::SliderFloat("grow swing gate", &S.grow_swing_gate, 0.f, 1.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The growth is held until the swing is this far\n"
+                                        "through, so the first hop is seen from the Grow\n"
+                                        "pose rather than heading away from the Face one.");
+                                }
                                 ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
@@ -689,6 +699,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "Each structure pops in on a FirePlucker marker;\n"
                                         "this is the fallback used when no marker\n"
                                         "arrives (audio off, or no SDK).");
+                                }
+                                ui::SliderInt("reveal structures", &S.reveal_structures, 0, 32);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How many other structures stand around this\n"
+                                        "one. 0 leaves it to the face bank -- one per\n"
+                                        "(masks) older captures, between min and max\n"
+                                        "below; anything else is exactly that many, the\n"
+                                        "bank's faces dealt round again when it is short.");
                                 }
                                 ui::SliderInt("reveal min structures", &S.reveal_min_structures, 0, 32);
                                 ui::SliderInt("reveal max structures", &S.reveal_max_structures, 1, 32);

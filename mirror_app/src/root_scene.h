@@ -97,10 +97,14 @@ public:
     // largest absolute coordinate), so a bank face and the live one come out
     // the same size without the live normalisation having to exist yet --
     // this is called from the Transition edge, before the visitor is tracked.
-    // N is simParams().N, the masks the plant will place.
+    // N is simParams().N, the masks the plant will place. `forceStructures`
+    // > 0 is the operator's count (RootSequenceParams::reveal_structures):
+    // exactly that many, each mask dealt the next capture round the bank
+    // again when it runs out; 0 lets the bank's depth decide, between
+    // minStructures and maxStructures.
     // TODO(face-bank): repeat is a placeholder until the bank is deep enough.
     void assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
-                         int maxStructures, int minStructures);
+                         int maxStructures, int minStructures, int forceStructures = 0);
     void clearBankFaces();
     // Which bank face each of the other structures' masks wears: structure k,
     // mask j -> structureFaces()[k].captureIdx[j], an index into the `bank`
@@ -270,19 +274,22 @@ public:
     // the baked variations (structure k wears variation k % K and, through
     // the face mesh, structureFaces()[k]). Unlike buildField this keeps the
     // live system and its faces -- it is the Reveal stage of the piece, where
-    // it turns out to be one of many. Placed on a phyllotaxis: structure k at
-    // k x the golden angle, `spacing` x `structR` x sqrt(k+1) out, on the
-    // plane of `centre` (this structure's own centre -- it hangs below the
-    // origin, so a ring about the origin would put neighbours level with
-    // nothing). `keepClearAz` is the camera's azimuth: the pattern is turned
-    // so structure 0 stands directly behind the subject from there, and a
-    // placement that lands inside the wedge in front of the camera is put
-    // across to the far side, or a structure lands between the camera and
-    // the piece and fills the frame with a wall. Every structure starts
-    // hidden and dark; setStructureVisible/Lit bring them in. Bakes the
-    // variations first if they are not there yet.
+    // it turns out to be one of many. Placed as a fan behind the subject, as
+    // seen from the camera that reveals them: structure k stands `spacing` x
+    // `structR` x sqrt(k+1) out from `centre` (this structure's own centre --
+    // it hangs below the origin, so a ring about the origin would put
+    // neighbours level with nothing), on the plane of it, at the azimuth that
+    // puts it at a chosen angle across the camera's view. The view angles
+    // are a golden-ratio sequence over the far half of the frame, kept out
+    // of the band the subject itself covers, so each structure that pops in
+    // is beside the ones before it rather than behind them or behind the
+    // subject -- and none is between the lens and the piece. `camAz`, `camR`
+    // and `tanH` are that camera: its azimuth, its distance from `centre`
+    // and its horizontal frustum half-extent at unit depth. Every structure
+    // starts hidden and dark; setStructureVisible/Lit bring them in. Bakes
+    // the variations first if they are not there yet.
     void addNeighbours(int count, int variations, float spacing, float structR,
-                       const float centre[3], float keepClearAz);
+                       const float centre[3], float camAz, float camR, float tanH);
 
     // --- the cloth: pond -> face press/release, ported from TransitionScene ---
     //

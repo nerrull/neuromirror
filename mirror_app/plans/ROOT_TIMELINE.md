@@ -71,22 +71,33 @@ cleared + `face_clear_tail_seconds` (same semantics as the old
 `applyFogFade`).
 
 ### Grow (×5 target faces, i.e. planned masks 1..N-1)
-- Sim runs. Rate = `growthStepEstimate()/ (N-1) / grow_face_seconds`,
-  clamped to `[grow_rate_min, grow_rate_max]` steps/s. Dwell is tuned by the
-  operator in the roots bank, not by the sequence.
+- Sim runs. Rate = `growthStepEstimate()/ (N-1) / grow_face_seconds`
+  (default 10 s/face, slider to 60), clamped to `[grow_rate_min,
+  grow_rate_max]` steps/s. The steps are dealt out through a fractional
+  accumulator (`stepGrowth`), so a rate under one step per frame is honoured:
+  the show's plant is ~190 steps over 5 hops, under 4 steps/s at 10 s/face,
+  and the old `lround(rate·dt)` rounded up to one step *every frame* (60/s),
+  which is why the whole chain used to grow in the three seconds of the
+  swing. `grow_rate_min` is 1 for the same reason (it was 20, above the
+  derived rate). Measured in `--seqshot` with `SEQSHOT_REALTIME=1` (dt =
+  1/60): Grow takes `(N-1)·grow_face_seconds + grow_swing_seconds·gate`.
 - The viewer stops driving the mask the moment Grow starts (main.mm: stop
   the live `setFittedFace` upload; `RootFaceSequence` playback, if valid,
   may continue).
 - Camera: `eye = target + R·dir(az, el)`. The structure's axis `A` is
-  (centroid of planned masks − anchor pos), normalised. Compute
-  `(azA, elA)` = the az/el that looks *along* A from in front of the anchor
-  (i.e. the direction from the structure back toward where a camera would sit
-  so the chain grows toward it). `grow_view_tilt_deg` (default 45) is the
-  swing off the anchor's normal toward that axis: 0 keeps the Face pose, 90
-  looks straight along the axis. (It is measured off the normal, not the
-  axis, because the axis leans 100°+ off the normal on the tall cone and a
-  tilt off it put the camera under the fog floor.) At Grow entry the camera eases from the Face pose to this pose
-  over `grow_swing_seconds` (default 3).
+  (centroid of planned masks − anchor pos), normalised. The Grow direction
+  is `A` swung toward the anchor's normal by `grow_view_tilt_deg` (default
+  60): 0 is dead on the axis (the chain grows straight at the lens, faces
+  edge-on), 90 is square to it. Measured off the *axis*, so the growth always
+  has cos(tilt) of itself coming toward the lens whatever the layout -- on
+  the cone the axis is ~120° off the anchor's normal, and the earlier "45°
+  off the normal" left the camera 70° off the axis with the chain running
+  sideways and, at the start of the swing, straight away. At Grow entry the
+  camera eases from the Face pose to this pose over `grow_swing_seconds`
+  (default 3), and the growth itself is held until the swing is
+  `grow_swing_gate` (default 0.7) of the way through, so the first hop is
+  seen from the Grow pose rather than heading away from the Face one. The
+  camera below the hanging cone (el ≈ −60°) reads fine through the show fog.
 - Pull-back "pushed by the tip": each frame compute the radius needed so
   that the anchor, the current growth tip (`roots.growthTip`) and the current
   target mask (`roots.currentMask()` → `plannedMasks()[i]`) all fit inside the
@@ -115,13 +126,22 @@ should end up reading vertical/downward on screen. Sim continues running
 
 ### Reveal
 Other structures — baked variations of previous visitors' plants — stand
-around this one in a phyllotaxis pattern on the same plane (centre = this
-structure's centre, spacing `reveal_spacing` × structure radius, sunflower
-angle). Structure k pops in **dark** on a marker (`markerHit`), and its light
-pops on at the next marker; if no marker arrives within
-`reveal_fallback_seconds` (default 2.5) the step happens anyway. Camera holds
-the Turn end pose (plus head pan). Reveal ends when every structure is lit.
-Number of structures: see "The face bank" below.
+around this one as a **fan behind it, as seen from the Turn-end camera**
+(`addNeighbours`): structure k is `reveal_spacing` × structure radius ×
+sqrt(k+1) out from this structure's centre, on its plane, at the azimuth
+that puts it at a golden-ratio-sequenced view angle outside the band the
+subject covers and inside the frustum, alternating sides. (The earlier
+sunflower put seed 0 dead behind the subject and the rest wherever the
+golden angle landed, mostly out of the Turn-end frame — which is why a live
+run with a 24-capture bank showed one structure of three.) Structure k pops
+in **dark** on a marker (`markerHit`), and its light pops on at the next
+marker; if no marker arrives within `reveal_fallback_seconds` (default 2.5)
+the step happens anyway. Camera holds the Turn's angles and target but backs
+off (monotonically, eased) to keep this structure and every neighbour shown
+so far in frame. Reveal ends when every structure is lit.
+Number of structures: `reveal_structures` (default 0 = from the face bank,
+see below; otherwise exactly that many, the bank's faces dealt round again
+when it is short).
 
 ### Orbit
 Azimuth advances at `orbit_rate` rad/s (default 0.08), elevation
@@ -136,11 +156,18 @@ asks for the outro (`wantOutro`, the existing visitor-absence signal), whichever
 first.
 
 ### Outro
-`roots.renderer().triggerDatamosh(datamosh_seconds)` once on entry
-(default 3 s). After `datamosh_seconds` start the screen fade
-(`g_screen_fade`, existing) over `fade_seconds` (default 2). When the fade
-reaches 1 the stage is `Done` and main.mm moves the show to Idle
-(`g_show.goTo(Phase::Idle)`) if the timeline hasn't already.
+`roots.renderer().triggerDatamosh(datamosh_seconds + fade_seconds + 0.5)`
+once on entry (mosh default 3 s). After `datamosh_seconds` start the screen
+fade (`g_screen_fade`, existing) over `fade_seconds` (default 2). When the
+fade reaches 1 the stage is `Done` and main.mm moves the show to Idle
+(`g_show.goTo(Phase::Idle)`) if the timeline hasn't already. The trigger
+covers the fade because a trigger of `datamosh_seconds` alone expired on the
+very frame the fade began, so the picture snapped clean as it went. The
+renderer's `postTime` only advances while the scene renders, so whatever is
+still owing at the cut to Idle would be running on the next visitor's first
+Face frame — `begin()` calls `cancelDatamosh()`, which drops the trigger and
+the feedback history (`moshHistValid_`, `moshWasOn_`, `prevViewProjValid_`).
+`--seqshot` runs the outro and re-entry and prints an OK/FAIL for this.
 
 ### Head pan (Grow onward)
 Tracked face centre (`setTrackedPosition`'s x/y, [0,1] top-left) maps to an
@@ -233,3 +260,12 @@ the existing "neighbours emit into the shared face mesh" path.
 - Grow: in the compressed `--seqshot` run the target mask at the bottom of
   the frame lags the camera ease (`cam_ease_seconds` 1.2, `grow_margin`
   0.35); at show speed it keeps up. Revisit if the live Grow ever cuts it.
+- The `cloth/*` section (the press timings hold/press/settle/release/fall
+  and the film's look) had no `kBankRules` entry after its rename from
+  `transition`, so its keys were drawn but never saved -- every launch came
+  back with the defaults. It is in the `look` bank now; `presets/look/
+  default.look` carries no `cloth/*` keys until the operator saves it once.
+- `--roundtriptest` still reports `mirror/raindrops` (forced by phase every
+  frame in main.mm) and `sound/center (Hz)` (the slider snaps a loaded value
+  to the nearest note when `snap to notes` is on). Both are by design, not
+  lost keys; the test could special-case them.
