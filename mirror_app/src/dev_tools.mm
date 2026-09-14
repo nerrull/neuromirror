@@ -2163,13 +2163,13 @@ int seqshot(const char* prefix, int W, int H,
     // pacing check. Otherwise the stages are compressed for stills.
     const bool realtime = getenv("SEQSHOT_REALTIME") && atoi(getenv("SEQSHOT_REALTIME")) != 0;
     if (!realtime) {
-        sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
+        sp.face_seconds = 0.1f; sp.face_hold_after_cloth_seconds = 0.f;
         sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f;
         sp.turn_seconds = 1.0f;
         sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
         sp.cam_ease_seconds = 0.25f;         // ...and the eases with them
     } else {
-        sp.face_seconds = 0.1f; sp.face_clear_tail_seconds = 0.f;
+        sp.face_seconds = 0.1f; sp.face_hold_after_cloth_seconds = 0.f;
     }
     sp.reveal_fallback_seconds = 1e9f;   // markers only, so the stills are deterministic
     // No bank here, so the count is the placeholder minimum; SEQSHOT_STRUCTURES

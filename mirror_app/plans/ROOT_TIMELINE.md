@@ -86,9 +86,38 @@ horizontal toward +z -- see the layout note above) alone, tight (radius ≈
 2.6 × mask extent, down its normal, so el = -60). Sim paused. The mask is live-driven
 by the viewer (existing `setFittedFace` path in main.mm — unchanged).
 Duration: `face_seconds` as a floor, and it never ends before the cloth has
-cleared + `face_clear_tail_seconds` (same semantics as the old
-`beat1_clear_tail_seconds`). Fog fades in over `fog_fade_seconds` (keep
-`applyFogFade`).
+cleared + `face_hold_after_cloth_seconds` (panel: "face hold after cloth s",
+default 10 -- same semantics as the old `beat1_clear_tail_seconds`/
+`face_clear_tail_seconds`). This is the visitor's own controllable window
+after the cloth falls, before the face freezes and the roots start growing.
+Fog fades in over `fog_fade_seconds` (keep `applyFogFade`).
+
+**The cut, the recording and the replay.** show_timeline's Transition → Roots
+edge is `SceneDone`, and main.mm now calls `g_show.sceneDone()` at the exact
+moment `RootSequence` leaves Face (`onLeaveFace`, keyed off the stage edge the
+same way `squareAnchorMaskOnLeavingFace` already was) -- not off a
+cloth-clear-plus-tail timer running independently of the sequence. The
+Transition phase's fixed 30s `max` ceiling in `show_timeline.cpp`'s
+`kTransitionEdges` is only the "cloth never clears" safety net now
+(`Event::ClothCleared`/`Signals::cloth_cleared`, fed from `roots.clothCleared()`):
+once seen, `PhaseGraph::clear_margin` (45s) replaces that ceiling with
+"clearance clock + 45s", so a `face_hold_after_cloth_seconds` dialled up to
+its full 30s panel range is never cut short by the pre-clearance number, and
+there is still a genuine safety net if `SceneDone` somehow never arrives
+(`show_timeline_test`'s "clear_margin" cases). The visitor's own head
+movement is recorded the whole time (`FaceTrackRecorder`, started at
+Transition entry) and `onLeaveFace` both `finish()`es it and hands the result
+straight to `rootFaceSeq.begin()` on the same frame the sequence leaves Face
+-- so mask 0 replays *this* visitor's own recorded pose/expression, looped,
+from Grow onward, instead of freezing on a static mesh or (the old gap)
+whichever visitor's track happened to finish most recently. The absence-based
+`finish()` (main.mm's `g_track_absent_t` block) is now only the fallback for
+a sitting that never reaches the cut. `RootFaceSequence` applies each
+frame's rotation as a delta from the track's own mean rotation
+(`computeMeanRot`/`MatMulTranspose`), not the frame's raw rotation, so the
+replay oscillates around the squared neutral the mask's nest was grown
+against (`squareAnchorMaskOnLeavingFace`/`autoCaptureAtCut`'s squaring rule)
+rather than fighting it. Applies to mask 0 only -- `setFittedFace` always did.
 
 ### Grow (×5 target faces, i.e. planned masks 1..N-1)
 - Sim runs. Rate = `growthStepEstimate()/ (N-1) / grow_face_seconds`
@@ -279,11 +308,6 @@ the existing "neighbours emit into the shared face mesh" path.
 - Face bank repeat: `TODO(face-bank)` in `assignBankFaces` -- a bank smaller
   than the mask count deals the same capture more than once; the plan's
   "placeholder" masks for a young bank are just repeats.
-- `RootFaceSequence` (the recorded track replayed on mask 0) effectively
-  never plays in the show flow: a recording finishes only after its visitor
-  leaves, so at Roots entry the finished track is the previous visitor's and
-  is deliberately not used (`ownTrack` in main.mm). Either finish the track
-  at the cut or drop the replay.
 - A twelve-structure hood cannot all read inside the fog's range (visibility
   45); the orbit trims to the inner ~70 % and the outer ring is a haze.
   Either fewer structures, a tighter `reveal_ring_radius`, or a fog that

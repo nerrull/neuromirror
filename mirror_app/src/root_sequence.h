@@ -71,10 +71,13 @@ struct RootSequenceParams {
     // --- Face --------------------------------------------------------------
     // Floor on the face-alone stage. It never ends before the cloth has
     // cleared (TransitionScene-style clearance, see RootScene::clothCleared)
-    // plus face_clear_tail_seconds more, so growth never starts while the
-    // film is still visibly falling.
+    // plus face_hold_after_cloth_seconds more -- how long the visitor's own
+    // live face stays controllable on mask 0 after the cloth has fallen,
+    // before it freezes and the roots start growing. The visitor's face is
+    // recorded through this whole window (main.mm's onLeaveFace) and replayed
+    // on mask 0, looped, from Grow onward -- see root_face_sequence.h.
     float face_seconds            = 2.3f;
-    float face_clear_tail_seconds = 10.0f;
+    float face_hold_after_cloth_seconds = 10.0f;
     // Fog only exists in the Roots renderer, so it would otherwise pop the
     // instant compositing begins. The host (main.mm's applyFogFade) ramps
     // visibility from clear to the phase's intensity over this many seconds
@@ -341,7 +344,7 @@ public:
             for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
             if (in.clothCleared && clothClearAt_ < 0.0) clothClearAt_ = clock;
             const double end = (clothClearAt_ >= 0.0)
-                ? std::max((double)P.face_seconds, clothClearAt_ + (double)P.face_clear_tail_seconds)
+                ? std::max((double)P.face_seconds, clothClearAt_ + (double)P.face_hold_after_cloth_seconds)
                 : 1e30;   // never leaves Face until the cloth has cleared at least once
             if (clock >= end) enter(Stage::Grow, clock);
             break;

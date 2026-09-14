@@ -46,13 +46,18 @@ const PhaseGraph kGraph[(int)Phase::Count] = {
     // there. Transition (same as FitConverged) carries them on with whatever
     // fit was captured instead.
     {kFittingEdges,    2, Phase::Transition, 2.f, 30.f},
-    // 30s, not 12: the merged Transition/Roots composite (see main.mm's
-    // pre-warm block) now retimes SceneDone to fire off the cloth-clearance
-    // signal plus its clear-tail, which can run well past the old fixed
-    // ~12.6s Timing sum. This ceiling is only the safety net for a visitor
-    // who somehow never triggers clearance (see TransitionScene's guaranteed
-    // side force) -- SceneDone is the everyday path now, not this timeout.
-    {kTransitionEdges, 1, Phase::Roots,   0.f, 30.f},
+    // SceneDone now fires when RootSequence leaves its Face stage (the
+    // moment the face freezes and the roots start growing -- see main.mm's
+    // onLeaveFace), not off a fixed Timing sum, so the visitor's own "face
+    // hold after cloth" (RootSequenceParams, up to 30s on the panel) can run
+    // as long as it is set to without the cut arriving early. The 30s max
+    // here is only the safety net for a visitor whose cloth somehow never
+    // clears at all (TransitionScene's guaranteed side force is supposed to
+    // rule that out); once ClothCleared is seen, clear_margin (45s -- past
+    // the panel's own 30s "face hold after cloth" ceiling, plus room for the
+    // rest of Face's own floor and Grow's opening swing) replaces it, so a
+    // deliberately long hold is never cut short by the pre-clearance number.
+    {kTransitionEdges, 1, Phase::Roots,   0.f, 30.f, 45.f},
     {kRootsEdges,      1, Phase::Idle,   40.f,  0.f},
 };
 
@@ -62,8 +67,8 @@ static_assert(sizeof(kFittingEdges) / sizeof(Edge) <= kMaxEdges,
 const char* kPhaseNames[(int)Phase::Count] = {"idle", "fitting", "transition",
                                               "roots"};
 const char* kEventNames[(int)Event::Count] = {
-    "phase_start", "face_present", "face_absent", "fit_converged", "fit_lost",
-    "scene_done"};
+    "phase_start",   "face_present", "face_absent", "fit_converged",
+    "fit_lost",      "scene_done",   "cloth_cleared"};
 
 float clamp01(float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); }
 
@@ -109,6 +114,7 @@ Timeline::Timeline() {
             hold_[i][e] = g.edges[e].hold;
             grace_[i][e] = g.edges[e].grace;
         }
+        clear_at_[i] = -1.0;
     }
     restart();
 }
@@ -156,6 +162,7 @@ void Timeline::enter(Phase p, const std::string& reason) {
         held_[i] = 0.f;
         absent_[i] = 0.f;
     }
+    clear_at_[(int)p] = -1.0;
 }
 
 bool Timeline::eventLevel(Event e) const {
@@ -166,6 +173,7 @@ bool Timeline::eventLevel(Event e) const {
         case Event::FitConverged: return sig_.fit_converged;
         case Event::FitLost:      return !sig_.fit_converged;
         case Event::SceneDone:    return scene_done_;
+        case Event::ClothCleared: return sig_.cloth_cleared;
         default:                  return false;
     }
 }
@@ -205,9 +213,24 @@ void Timeline::advance(double dt) {
         return;
     }
 
+    // Track the first frame the clearance signal reads true, whatever else
+    // happens this frame -- see PhaseGraph::clear_margin.
+    if (eventLevel(Event::ClothCleared) && clear_at_[pi] < 0.0) clear_at_[pi] = t_;
+
     // The ceiling, after the edges: an event that fires on the same frame the
     // timeout expires is the more specific answer.
-    if (max_time_[pi] > 0.f && t_ >= max_time_[pi]) {
+    //
+    // Before clearance: the graph's own max_time is the ceiling (a fixed
+    // safety net, e.g. "the fit never converges" or "the cloth never
+    // clears"). Once clear_at_ is set, max_time stops applying -- it was
+    // only that pre-clearance net -- and the ceiling becomes clear_at_ +
+    // clear_margin instead, a fresh net for whatever is supposed to end the
+    // phase after clearance (a phase with clear_margin == 0 never switches
+    // over, and just keeps the fixed max_time throughout).
+    const float ceiling = (clear_at_[pi] >= 0.0 && g.clear_margin > 0.f)
+        ? (float)clear_at_[pi] + g.clear_margin
+        : max_time_[pi];
+    if (ceiling > 0.f && t_ >= ceiling) {
         enter(g.timeout, std::string(PhaseName(g.timeout)) + " on timeout");
         return;
     }

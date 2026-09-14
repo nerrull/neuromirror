@@ -659,15 +659,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             ui::BeginHeader("face", false);
                             {
                                 ui::SliderFloat("face seconds", &S.face_seconds, 0.2f, 20.f, "%.1f");
-                                ui::SliderFloat("face clear-tail seconds", &S.face_clear_tail_seconds,
+                                ui::SliderFloat("face hold after cloth s", &S.face_hold_after_cloth_seconds,
                                                 0.f, 30.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Face also waits on the cloth's own clearance\n"
-                                        "signal: it holds \"face seconds\" as a floor, then\n"
-                                        "this many seconds more once the film has\n"
-                                        "actually fallen clear, so growth never starts\n"
-                                        "while it is still visibly falling.");
+                                        "How long the live face stays on mask 0 after\n"
+                                        "the cloth has fallen, before it freezes and the\n"
+                                        "roots grow; the visitor's face is recorded\n"
+                                        "through this window.");
                                 }
                                 ui::SliderFloat("fog fade seconds", &S.fog_fade_seconds, 0.f, 20.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {

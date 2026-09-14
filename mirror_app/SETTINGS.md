@@ -80,7 +80,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
 | `fit/set face size` | bool | -- | 1 |
-| `fit/size` | float | 0.05 .. 0.5 | 0.31 |
+| `fit/size` | float | 0.05 .. 0.5 | 0.2 |
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
@@ -99,7 +99,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
 | `show/idle/face drop grace s` | float | 0 .. 3 | 0.5 |
-| `show/idle/face hold s` | float | 0 .. 30 | 1.5 |
+| `show/idle/face hold s` | float | 0 .. 30 | 15 |
 | `show/idle/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/idle/intro fade-in (s)` | float | 0 .. 8 | 1.5 |
 | `show/idle/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
@@ -113,7 +113,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/cam ease seconds` | float | 0.05 .. 5 | 1.2 |
 | `show/roots/cam max angular speed (rad-s)` | float | 0.05 .. 4 | 1.2 |
 | `show/roots/datamosh seconds` | float | 0 .. 10 | 3 |
-| `show/roots/face clear-tail seconds` | float | 0 .. 30 | 3 |
+| `show/roots/face hold after cloth s` | float | 0 .. 30 | 10 |
 | `show/roots/face seconds` | float | 0.2 .. 20 | 2.3 |
 | `show/roots/fade seconds` | float | 0.2 .. 10 | 2 |
 | `show/roots/fog fade seconds` | float | 0 .. 20 | 2 |
@@ -138,17 +138,17 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/orbit target lift` | float | -40 .. 40 | 0 |
 | `show/roots/orbit zoom` | float | 0.1 .. 1.5 | 0.55 |
 | `show/roots/reveal fallback seconds` | float | 0.2 .. 20 | 2.5 |
-| `show/roots/reveal max structures` | int | 1 .. 32 | 16 |
-| `show/roots/reveal min structures` | int | 0 .. 32 | 9 |
+| `show/roots/reveal max structures` | int | 1 .. 32 | 6 |
+| `show/roots/reveal min structures` | int | 0 .. 32 | 3 |
 | `show/roots/reveal mode` | int | 0 .. 1 | 0 |
 | `show/roots/reveal pulse lag` | float | 0 .. 5 | 0 |
-| `show/roots/reveal ring radius` | float | 0.1 .. 20 | 3 |
+| `show/roots/reveal ring radius` | float | 0.1 .. 20 | 7.79 |
 | `show/roots/reveal structures` | int | 0 .. 32 | 0 |
 | `show/roots/reveal tilt (deg)` | float | 0 .. 89 | 60 |
 | `show/roots/turn seconds` | float | 0.5 .. 20 | 6 |
 | `show/run the show` | bool | -- | 1 |
 | `show/transition` | int | 0 .. 4 | 2 |
-| `show/transition/done_hold` | float | 0 .. 30 | 0 |
+| `show/transition/done_hold` | float | 0 .. 30 | 10.8 |
 | `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
 | `show/transition/min` | float | 0 .. 120 | 0 |
@@ -214,7 +214,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `cloth/relief shading` | float | 0 .. 1 | 0.55 |
 | `cloth/save a capture on lock` | bool | -- | 1 |
 | `cloth/set (plasticity)` | float | 0 .. 8 | 2 |
-| `cloth/settle` | float | 0 .. 20 | 0 |
+| `cloth/settle` | float | 0 .. 20 | 9.787 |
 | `cloth/shading span` | float | 1 .. 10 | 4 |
 | `cloth/sheet oversize` | float | 1 .. 1.3 | 1.08 |
 | `cloth/sheet res` | int | 16 .. 128 | 72 |
@@ -316,12 +316,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/cached field: LOD & culling/frustum cull` | bool | -- | 1 |
 | `roots/cached field: LOD & culling/grid NxN` | int | 2 .. 20 | 6 |
 | `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 0 |
-| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 7.25026 |
-| `roots/camera/elevation` | float | -1.5 .. 1.5 | 0.0872664 |
+| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | -2.34092 |
+| `roots/camera/elevation` | float | -1.5 .. 1.5 | -0.248807 |
 | `roots/camera/fov` | float | 0.2 .. 1.2 | 0.6 |
 | `roots/camera/frame automatically` | bool | -- | 0 |
 | `roots/camera/margin` | float | 0 .. 1.5 | 0.35 |
-| `roots/camera/radius` | float | 5 .. 120 | 70.3553 |
+| `roots/camera/radius` | float | 5 .. 120 | 22.5475 |
 | `roots/camera/zoom` | float | 0.15 .. 5 | 1 |
 | `roots/environment & material/AO downscale` | int | 1 .. 4 | 2 |
 | `roots/environment & material/AO intensity` | float | 0 .. 4 | 2 |
@@ -356,7 +356,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/unlit level` | float | 0 .. 0.3 | 0.035 |
 | `roots/face masks/face falloff` | float | 0.001 .. 0.1 | 0.022 |
 | `roots/face masks/face light` | float | 0 .. 8 | 1.8 |
-| `roots/face masks/face recess` | float | -2 .. 1.5 | -0.997 |
+| `roots/face masks/face recess` | float | -2 .. 1.5 | -0.849 |
 | `roots/face masks/face scale` | float | 0.3 .. 1.5 | 1.351 |
 | `roots/face masks/face spec` | float | 0 .. 3 | 1.2 |
 | `roots/face masks/mask relief` | float | 0 .. 1.5 | 0 |

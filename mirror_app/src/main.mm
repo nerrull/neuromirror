@@ -1429,9 +1429,16 @@ int main(int argc, char** argv) {
     // reseeded twice for one sitting (once at Transition entry, again at the
     // literal Roots entry) -- see the entries()-diff block below.
     bool rootSeqBegunForSitting = false;
+    // Set the moment onLeaveFace (below) has fed this sitting's own finished
+    // FaceTrack straight to rootFaceSeq.begin(), so the later phase-entry
+    // handler (p == Roots) does not restart the same playback a frame later.
+    // Reset at every Transition entry; left false for the rest of a sitting
+    // whose recording never finished before the cut (too short a recording,
+    // or a phase reached without a Transition -- the operator's navigator),
+    // so that handler's own begin() -- the original, still-needed fallback --
+    // runs instead.
+    bool rootFaceSeqBegunForSitting = false;
     double rootsClock = 0.0;          // seconds since Transition entry; RootSequence's own clock
-    double clothClearAtPreWarm = -1.0;
-    bool clothClearHoldElapsed = false;
     // The last g_show.phaseTime() seen while still in Transition -- captured
     // every Transition frame, read once at the Roots cut so
     // faceTrackRec.record() can keep using a clock continuous with what it
@@ -2027,16 +2034,15 @@ int main(int argc, char** argv) {
                 // recording still has to know when the person actually left.
                 if (g_show.phase() == show::Phase::Roots && rootSeqActive && !rootSeq.done())
                     sig.face_present = true;
+                // The safety-net half of show_timeline's Transition ceiling
+                // (see show_timeline.cpp's kTransitionEdges comment): before
+                // this is seen true the phase's fixed max_time still applies,
+                // in case the cloth never clears at all. The actual cut to
+                // Roots is SceneDone, called below (onLeaveFace) the moment
+                // RootSequence leaves its Face stage -- not from this signal.
+                sig.cloth_cleared = scene == (int)Scene::Transition && roots.valid() &&
+                                     roots.clothCleared();
                 g_show.setSignals(sig);
-                // The transition owns its own duration, so it reports its end
-                // rather than being timed from outside -- now additionally
-                // gated on the cloth having actually cleared (+ its tail),
-                // computed in the pre-warm block below, so the cut to Roots
-                // lands after the film is visibly out of the way rather than
-                // racing the old fixed Timing sum.
-                if (scene == (int)Scene::Transition && roots.valid() && roots.clothDone() &&
-                    clothClearHoldElapsed)
-                    g_show.sceneDone();
 
                 // Seconds the visitor has been gone, spanning both Transition
                 // and Roots -- what faceTrackRecActive's finish() below waits
@@ -2297,14 +2303,13 @@ int main(int argc, char** argv) {
                             dealBankFaces(std::string());
                             rootSeq.begin(roots, g_root_seq);
                             rootSeqBegunForSitting = true;
+                            rootFaceSeqBegunForSitting = false;
                             faceTrackRec.begin();
                             faceTrackRecActive = true;
                             thisSittingCaptureId.clear();
                             g_track_absent_t = 0.0;
                             transitionExitPhaseTime = 0.0;
                             rootsClock = 0.0;
-                            clothClearAtPreWarm = -1.0;
-                            clothClearHoldElapsed = false;
                             break;
                         default:
                             break;
@@ -2335,8 +2340,10 @@ int main(int argc, char** argv) {
                             if (roots.valid()) { roots.replant(); roots.skipCloth(); }
                             rootFaceTrisUploaded = false;
                             rootsClock = 0.0;
-                            clothClearAtPreWarm = 0.0;
-                            clothClearHoldElapsed = true;
+                            // No Transition ran, so onLeaveFace never fed
+                            // rootFaceSeq a fresh recording for this jump --
+                            // the handler below must run its own begin().
+                            rootFaceSeqBegunForSitting = false;
                             // The bank on the other masks, as at Transition
                             // entry; minus this sitting's capture if the
                             // jump came *back* to Roots after one was saved.
@@ -2368,7 +2375,21 @@ int main(int argc, char** argv) {
                     // the first frame of Roots. It is not cleared, so
                     // re-entering Roots for the same sitting (toggling the
                     // phase by hand) still replays that sitting.
-                    if (p == show::Phase::Roots) {
+                    //
+                    // The usual forward path already fed rootFaceSeq this
+                    // sitting's own track the instant it finished, at the
+                    // Face -> Grow cut (onLeaveFace, below) -- well before
+                    // this literal phase entry, which now lands on the same
+                    // frame or the next. rootFaceSeqBegunForSitting guards
+                    // against restarting that same playback from here a
+                    // frame later. The two paths this still runs for: the
+                    // operator's navigator jumping straight to Roots (no
+                    // Transition, so onLeaveFace never ran), and the
+                    // fallback for a sitting whose recording never finished
+                    // before the cut -- both fall back to pendingFaceTrack,
+                    // whatever the most recent finish() (the absence-based
+                    // fallback, or a previous sitting's) produced.
+                    if (p == show::Phase::Roots && !rootFaceSeqBegunForSitting) {
                         const bool ownTrack = !thisSittingCaptureId.empty() &&
                                               pendingFaceTrack.id == thisSittingCaptureId;
                         rootFaceSeq.begin(ownTrack ? pendingFaceTrack : mirror::FaceTrack{},
@@ -2897,14 +2918,13 @@ int main(int argc, char** argv) {
                 g_root_jump = -1;
                 if (want < 0 || want >= (int)RootSequence::Stage::Done) return;
                 if (!rootSeqActive || !rootSeq.valid()) return;
+                // A jump past Face lands here already having left it, so
+                // onLeaveFace (below, keyed off stageBefore/stage() the same
+                // way) fires for this same frame -- sceneDone(), the
+                // recording's finish() and rootFaceSeq's begin() all happen
+                // on the jump, exactly as they would on the sequence's own
+                // clock reaching the same edge.
                 rootSeq.jumpTo((RootSequence::Stage)want, roots, g_root_seq, rootsClock);
-                // Past Face the film is over (jumpTo retired it), so the
-                // Transition's own gate on the cut to Roots is met now
-                // rather than a clear-tail later.
-                if (want > (int)RootSequence::Stage::Face) {
-                    if (clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
-                    clothClearHoldElapsed = true;
-                }
             };
             // The moment the viewer stops driving mask 0 (the sequence leaving
             // Face, by its own clock or a jump), the mask freezes on whatever
@@ -2928,6 +2948,47 @@ int main(int argc, char** argv) {
                 roots.setFittedFace(v, rootFaceTrisUploaded ? std::vector<int>()
                                                             : g_fitter.basis().triangles());
                 rootFaceTrisUploaded = true;
+            };
+            // The freeze, at the same edge squareAnchorMaskOnLeavingFace
+            // reacts to (Face -> anything else): this is where show_timeline's
+            // Transition -> Roots cut now actually happens (SceneDone, not a
+            // cloth-clear-plus-tail timer -- see show_timeline.cpp's
+            // kTransitionEdges comment), and where the sitting's own face
+            // recording finishes and is handed straight to rootFaceSeq so mask
+            // 0 replays *this* visitor from Grow onward instead of freezing on
+            // a static mesh (or, worse, the previous visitor's track -- see
+            // ROOT_TIMELINE.md's old "known gap"). Called before
+            // squareAnchorMaskOnLeavingFace, above, so that lambda's own
+            // "rootFaceSeq.valid() already" bail is seeing this frame's
+            // result, not last frame's: once a fresh recording is handed over
+            // here, rootFaceSeq.step() (below) is what poses the mask next,
+            // not a one-off squaring of the live tracker's last frame.
+            auto onLeaveFace = [&](RootSequence::Stage before) {
+                if (!rootSeqActive || !rootSeq.valid()) return;
+                if (before != RootSequence::Stage::Face || rootSeq.stage() == RootSequence::Stage::Face)
+                    return;
+                g_show.sceneDone();
+                // Make sure this sitting has a capture id before finish()
+                // keys the track to it -- the ordinary path already ran this
+                // at the literal Roots entry, one frame later; running it
+                // here too is a no-op the second time (guarded on
+                // thisSittingCaptureId already being set).
+                autoCaptureAtCut();
+                if (!faceTrackRecActive) return;
+                faceTrackRecActive = false;
+                mirror::FaceTrack track;
+                if (!faceTrackRec.finish(g_fitter, track) || thisSittingCaptureId.empty())
+                    return;   // too short a recording, or no capture -- the
+                              // phase-entry handler's fallback covers it
+                track.id = thisSittingCaptureId;
+                std::string terr;
+                if (!mirror::SaveFaceTrack(track, terr)) {
+                    fprintf(stderr, "face track: save failed: %s\n", terr.c_str());
+                    return;
+                }
+                pendingFaceTrack = std::move(track);
+                rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis());
+                rootFaceSeqBegunForSitting = true;
             };
             g_root_stage = -1;   // set below by whichever root branch renders
 
@@ -3063,13 +3124,9 @@ int main(int argc, char** argv) {
                 rootsClock += rootDt;
                 const RootSequence::Stage stageBefore = rootSeq.stage();
                 honourRootJump();
-                const bool cleared = roots.clothCleared();
-                if (cleared && clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
-                clothClearHoldElapsed = clothClearHoldElapsed || (clothClearAtPreWarm >= 0.0 &&
-                    rootsClock >= clothClearAtPreWarm + g_root_seq.face_clear_tail_seconds);
                 if (!rootHold) {
                     RootSequence::Inputs in;
-                    in.clothCleared = cleared;
+                    in.clothCleared = roots.clothCleared();
                     in.markerHit    = rootMarkerHit;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
@@ -3078,7 +3135,15 @@ int main(int argc, char** argv) {
                     // next step; held for this frame only.
                     roots.simPaused = true;
                 }
+                onLeaveFace(stageBefore);
                 squareAnchorMaskOnLeavingFace(stageBefore);
+                // rootFaceSeq may have just begun (onLeaveFace, above) while
+                // this frame is still rendering Transition -- the literal
+                // Roots phase entry lands a frame later at most. Step it here
+                // too so mask 0 does not sit frozen on the tracker's last
+                // frame for that gap.
+                if (rootFaceSeq.valid() && !rootHold)
+                    rootFaceSeq.step(roots, g_show.phaseTime(), dt);
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
@@ -3159,10 +3224,12 @@ int main(int argc, char** argv) {
                     // when the orbit has run its authored seconds.
                     RootSequence::Inputs in;
                     // clothCleared is definitionally true by the time Roots
-                    // is literally entered (sceneDone() itself waited on
-                    // clothClearHoldElapsed), but passed live rather than
-                    // hardcoded so a manually-navigated phase jump (no
-                    // Transition having run first) still behaves sanely.
+                    // is literally entered on the ordinary forward path (the
+                    // cloth pressed and cleared well before Face -> Grow, the
+                    // moment sceneDone() now fires on -- see onLeaveFace), but
+                    // passed live rather than hardcoded so a manually-
+                    // navigated phase jump (no Transition having run first)
+                    // still behaves sanely.
                     in.clothCleared = roots.clothCleared();
                     in.markerHit    = rootMarkerHit;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
@@ -3182,6 +3249,11 @@ int main(int argc, char** argv) {
                     // the next step; this frame the growth stands still.
                     roots.simPaused = true;
                 }
+                // Covers the operator's navigator jumping straight to Roots
+                // (no Transition, so this is the only place the Face -> Grow
+                // edge is ever seen for that sitting) -- sceneDone() here is
+                // a harmless no-op, the show is already in Roots.
+                onLeaveFace(stageBefore);
                 squareAnchorMaskOnLeavingFace(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
                 if (rootFaceSeq.valid() && !rootHold)

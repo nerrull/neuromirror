@@ -78,6 +78,7 @@ enum class Event : int {
     FitConverged,   // the fit has been settled for `hold` seconds
     FitLost,        // the fit stopped being settled
     SceneDone,      // the phase's own scene reported completion
+    ClothCleared,   // the transition's cloth has cleared at least once
     Count,
 };
 
@@ -109,6 +110,14 @@ struct PhaseGraph {
     Phase timeout;       // where `max` sends it
     float min_time;      // default floor
     float max_time;      // default ceiling, 0 = none
+    // Once Event::ClothCleared is first seen true in this phase, `max_time`
+    // above stops applying -- it was only the "cloth never clears" safety
+    // net -- and the ceiling becomes (the clock at that moment) + this many
+    // seconds instead, a fresh safety net for whatever is supposed to end the
+    // phase after clearance (see show_timeline.cpp's Transition entry for the
+    // one phase that uses this). 0 (the default) means the feature is off and
+    // max_time keeps applying for the phase's whole run.
+    float clear_margin = 0.f;
 };
 
 const PhaseGraph& Graph(Phase p);
@@ -123,6 +132,9 @@ constexpr int kMaxEdges = 4;
 struct Signals {
     bool face_present = false;
     bool fit_converged = false;
+    // The scene's own clearance signal (RootScene::clothCleared() during
+    // Transition) -- see Event::ClothCleared and PhaseGraph::clear_margin.
+    bool cloth_cleared = false;
 };
 
 class Timeline {
@@ -177,6 +189,10 @@ public:
     // 0..1 through the phase's `max`, or 0 when it has none. For the UI.
     float phaseProgress() const;
 
+    // Seconds into the current phase that Event::ClothCleared was first seen
+    // true, or < 0 if not (yet). For the UI/diagnostics.
+    double clearedAt() const { return clear_at_[(int)phase_]; }
+
     // Why the last transition happened, for the UI and for logs.
     const std::string& lastReason() const { return reason_; }
 
@@ -202,6 +218,11 @@ private:
     float held_[kMaxEdges] = {};      // per-edge continuous-true accumulator
     float absent_[kMaxEdges] = {};    // per-edge continuous-false accumulator,
                                        // for the grace above
+
+    // Per-phase: the clock (t_) the first frame Event::ClothCleared read
+    // true, or -1 until then. Reset on every phase entry -- see
+    // PhaseGraph::clear_margin.
+    double clear_at_[(int)Phase::Count];
 };
 
 }  // namespace show

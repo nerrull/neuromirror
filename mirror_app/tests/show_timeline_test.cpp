@@ -220,6 +220,43 @@ int main() {
               "a finished scene is not held back by the phase floor");
     }
 
+    // --- clear_margin: the ceiling extends past clearance -------------------
+    {
+        // Before ClothCleared, the graph's own max_time is the safety net.
+        Timeline tl;
+        tl.goTo(Phase::Transition);
+        check(near(tl.maxTime(Phase::Transition), Graph(Phase::Transition).max_time,
+                   1e-6f),
+              "transition starts with the pre-clearance ceiling");
+        run(tl, Graph(Phase::Transition).max_time + 1.0, kNothing);
+        check(tl.phase() == Phase::Roots,
+              "never-clears still times out at the graph's max_time");
+
+        // Once cleared, the fixed 30s no longer applies -- a hold well past
+        // it, ending in SceneDone, is not cut short.
+        Timeline tl2;
+        Signals cleared; cleared.cloth_cleared = true;
+        tl2.goTo(Phase::Transition);
+        run(tl2, 5.0, cleared);   // clears at t=5
+        run(tl2, Graph(Phase::Transition).max_time - 1.0, kNothing);
+        check(tl2.phase() == Phase::Transition,
+              "clearance replaces the 30s ceiling -- still running past it");
+        tl2.sceneDone();
+        run(tl2, 0.1, kNothing);
+        check(tl2.phase() == Phase::Roots,
+              "and the real edge (SceneDone) still ends it normally");
+
+        // The extended ceiling is still a genuine safety net: if SceneDone
+        // never comes even after clearance, clear_margin (45s past the
+        // clock clearance was seen) times it out.
+        Timeline tl3;
+        tl3.goTo(Phase::Transition);
+        run(tl3, 5.0, cleared);
+        run(tl3, 45.1, cleared);   // 5 + 45.1 > clear_at (5) + clear_margin (45)
+        check(tl3.phase() == Phase::Roots,
+              "clear_margin itself is a safety net when SceneDone never fires");
+    }
+
     // --- the operator ------------------------------------------------------
     {
         Timeline tl;
