@@ -78,6 +78,7 @@ p sound/phases post their own events = 1
 p sound/pluck base = 34
 p sound/pluck intensity range = 12
 p sound/rise (s) = 0.12
+p sound/root follows idle tuning = 1
 p sound/shepherd rate max (st-s) = 0.6
 p sound/shepherd rate min (st-s) = 0.15
 p sound/shepherd rise = 0

@@ -203,6 +203,18 @@ public:
         // own `root`/key, since this control is a raw Hz explore, not a
         // fourth way of picking a chord tone.
         bool  pluck_center_snap_to_note = false;
+
+        // --- root continuity ------------------------------------------------
+        //
+        // The visitor who just left stood through the whole idle wait hearing
+        // the pinned pluck -- wander, per-visitor offset and center override
+        // all folded in, whatever mix of them was on. If true, the next
+        // visitor's chord does not start over on the plain configured
+        // `root`: reset() reads whatever the pluck was actually sounding the
+        // instant Fitting took over and carries that note's pitch class into
+        // the pad's own register (see reset()'s comment). Off is the old
+        // behaviour -- every visitor's chord starts on `root`, full stop.
+        bool root_follows_idle_tuning = true;
     };
 
     Chord() { reset(); }
@@ -257,6 +269,13 @@ public:
     // raw Hz explore, not another way of picking a chord tone.
     static float NearestNoteHz(float hz);
 
+    // This visitor's actual root -- `cfg_.root` when `root_follows_idle_tuning`
+    // is off or no idle note was available to continue, or `cfg_.root` plus
+    // the idle-continuation offset reset() picked when it is on. What the
+    // voicing, the pluck and the comb Hz are all actually built from; see the
+    // comment on `visitor_root_delta_` below. For the panel's diagnostic line.
+    float effectiveRoot() const { return cfg_.root + visitor_root_delta_; }
+
 private:
     Config cfg_;
     ChordVoicing v_;
@@ -265,6 +284,33 @@ private:
     // Set by resolve(), cleared by reset(): while true, update() holds the
     // final checkpoint instead of tracking `fit`.
     bool resolved_ = false;
+
+    // The offset, semitones, from `cfg_.root` that this visitor's chord is
+    // actually built from -- everywhere `cfg_.root` used to be read directly
+    // (reset()'s opening voicing, resolve(), update()'s voicing and pluck)
+    // now reads `cfg_.root + visitor_root_delta_` instead (see
+    // effectiveRoot()). A *delta*, not an absolute root, and recombined with
+    // the live `cfg_.root` on every read rather than frozen at reset() --
+    // deliberately, so the operator's key slider still transposes the chord
+    // immediately mid-sitting, exactly as it always has (see chord_test's "a
+    // key change transposes, it does not glide"). Set at every reset(): zero
+    // when `root_follows_idle_tuning` is off or there was no idle note to
+    // continue (see `last_update_was_idle_`), or the octave-corrected
+    // difference between the idle-continuation note and `cfg_.root` at that
+    // moment when there was. Deliberately never written back into `cfg_.root`
+    // itself -- the panel's key still means the piece's key, not "whatever
+    // the last visitor happened to land on".
+    float visitor_root_delta_ = 0.f;
+
+    // True iff the most recent update() call was itself an idle-style one --
+    // fit <= 0, the pinned-pluck branch (see update()). reset()'s
+    // root-continuation only trusts `v_.comb_hz` as "the idle tuning note"
+    // when this is true: a reset() with no idle update() behind it at all
+    // (the very first Chord ever constructed) or one that follows a fit that
+    // was still actively climbing (an abandoned/timed-out sitting -- fit
+    // never dropped to 0 before the next visitor's reset()) has no real idle
+    // note to continue, and falls back to `cfg_.root` regardless of the flag.
+    bool last_update_was_idle_ = false;
 
     // Pinned-pluck exploration state (see Config). `wander_time_` is the
     // wander's own clock, zeroed whenever intensity leaves zero so it never

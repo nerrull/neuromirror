@@ -83,7 +83,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (95 parameters)
+## show (96 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -169,6 +169,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/pluck base` | float | -12 .. 36 | 34 |
 | `sound/pluck intensity range` | float | 0 .. 24 | 12 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
+| `sound/root follows idle tuning` | bool | -- | 1 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
 | `sound/shepherd rate min (st-s)` | float | 0 .. 3 | 0.15 |
 | `sound/shepherd rise` | bool | -- | 0 |

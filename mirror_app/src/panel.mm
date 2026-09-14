@@ -1041,6 +1041,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::Text("pluck %6.2f", cv.pluck_note);
                     ImGui::SameLine();
                     ImGui::TextDisabled("(comb %.1f Hz)", cv.comb_hz);
+                    ImGui::Text("root  %6.2f", g_chord.effectiveRoot());
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(key %.0f)", g_chord.config().root);
                 }
 
                 mirror::Chord::Config& cc = g_chord.config();
@@ -1090,6 +1093,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "Semitones above the pluck base that full intensity\n"
                             "(fit and movement, averaged) can push the pluck to,\n"
                             "before the snap to the nearest chord tone.");
+                    }
+                    ui::Checkbox("root follows idle tuning", &cc.root_follows_idle_tuning);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The next visitor's chord starts on the note the\n"
+                            "pinned pluck was actually sounding at the end of\n"
+                            "Idle -- wander/offset/override all included --\n"
+                            "carried into the pad's own register, instead of\n"
+                            "always starting over on the key above. Off is the\n"
+                            "old behaviour: every visitor starts on the key.");
                     }
                 }
                 ui::EndHeader();

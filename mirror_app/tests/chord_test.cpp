@@ -334,6 +334,43 @@ int main() {
         check(c.stage() >= 1, "and the checkpoint tracks the fit again after reset()");
     }
 
+    // --- root follows idle tuning --------------------------------------------
+    //
+    // Simulate an idle wait: fit held at 0 (idle never trains the pond) with
+    // wander on, long enough for the pinned pluck to drift off the plain
+    // root+pluck_high tone. reset() -- the Idle -> Fitting handoff for the
+    // next visitor -- should then pick up that exact note, transposed by
+    // whole octaves into the pad's register, as this visitor's root.
+    {
+        mirror::Chord c;
+        check(c.config().root_follows_idle_tuning, "on by default");
+        c.config().pluck_wander_enabled = true;
+        c.config().pluck_wander_period_s = 1.f;
+        hold(c, 0.f, 0.3f, 3.f);
+        const float idle_hz = c.voicing().comb_hz;
+        check(std::fabs(idle_hz - NoteToHz(48.f + 34.f)) > 0.5f,
+              "the wander actually moved the pinned pluck off its plain tone");
+
+        c.reset();
+        const float idle_note = 69.f + 12.f * std::log2(idle_hz / 440.f);
+        const float octaves = std::round((idle_note - c.config().root) / 12.f);
+        const float want_root = idle_note - octaves * 12.f;
+        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
+              "with the flag on, reset()'s root voice continues the idle pluck's "
+              "note, octave-shifted into the pad's register");
+
+        // With the flag off, the old behaviour: reset() always lands on the
+        // configured root, no matter what the pluck was doing beforehand.
+        mirror::Chord c2;
+        c2.config().root_follows_idle_tuning = false;
+        c2.config().pluck_wander_enabled = true;
+        c2.config().pluck_wander_period_s = 1.f;
+        hold(c2, 0.f, 0.3f, 3.f);
+        c2.reset();
+        check(std::fabs(c2.voicing().note[0] - (c2.config().root + c2.config().octave)) < 1e-3f,
+              "with the flag off, reset() still uses the configured root");
+    }
+
     if (failures == 0) std::printf("chord_test: OK\n");
     return failures == 0 ? 0 : 1;
 }

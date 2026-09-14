@@ -77,19 +77,61 @@ void Chord::reset() {
     // forever with no SetState ever telling it otherwise.
     stage_changed_ = stage_changed_ || (stage_ != prev_stage);
     resolved_ = false;
+
+    // --- root continuity: pick up the note idle was just sounding ----------
+    //
+    // `v_.comb_hz` still holds whatever the pluck actually rang on the frame
+    // just before this call -- Idle runs update() every frame the same as
+    // Fitting does (see main.mm's per-frame audio block, which calls
+    // Chord::update() unconditionally and only then reads comb_hz into the
+    // RTPC), so by the time this visitor's Fitting entry calls reset(), that
+    // value is the exact Hz the room just heard: the snapped chord tone, plus
+    // whatever center override / per-visitor offset / wander was shading it
+    // (see update()'s pluck section below). Read before anything here
+    // overwrites it.
+    //
+    // Only trusted when `last_update_was_idle_` -- i.e. the frame that left
+    // this comb_hz behind was itself an idle-style one (fit <= 0). Two cases
+    // where that is false and the fallback below is the right call instead:
+    // the very first reset() a Chord ever runs (nothing has sounded yet), and
+    // a reset() that follows an abandoned or timed-out sitting (fit was still
+    // actively above 0 -- climbing or stalled -- right up to the handoff, so
+    // there was no genuine idle pin to continue).
+    const float idle_hz = v_.comb_hz;
+    if (cfg_.root_follows_idle_tuning && last_update_was_idle_) {
+        const float idle_note = 69.f + 12.f * std::log2(std::max(1.f, idle_hz) / 440.f);
+        // Whole octaves only -- the note class continues, the register
+        // stays the pad's designed one (nearest octave to the configured
+        // root). Not rounded to an integer semitone: idle's wander is a
+        // continuous drift, and the root inherits that continuity too. A
+        // *delta* from `cfg_.root`, not the absolute note, so a live key
+        // change afterwards still transposes this visitor's chord along
+        // with it -- see the comment on `visitor_root_delta_` in chord.h.
+        const float octaves = std::round((idle_note - cfg_.root) / 12.f);
+        visitor_root_delta_ = (idle_note - octaves * 12.f) - cfg_.root;
+    } else {
+        visitor_root_delta_ = 0.f;
+    }
+    const float root = cfg_.root + visitor_root_delta_;
+
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tgt = cfg_.root + cfg_.octave + kOffsets[0][i];
+        const float tgt = root + cfg_.octave + kOffsets[0][i];
         v_.note[i] = tgt;
         v_.target[i] = tgt;
     }
     v_.stage = 0;
-    v_.pluck_note = cfg_.root + cfg_.pluck_high;
+    v_.pluck_note = root + cfg_.pluck_high;
     v_.comb_hz = cfg_.pluck_center_override_enabled ? cfg_.pluck_center_hz
                                                      : NoteToHz(v_.pluck_note);
 
     // See the "pinned-pluck exploration" comment in chord.h: the wander's
     // clock restarts clean, and a fresh per-visitor offset is drawn whether
-    // or not it's currently enabled.
+    // or not it's currently enabled. This is *this* visitor's own draw, not
+    // the departing one's -- the one baked into `idle_hz` above already
+    // belonged to whoever just left and is spent the moment it is folded
+    // into `visitor_root_delta_`, so applying this fresh draw here is not
+    // reapplying that same offset, it is the ordinary per-visitor draw every
+    // reset() has always done.
     wander_time_ = 0.f;
     pluck_offset_semitones_ = cfg_.pluck_offset_max_semitones > 0
         ? std::uniform_int_distribution<int>(-cfg_.pluck_offset_max_semitones,
@@ -106,7 +148,7 @@ void Chord::resolve() {
     // OR, not overwrite -- see stageChanged()'s comment in chord.h.
     stage_changed_ = stage_changed_ || (stage_ != prev_stage);
 
-    const float base = cfg_.root + cfg_.octave;
+    const float base = effectiveRoot() + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
         const float tgt = base + kOffsets[stage_][i];
         v_.target[i] = tgt;
@@ -160,7 +202,7 @@ void Chord::update(float fit, float movement, float dt) {
     // Wwise's `ChordStage` state transition, driven by the `SetState` the
     // caller posts on `stageChanged()`. `note`/`target` exist so the panel can
     // still show the checkpoint's voicing at a glance.
-    const float base = cfg_.root + cfg_.octave;
+    const float base = effectiveRoot() + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
         const float tgt = base + kOffsets[stage_][i];
         v_.target[i] = tgt;
@@ -178,10 +220,11 @@ void Chord::update(float fit, float movement, float dt) {
     // pluck's register without ever taking it out of key. The drop to a very
     // low register is not a note at all -- it happens outside Chord, at the
     // Transition handoff (see main.mm).
+    const float root = effectiveRoot();
     const float intensity = std::clamp(0.5f * (fit + movement), 0.f, 1.f);
-    const float linear = cfg_.root + cfg_.pluck_high
+    const float linear = root + cfg_.pluck_high
                         + intensity * cfg_.pluck_intensity_range;
-    v_.pluck_note = SnapToChordTone(linear, cfg_.root, stage_);
+    v_.pluck_note = SnapToChordTone(linear, root, stage_);
     v_.comb_hz = NoteToHz(v_.pluck_note);
 
     // --- pinned-pluck exploration (see Config) ------------------------------
@@ -208,8 +251,12 @@ void Chord::update(float fit, float movement, float dt) {
                 0.4f * std::sin(2.f * (float)M_PI * rate_hz * 2.17f * t + 1.3f);
             v_.comb_hz *= (1.f + cfg_.pluck_wander_depth * wobble);
         }
+        // This frame's comb_hz is a trustworthy "idle tuning note" -- see
+        // reset()'s root-continuity comment.
+        last_update_was_idle_ = true;
     } else {
         wander_time_ = 0.f;
+        last_update_was_idle_ = false;
     }
 }
 
