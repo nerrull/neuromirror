@@ -95,9 +95,76 @@ public:
 
     std::string deviceInfo() const;
 
+    // --- watchdog: recovering from a Kinect that drops off USB mid-run -----
+    //
+    // The installation has nobody at the panel to notice a dead feed and
+    // press "open sensor" again. If the colour stream goes quiet for
+    // `setStallSeconds()` while it is open and nobody deliberately paused or
+    // slowed it down, or libfreenect2 itself reports the USB transport gone
+    // (see kinect_source.h's UsbErrorSeen -- a faster, direct signal that
+    // beats waiting the stall out), the device is declared lost: closed,
+    // logged, and reopened on a backoff (1s, 2s, 4s, ... capped at 15s) until
+    // it comes back. The re-enumeration this waits for is real: on the
+    // installation the sensor is alone on its own XHCI controller.
+    //
+    // A user-initiated close() (the panel's "close sensor") does not arm
+    // this -- only a loss the watchdog itself declared gets auto-retried.
+
+    enum class SensorState { kClosed, kOpen, kLost };
+
+    // How long the colour stream may go quiet (while actively polled, not
+    // paused or rate-limited below what that implies) before the sensor is
+    // declared lost. Default matches PANEL.md's "kinect stall s", 3 seconds.
+    void setStallSeconds(float s);
+
+    // Call once per frame, unconditionally -- whether or not anything polled
+    // a frame this frame, and whether or not the sensor is even open, so the
+    // backoff timer keeps advancing after a loss. This is also where the one
+    // (synchronous, ~1-2s) reopen attempt per backoff tick happens: it is not
+    // run more than once per call, so it costs at most one hitch per retry,
+    // not one per frame.
+    //
+    // `show_phase` and `usb_detach_time` (steady-clock seconds, < 0 if none
+    // seen) are for the log line only -- they let it say whether the loss
+    // looks like a USB/power event (a detach was observed) or a firmware
+    // wedge (the device stayed enumerated but the colour stream still died).
+    void tick(const char* show_phase, double usb_detach_time = -1.0);
+
+    SensorState state() const;
+    // Seconds until the next reopen attempt, or 0 if not currently retrying.
+    float retryInSeconds() const;
+
+    // Diagnostics only (the USB attach/detach log lines assembled in
+    // main.mm, next to kinect_usb_watch's observer). 0 while closed.
+    double secondsSinceLastFrame() const;
+    double uptimeSeconds() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// Installs a libfreenect2 logger that timestamps every line, prefixes it
+// "kinect/fn2:", routes it through kinect_log (stderr + the rolling
+// ~/Library/Logs/mirror_app/kinect.log file), and still feeds
+// NoteFreenect2LogLine so the watchdog's direct USB-error signal keeps
+// working. Overrides kinect_source.cpp's own quiet default logger -- call
+// once at startup, before the first open(). Level is Info: that is what
+// keeps libfreenect2's device-enumeration line ("[Freenect2Impl] found ...")
+// visible; Debug stays off.
+void InstallKinectDiagnosticLogger();
+
+// USB attach/detach bookkeeping: fed by kinect_usb_watch's callback in
+// main.mm on a detach, and read both by tick() (to tell a USB/power loss
+// apart from a firmware wedge in its log line) and by main.mm's own log
+// lines (to say how long the device was gone). Free functions rather than
+// methods on KinectFitTarget because the USB device and the fit target are
+// two different things noticing two different failures -- kept here only so
+// both agree on the same clock (NowSeconds(), from kinect_source.h).
+void NoteKinectUsbDetach();
+// < 0 if no detach has been observed yet this run.
+double KinectUsbDetachTime();
+// NowSeconds() - KinectUsbDetachTime(), or < 0 if none observed yet.
+double SecondsSinceKinectUsbDetach();
 
 }  // namespace mirror

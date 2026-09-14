@@ -28,6 +28,7 @@
 #include "face_fit.h"
 #if MIRROR_HAVE_KINECT
 #include "kinect_target.h"
+#include "kinect_log.h"
 #endif
 #include "root_scene.h"
 #include "root_sequence.h"
@@ -1600,12 +1601,47 @@ int main(int argc, char** argv) {
     // with. Arming the live feed stays a deliberate act -- this opens the
     // device, it does not start training.
     if (g_open_sensor) {
+        // Before the first open(): overrides kinect_source.cpp's own quiet
+        // logger with one that timestamps every line and keeps a copy in
+        // ~/Library/Logs/mirror_app/kinect.log, so a USB drop hours into an
+        // unattended run is still legible afterwards.
+        mirror::InstallKinectDiagnosticLogger();
+
         std::string kerr;
         if (g_kinect.open(kerr))
             printf("kinect: %s\n", g_kinect.deviceInfo().c_str());
         else
             printf("kinect: %s -- use \"open sensor\" in the panel to retry "
                    "(--no-sensor skips this)\n", kerr.c_str());
+
+        // Diagnostic only (see kinect_usb_watch.h) -- says *why* a later
+        // stall happened (USB/power vs. a firmware wedge) but does not drive
+        // the watchdog's own recovery.
+        g_kinect_usb_watch.start([](bool attached, const std::string& detail) {
+            char buf[384];
+            if (attached) {
+                const double since = mirror::SecondsSinceKinectUsbDetach();
+                if (since >= 0.0) {
+                    snprintf(buf, sizeof(buf),
+                             "kinect usb: attached after %.1fs (%s)", since,
+                             detail.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "kinect usb: attached (%s)",
+                             detail.c_str());
+                }
+            } else {
+                mirror::NoteKinectUsbDetach();
+                snprintf(buf, sizeof(buf),
+                         "kinect usb: detached (%s; last colour frame %.2fs "
+                         "ago; show phase %s; uptime %s)",
+                         detail.c_str(), g_kinect.secondsSinceLastFrame(),
+                         show::PhaseName(g_show.phase()),
+                         mirror::kinectlog::FormatDurationShort(
+                             g_kinect.uptimeSeconds())
+                             .c_str());
+            }
+            mirror::kinectlog::Log(buf);
+        });
     }
 #endif
 
@@ -1651,6 +1687,13 @@ int main(int argc, char** argv) {
         // anything polls a frame.
 #if MIRROR_HAVE_KINECT
         g_kinect.setCrop(g_feed);
+        // Unconditional every frame, whether or not anything polled a frame
+        // and whether or not the sensor is even open: this is what advances
+        // the watchdog's backoff clock and makes the one reopen attempt per
+        // retry (see KinectFitTarget::tick).
+        g_kinect.setStallSeconds(g_kinect_stall_s);
+        g_kinect.tick(show::PhaseName(g_show.phase()),
+                     mirror::KinectUsbDetachTime());
 #endif
 
         // And so does the tracker's frame. Derived here, from the same

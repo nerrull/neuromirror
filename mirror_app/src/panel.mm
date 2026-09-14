@@ -1792,17 +1792,40 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     {
                         ImGui::Separator();
                         const bool open = g_kinect.isOpen();
+                        const mirror::KinectFitTarget::SensorState kstate = g_kinect.state();
                         ImGui::Text("LIVE");
                         ImGui::SameLine();
                         if (open) {
                             ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "%s",
                                                g_kinect.deviceInfo().c_str());
+                        } else if (kstate == mirror::KinectFitTarget::SensorState::kLost) {
+                            ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f),
+                                               "sensor lost -- retrying in %.0fs",
+                                               g_kinect.retryInSeconds());
                         } else {
                             ImGui::TextDisabled("sensor closed");
                         }
                         ImGui::SameLine();
                         ImGui::TextDisabled("| %llu frames",
                                             (unsigned long long)g_kinect.frames());
+
+                        // Always declared, never gated behind `open` -- see
+                        // PANEL.md: this is a plain preset value, not
+                        // something whose meaning depends on sensor state.
+                        ImGui::PushItemWidth(90);
+                        ui::SliderFloat("kinect stall s", &g_kinect_stall_s,
+                                        0.5f, 15.f, "%.1f");
+                        ImGui::PopItemWidth();
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "How long the colour stream may go quiet\n"
+                                "before the sensor is declared lost and the\n"
+                                "watchdog starts closing/reopening it on a\n"
+                                "backoff (1s, 2s, 4s ... capped at 15s).\n\n"
+                                "Nobody is at the panel during the show to\n"
+                                "notice a dead feed and press \"open sensor\"\n"
+                                "again -- this is what does it instead.");
+                        }
 
                         if (ImGui::Button(open ? "close sensor" : "open sensor")) {
                             if (open) {

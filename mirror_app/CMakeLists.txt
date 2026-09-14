@@ -168,6 +168,12 @@ find_package(freenect2 QUIET)
 if(freenect2_FOUND AND EXISTS ${_kv2}/src/demo/kinect_source.cpp)
     target_sources(mirror_core PRIVATE
         src/kinect_target.cpp
+        src/kinect_log.cpp
+        # The IOKit USB attach/detach observer: diagnostic only (see
+        # kinect_usb_watch.h) and independent of libfreenect2, but it only
+        # means anything alongside the sensor it is watching for, so it
+        # follows the same MIRROR_HAVE_KINECT gate as the rest of this block.
+        src/kinect_usb_watch.mm
         ${_kv2}/src/demo/kinect_source.cpp
         # mic_level.mm's Kinect-mic-array capture (see mic_level.h/.mm):
         # audio_capture.mm is pure CoreAudio/AudioToolbox, no freenect2 calls
@@ -178,7 +184,7 @@ if(freenect2_FOUND AND EXISTS ${_kv2}/src/demo/kinect_source.cpp)
     target_include_directories(mirror_core PUBLIC
         ${_kv2}/src/demo ${freenect2_INCLUDE_DIRS})
     target_link_libraries(mirror_core PUBLIC ${freenect2_LIBRARIES}
-        "-framework AudioToolbox" "-framework CoreAudio")
+        "-framework AudioToolbox" "-framework CoreAudio" "-framework IOKit")
     target_compile_definitions(mirror_core PUBLIC MIRROR_HAVE_KINECT=1)
     message(STATUS "mirror_app: Kinect fit target enabled")
 else()

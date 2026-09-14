@@ -73,6 +73,8 @@ mirror::KinectFitTarget g_kinect;
 // which is what you want when kinect_v2_demo needs the device: only one
 // process can hold it, and whoever asks second gets LIBUSB_ERROR_NO_DEVICE.
 bool g_open_sensor = true;
+float g_kinect_stall_s = 3.f;
+mirror::KinectUsbWatch g_kinect_usb_watch;
 #endif
 // --- face tracking ----------------------------------------------------------
 //

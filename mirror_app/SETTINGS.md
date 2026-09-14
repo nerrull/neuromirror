@@ -44,7 +44,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (34 parameters)
+## fit (35 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -74,6 +74,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/identity/modes` | int | 10 .. 100 | 80 |
 | `fit/identity/ridge` | float | 0.01 .. 20 | 6 |
 | `fit/identity/secs` | float | 1 .. 15 | 5 |
+| `fit/kinect stall s` | float | 0.5 .. 15 | 3 |
 | `fit/max colour` | float | 0 .. 1 | 1 |
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
@@ -283,7 +284,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/rain/max in flight` | int | 1 .. 24 | 12 |
 | `mirror/rain/rate (drops-s)` | float | 0.02 .. 12 | 0.8 |
 | `mirror/rain/rate jitter` | float | 0 .. 1 | 0.7 |
-| `mirror/rain/reject below (strength)` | float | 0 .. 2 | 0.435 |
+| `mirror/rain/reject below (strength)` | float | 0 .. 2 | 0.333 |
 | `mirror/rain/size` | float | 0.02 .. 0.6 | 0.14 |
 | `mirror/rain/size jitter` | float | 0 .. 1 | 0.35 |
 | `mirror/rain/spread jitter` | float | 0 .. 1 | 0.15 |
@@ -295,16 +296,16 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/render/downscale` | int | 1 .. 10 | 3 |
 | `mirror/render/pause` | bool | -- | 0 |
 | `mirror/render/ripple time scale` | float | 0 .. 4 | 1 |
-| `mirror/ring freq` | float | 0.3 .. 10 | 4.921 |
+| `mirror/ring freq` | float | 0.3 .. 10 | 6.982 |
 | `mirror/ripple decay` | float | 0 .. 5 | 1.824 |
 | `mirror/ripple phase` | float | 0 .. 6.28319 | 0 |
 | `mirror/ripple speed` | float | 0 .. 6 | 1.905 |
 | `mirror/soft centers (anti-alias)` | bool | -- | 1 |
-| `mirror/z/drop boost decay s` | float | 0.05 .. 5 | 0.8 |
-| `mirror/z/drops add z speed -s` | float | 0 .. 0.5 | 0.02 |
+| `mirror/z/drop boost decay s` | float | 0.05 .. 5 | 0.25 |
+| `mirror/z/drops add z speed -s` | float | 0 .. 0.5 | 0.1833 |
 | `mirror/z/z amplitude` | float | 0 .. 3 | 1 |
-| `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.063 |
-| `mirror/z/z step size` | float | 0.01 .. 1 | 0.1 |
+| `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
+| `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
 ## roots (187 parameters)
 

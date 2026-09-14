@@ -20,6 +20,7 @@
 #include "face_fit.h"
 #if MIRROR_HAVE_KINECT
 #include "kinect_target.h"
+#include "kinect_usb_watch.h"
 #endif
 #include "midi_in.h"
 #include "screen_layout.h"
@@ -92,6 +93,12 @@ extern float  g_colour_now;
 #if MIRROR_HAVE_KINECT
 extern mirror::KinectFitTarget g_kinect;
 extern bool g_open_sensor;
+// How long the colour stream may stall (see KinectFitTarget::tick) before the
+// watchdog declares the sensor lost and starts retrying. Panel: "kinect
+// stall s", next to "open sensor".
+extern float g_kinect_stall_s;
+// IOKit USB attach/detach observer -- diagnostic only, see kinect_usb_watch.h.
+extern mirror::KinectUsbWatch g_kinect_usb_watch;
 #endif
 
 // --- face tracking --------------------------------------------------------

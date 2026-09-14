@@ -10,17 +10,54 @@
 namespace {
 constexpr double kRateWindow = 0.5;  // seconds per rate-estimate window
 
+std::atomic<bool> g_usb_error_seen{false};
+
 // libfreenect2's default logger is Info level, which makes the RGB decoder
 // (VTRgbPacketProcessor on macOS, TurboJpegRgbPacketProcessor elsewhere) print
 // an "avg. time / Hz" line every second. Warning still surfaces real problems
 // (USB stalls, decode failures) without the steady-state spam.
-struct QuietFreenect2Logger {
-  QuietFreenect2Logger() {
-    libfreenect2::setGlobalLogger(
-        libfreenect2::createConsoleLogger(libfreenect2::Logger::Warning));
+//
+// A thin subclass rather than createConsoleLogger() directly: every message
+// is also fed to NoteFreenect2LogLine, so a caller that never installs its
+// own logger still gets the watchdog hook below. mirror_app installs a
+// louder logger of its own at startup (see kinect_target.cpp / main.mm's
+// AppLogger) that overrides this one and forwards the same way.
+class QuietFreenect2Logger : public libfreenect2::Logger {
+ public:
+  QuietFreenect2Logger() : inner_(libfreenect2::createConsoleLogger(Warning)) {
+    level_ = Warning;
   }
-} g_quiet_freenect2_logger;
+  ~QuietFreenect2Logger() override { delete inner_; }
+  void log(Level level, const std::string& message) override {
+    if (inner_) inner_->log(level, message);
+    NoteFreenect2LogLine(message);
+  }
+
+ private:
+  libfreenect2::Logger* inner_;
+};
+
+struct InstallQuietFreenect2Logger {
+  InstallQuietFreenect2Logger() {
+    libfreenect2::setGlobalLogger(new QuietFreenect2Logger());
+  }
+} g_install_quiet_freenect2_logger;
 }  // namespace
+
+void NoteFreenect2LogLine(const std::string& message) {
+  // The three lines libusb prints when the sensor drops off the bus mid-
+  // stream (see kinect_target.cpp's watchdog for the failure this exists to
+  // catch): a dead device that isOpen() still reports as open. Catching the
+  // message directly is faster than waiting out a stall timeout, and does
+  // not depend on the render loop still asking for frames.
+  if (message.find("NO_DEVICE") != std::string::npos ||
+      message.find("bulk transfer failed") != std::string::npos ||
+      message.find("failed to set ir interface state") != std::string::npos) {
+    g_usb_error_seen.store(true);
+  }
+}
+
+bool UsbErrorSeen() { return g_usb_error_seen.exchange(false); }
 
 double NowSeconds() {
   using Clock = std::chrono::steady_clock;
@@ -171,7 +208,18 @@ bool KinectSource::openOnce(bool use_opengl, bool with_reset,
 
   libfreenect2::PacketPipeline* pipeline = nullptr;
 #if defined(LIBFREENECT2_WITH_OPENGL_SUPPORT)
-  if (use_opengl) {
+  // The OpenGL pipeline only buys anything for the *depth* decode -- the RGB
+  // path is the same turbojpeg-based decoder on either pipeline (see
+  // packet_pipeline.cpp: OpenGLPacketPipeline and CpuPacketPipeline both
+  // construct their RgbPacketProcessor the same way). With want_depth=false
+  // there is no depth stream to decode, so an OpenGL pipeline here would only
+  // be spending a GL context -- and the GLFW context the OpenGL depth
+  // processor owns internally is what prints "GLFW error 65537 the GLFW
+  // library is not initialized" when a caller closes and reopens the device
+  // repeatedly (a watchdog retrying a dropped sensor, for instance): its own
+  // glfwInit()/glfwTerminate() pair does not coordinate with the host app's.
+  // CPU sidesteps that failure mode entirely, not just papers over it.
+  if (use_opengl && want_depth) {
     pipeline = new libfreenect2::OpenGLPacketPipeline();
     pipeline_name_ = "OpenGL";
   }

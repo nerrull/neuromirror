@@ -144,6 +144,12 @@ class KinectSource {
   void setDepthRate(float hz) { depth_hz_.store(hz); }
   void setColorPaused(bool p) { color_paused_.store(p); }
   void setDepthPaused(bool p) { depth_paused_.store(p); }
+  // For a watchdog above this class: whether the colour stream is currently
+  // being asked for at all, and at what rate -- both are legitimate reasons
+  // for the stream to go quiet longer than a stall timeout, and neither one
+  // is visible from the outside otherwise.
+  bool colorPaused() const { return color_paused_.load(); }
+  float colorRateHz() const { return color_hz_.load(); }
 
   // Respecting the configured rate, copy the newest frame into `out`.
   // Returns true only when `out` was refreshed.
@@ -179,3 +185,15 @@ class KinectSource {
 
 // Seconds since an arbitrary fixed origin (steady clock).
 double NowSeconds();
+
+// A watchdog living above KinectSource (see mirror_app's KinectFitTarget) has
+// no way to see libfreenect2's own USB transport failures directly: this
+// class listens through callbacks rather than a blocking waitForNewFrame it
+// could time out on, so there is no per-call error to check. The one place
+// those failures do surface is the logger -- "LIBUSB_ERROR_NO_DEVICE" /
+// "bulk transfer failed" lines -- so whichever libfreenect2::Logger is
+// installed should forward every line here. UsbErrorSeen() then gives the
+// watchdog a same-frame signal instead of waiting out a stall timeout.
+void NoteFreenect2LogLine(const std::string& message);
+// Consumes the flag: returns true at most once per transport failure.
+bool UsbErrorSeen();
