@@ -1072,6 +1072,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::Text("root  %6.2f", g_chord.effectiveRoot());
                     ImGui::SameLine();
                     ImGui::TextDisabled("(key %.0f)", g_chord.config().root);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(pluck delta %+.2f)", g_chord.pluckDelta());
                 }
 
                 mirror::Chord::Config& cc = g_chord.config();

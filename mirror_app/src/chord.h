@@ -178,8 +178,9 @@ public:
 
         // How many semitones, at most, the per-visitor draw can land from the
         // pinned note -- e.g. 3 means uniformly anywhere from -3 to +3
-        // semitones. Redrawn every reset() regardless of whether the offset
-        // is enabled (see reset()'s comment).
+        // semitones. Redrawn every newVisitor() regardless of whether the
+        // offset is enabled (see newVisitor()'s comment) -- not reset(),
+        // which now keeps the draw the idle wait already made.
         int pluck_offset_max_semitones = 3;
 
         // The pinned frequency both behaviours work around is otherwise
@@ -222,14 +223,39 @@ public:
         bool root_follows_idle_tuning = true;
     };
 
-    Chord() { reset(); }
+    Chord() { newVisitor(); reset(); }
 
     Config& config() { return cfg_; }
     const Config& config() const { return cfg_; }
 
     // Back to the opening checkpoint. Called when the room empties: the next
     // person gets the piece unresolved, not wearing the last one's ending.
+    //
+    // Deliberately does not redraw `pluck_offset_semitones_` any more -- see
+    // newVisitor() below. reset() is the Idle -> Fitting handoff for a
+    // visitor who has *already* been waiting through Idle with their own
+    // offset fixed; redrawing it here (the old behaviour) meant the note the
+    // pluck had been ringing all through the idle wait was thrown away the
+    // instant Fitting began, which is exactly the audible jump this file was
+    // rewritten to remove. See visitor_pluck_delta_'s comment for the other
+    // half of that fix.
     void reset();
+
+    // Draws this visitor's per-visitor pluck offset (see
+    // `pluck_offset_semitones_`/Config::pluck_offset_enabled). Call this once,
+    // at the Roots -> Idle handoff (main.mm's Phase::Idle audio case) -- when
+    // a new visitor is *about* to be waited for, not when their Fitting
+    // starts. The draw then holds fixed through the whole Idle wait and into
+    // the reset() that follows it, so the note the pluck rang while idle is
+    // still the note reset()/update() continue into Fitting; redrawing it at
+    // reset() instead (the old behaviour) is what let the pluck jump the
+    // moment Fitting began -- the visitor had been tuned to one draw and was
+    // handed a different one at the exact instant it mattered most.
+    //
+    // The constructor calls this once before its own reset() so the very
+    // first Chord ever built (before any Idle phase has run) still gets a
+    // draw rather than starting silently at offset 0.
+    void newVisitor();
 
     // Jump straight to the final checkpoint (wide, open, done) and hold it
     // there regardless of what `update()` is fed afterwards -- until the next
@@ -281,6 +307,12 @@ public:
     // comment on `visitor_root_delta_` below. For the panel's diagnostic line.
     float effectiveRoot() const { return cfg_.root + visitor_root_delta_; }
 
+    // This visitor's pluck continuity correction -- see
+    // `visitor_pluck_delta_`'s comment below. 0 whenever there was no idle
+    // note to continue, or the pinned pluck's center-frequency override is
+    // on. For the panel's diagnostic line, next to effectiveRoot().
+    float pluckDelta() const { return visitor_pluck_delta_; }
+
 private:
     Config cfg_;
     ChordVoicing v_;
@@ -307,6 +339,33 @@ private:
     // the last visitor happened to land on".
     float visitor_root_delta_ = 0.f;
 
+    // The correction, semitones (fractional), added to the pluck's own
+    // pre-wander target note wherever `pluck_high` enters it -- update()'s
+    // general (non-idle) pluck computation -- so that the first note Fitting
+    // rings on is exactly the note idle was just ringing on, offset and all,
+    // instead of the plain chord tone the root-continuity fix alone would
+    // land on. Set at every reset(): 0 when `root_follows_idle_tuning` is off,
+    // there was no idle note to continue (`last_update_was_idle_`), or the
+    // pinned pluck's center-frequency override is on (the override already
+    // fixes the Hz directly -- see Config::pluck_center_override_enabled --
+    // and this correction has no meaningful register to bridge from). When
+    // set, it is `idle_note` (see reset()'s root-continuity comment -- the
+    // centre, override aside, plus this visitor's own kept offset, the exact
+    // note idle was tuned to) minus the snapped chord tone `root + pluck_high`
+    // resolves to under the new, continued root -- the two are normally
+    // already equal by construction (`pluck_high` is chosen so `root +
+    // pluck_high` is always on a stage-0 chord tone; see its comment in
+    // Config), so in practice this is just "the kept offset, as a note delta"
+    // -- but computed from the snap rather than assumed, so a future change
+    // to `pluck_high` or the stage-0 table can't silently reintroduce a gap.
+    // Applied only once fit truly leaves 0 (update()'s `else` branch) --
+    // never inside the `fit <= 0` branch, which keeps applying
+    // `pluck_offset_semitones_` to `comb_hz` itself the whole time fit stays
+    // pinned at 0 (including the first few Fitting frames before the pond
+    // actually starts training, see update()'s comment) -- applying both at
+    // once would double the offset.
+    float visitor_pluck_delta_ = 0.f;
+
     // True iff the most recent update() call was itself an idle-style one --
     // fit <= 0, the pinned-pluck branch (see update()). reset()'s
     // root-continuation only trusts `v_.pluck_note` as "the idle tuning note"
@@ -320,8 +379,12 @@ private:
     // Pinned-pluck exploration state (see Config). `wander_time_` is the
     // wander's own clock, zeroed whenever intensity leaves zero so it never
     // carries a phase into the next pin; `pluck_offset_semitones_` is redrawn
-    // once per reset() regardless of whether the offset is enabled, so
-    // toggling it on mid-run doesn't play back whatever was drawn at boot.
+    // once per newVisitor() (see its comment above) regardless of whether the
+    // offset is enabled, so toggling it on mid-run doesn't play back whatever
+    // was drawn for the visitor before last -- deliberately *not* redrawn in
+    // reset() any more (it used to be), since reset() is mid-visitor (the
+    // Idle -> Fitting handoff) and redrawing there threw away the very draw
+    // the idle wait had just been tuned to.
     float wander_time_ = 0.f;
     int   pluck_offset_semitones_ = 0;
     std::mt19937 rng_{std::random_device{}()};

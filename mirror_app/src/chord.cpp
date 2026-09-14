@@ -127,8 +127,24 @@ void Chord::reset() {
         // see the comment on `visitor_root_delta_` in chord.h.
         const float octaves = std::round((idle_note - cfg_.root) / 12.f);
         visitor_root_delta_ = (idle_note - octaves * 12.f) - cfg_.root;
+
+        // The pluck's own continuity correction -- see
+        // `visitor_pluck_delta_`'s comment in chord.h. Skipped when the
+        // center-frequency override is on: the override already fixed
+        // comb_hz directly, with no chord-tone register for this correction
+        // to bridge from, and update()'s Fitting path never reads the
+        // override anyway (it is idle-only) -- see Config's comment.
+        if (!cfg_.pluck_center_override_enabled) {
+            const float new_root = cfg_.root + visitor_root_delta_;
+            const float snapped0 =
+                SnapToChordTone(new_root + cfg_.pluck_high, new_root, 0);
+            visitor_pluck_delta_ = idle_note - snapped0;
+        } else {
+            visitor_pluck_delta_ = 0.f;
+        }
     } else {
         visitor_root_delta_ = 0.f;
+        visitor_pluck_delta_ = 0.f;
     }
     const float root = cfg_.root + visitor_root_delta_;
 
@@ -138,25 +154,34 @@ void Chord::reset() {
         v_.target[i] = tgt;
     }
     v_.stage = 0;
-    v_.pluck_note = root + cfg_.pluck_high;
+    // `+ visitor_pluck_delta_`: the continuity correction computed above --
+    // see its comment in chord.h. 0 whenever there was nothing to continue,
+    // so this is a no-op in the old (flag off / no idle note) cases.
+    v_.pluck_note = root + cfg_.pluck_high + visitor_pluck_delta_;
     v_.comb_hz = cfg_.pluck_center_override_enabled ? cfg_.pluck_center_hz
                                                      : NoteToHz(v_.pluck_note);
 
-    // See the "pinned-pluck exploration" comment in chord.h: the wander's
-    // clock restarts clean, and a fresh per-visitor offset is drawn whether
-    // or not it's currently enabled. This is *this* visitor's own draw, not
-    // the departing one's -- the one baked into `idle_note` above already
-    // belonged to whoever just left and is spent the moment it is folded
-    // into `visitor_root_delta_`, so applying this fresh draw here is not
-    // reapplying that same offset, it is the ordinary per-visitor draw every
-    // reset() has always done.
+    // The wander's clock restarts clean -- nothing about it should carry a
+    // phase from one visitor's pin into the next. The per-visitor offset
+    // itself is deliberately *not* redrawn here any more -- see
+    // newVisitor()'s comment -- reset() is mid-visitor (the Idle -> Fitting
+    // handoff), and this visitor's draw was already made and is still live
+    // in `pluck_offset_semitones_` from the idle wait that just ended; it is
+    // exactly what `idle_note` above and the pluck-continuity correction
+    // just folded in, so leaving it alone here is what keeps that fold-in
+    // meaningful instead of being immediately overwritten.
     wander_time_ = 0.f;
+}
+
+void Chord::newVisitor() {
+    // See the comment in chord.h: called once, at the Roots -> Idle handoff,
+    // when a new visitor is about to be waited for -- not at reset(), which
+    // is mid-visitor (their Idle -> Fitting handoff) and must not throw away
+    // the very draw the idle wait just tuned them to.
     pluck_offset_semitones_ = cfg_.pluck_offset_max_semitones > 0
         ? std::uniform_int_distribution<int>(-cfg_.pluck_offset_max_semitones,
                                               cfg_.pluck_offset_max_semitones)(rng_)
         : 0;
-    if (cfg_.pluck_offset_enabled)
-        v_.comb_hz *= std::pow(2.f, pluck_offset_semitones_ / 12.f);
 }
 
 void Chord::resolve() {
@@ -243,19 +268,38 @@ void Chord::update(float fit, float movement, float dt) {
     const float linear = root + cfg_.pluck_high
                         + intensity * cfg_.pluck_intensity_range;
     v_.pluck_note = SnapToChordTone(linear, root, stage_);
-    v_.comb_hz = NoteToHz(v_.pluck_note);
 
-    // --- pinned-pluck exploration (see Config) ------------------------------
+    // --- pinned-pluck exploration (see Config), vs. a live Fitting sitting --
     //
-    // Both read `comb_hz` after the snap above, so neither ever moves the
-    // pluck off its chord tone -- they only shade the Hz sent to the comb.
-    // Gated on `fit`, not `intensity`: intensity also folds in room movement,
-    // which Presence reports as soon as a face is tracked at all -- i.e.
-    // from the very first frame of Fitting, well before the pond has actually
-    // started converging. Gating on that left this dead the instant a face
-    // appeared. `fit` stays exactly zero until pond.beginFit() is training,
-    // which is the real "fitting has started" this was meant to hand off at.
-    if (fit <= 0.f) {
+    // Two genuinely different situations both read `fit <= 0.f`, and they
+    // need different treatment:
+    //
+    //  - Genuinely idle: waiting for a visitor, or holding the just-resolved
+    //    ending through Transition/Roots while the next one is walked in --
+    //    `resolved_` is true throughout all of that (resolve() sets it,
+    //    reset() is the only thing that clears it). Here the pinned-pluck
+    //    exploration tricks below run, shading comb_hz around the pinned
+    //    chord tone.
+    //  - A live Fitting sitting whose fit level just hasn't started climbing
+    //    yet -- `resolved_` is false (reset() already ran) even though `fit`
+    //    itself still reads exactly 0 for a few frames, since it stays there
+    //    until pond.beginFit() is actually training (see the old comment
+    //    this replaced, kept in git history). This is no longer idle, and
+    //    must not be treated as if it were: re-running the snap against the
+    //    live stage/root while pretending nothing has changed is exactly
+    //    what used to make the pluck jump the instant reset() ran, because
+    //    the stage the snap searches (now stage 0, freshly reset) and the
+    //    root (freshly continued, its own pitch class chosen to match the
+    //    idle centre -- see reset()'s comment) do not generally land the
+    //    plain snap back on the exact note idle was just ringing on. The
+    //    continuity correction computed once at reset(), `visitor_pluck_
+    //    delta_`, is what closes that gap, and it has to be applied on every
+    //    frame of the sitting for as long as it lasts, not just the reset()
+    //    instant itself -- see its own comment in chord.h.
+    if (fit <= 0.f && resolved_) {
+        v_.comb_hz = NoteToHz(v_.pluck_note);
+        // Both read `comb_hz` after the snap above, so neither ever moves the
+        // pluck off its chord tone -- they only shade the Hz sent to the comb.
         if (cfg_.pluck_center_override_enabled)
             v_.comb_hz = cfg_.pluck_center_hz;
         if (cfg_.pluck_offset_enabled)
@@ -269,13 +313,16 @@ void Chord::update(float fit, float movement, float dt) {
                 0.4f * std::sin(2.f * (float)M_PI * rate_hz * 2.17f * t + 1.3f);
             v_.comb_hz *= (1.f + cfg_.pluck_wander_depth * wobble);
         }
-        // This frame's comb_hz is a trustworthy "idle tuning note" -- see
-        // reset()'s root-continuity comment.
-        last_update_was_idle_ = true;
     } else {
-        wander_time_ = 0.f;
-        last_update_was_idle_ = false;
+        v_.pluck_note += visitor_pluck_delta_;
+        v_.comb_hz = NoteToHz(v_.pluck_note);
+        if (fit > 0.f) wander_time_ = 0.f;
     }
+    // This frame's comb_hz is a trustworthy "idle tuning note" for the next
+    // reset() to continue iff fit itself was 0 -- independent of `resolved_`
+    // above, which only decides *how* this frame's note was computed, not
+    // whether it counts as an idle pin. See reset()'s comment.
+    last_update_was_idle_ = (fit <= 0.f);
 }
 
 }  // namespace mirror

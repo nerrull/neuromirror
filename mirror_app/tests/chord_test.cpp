@@ -348,6 +348,12 @@ int main() {
     {
         mirror::Chord c;
         check(c.config().root_follows_idle_tuning, "on by default");
+        // resolve() first -- the pinned-pluck exploration below (wander) only
+        // runs while genuinely idle/holding a resolved ending, not on a bare
+        // fresh/just-reset Chord (which counts as a live, if quiet, Fitting
+        // sitting -- see update()'s comment); this is what main.mm's real
+        // Idle-phase entry always does before the wait begins.
+        c.resolve();
         c.config().pluck_wander_enabled = true;
         c.config().pluck_wander_period_s = 1.f;
         c.config().pluck_wander_depth = 0.3f;  // large: up to +/-30% of the pinned Hz
@@ -367,6 +373,7 @@ int main() {
         // With the flag off, the old behaviour: reset() always lands on the
         // configured root, no matter what the pluck was doing beforehand.
         mirror::Chord c2;
+        c2.resolve();
         c2.config().root_follows_idle_tuning = false;
         c2.config().pluck_wander_enabled = true;
         c2.config().pluck_wander_period_s = 1.f;
@@ -387,13 +394,21 @@ int main() {
     // a 0 draw.
     {
         mirror::Chord c;
+        // See the resolve() comment on the wander test above -- the same
+        // applies here: the offset's own Hz-shading only runs while
+        // genuinely idle.
+        c.resolve();
         c.config().pluck_offset_enabled = true;
         c.config().pluck_offset_max_semitones = 3;
         c.config().pluck_wander_enabled = false;
         float offset = 0.f;
         float pluck_note = 0.f;
         for (int tries = 0; tries < 50 && offset == 0.f; ++tries) {
-            c.reset();
+            // newVisitor(), not reset() -- the offset is drawn at the Roots
+            // -> Idle handoff now, held fixed through the idle wait, and no
+            // longer redrawn at reset() itself (the Idle -> Fitting handoff);
+            // see Chord::newVisitor()'s comment.
+            c.newVisitor();
             hold(c, 0.f, 0.f, 0.05f);
             pluck_note = c.voicing().pluck_note;
             offset = 12.f * std::log2(c.voicing().comb_hz / NoteToHz(pluck_note));
@@ -424,6 +439,7 @@ int main() {
     // give, and not the wander-shaded Hz either.
     {
         mirror::Chord c;
+        c.resolve();
         c.config().pluck_center_override_enabled = true;
         c.config().pluck_center_hz = 100.f;  // deliberately not a chord tone
         c.config().pluck_offset_enabled = false;
@@ -442,6 +458,82 @@ int main() {
               "with the override on, reset()'s root continues HzToNote(pluck_center_hz) "
               "-- the override IS the chosen centre -- transposed into the pad's "
               "register, ignoring wander entirely");
+    }
+
+    // --- the pluck's own target note is continuous across the handoff, ------
+    // not just the root --------------------------------------------------
+    //
+    // The root continuing (the tests above) is necessary but not sufficient:
+    // the stage the pluck's snap searches also changes at reset() (from
+    // whichever stage the resolved ending held, down to stage 0), so even a
+    // perfectly-continued root does not by itself guarantee the plain
+    // chord-tone snap lands back on the exact note idle was ringing on --
+    // that gap is what `visitor_pluck_delta_` closes (see its comment in
+    // chord.h, and update()'s). Wander is off throughout: it is real,
+    // audible motion around the pin by design, not a discontinuity to guard
+    // against, and turning it off is what lets an exact Hz comparison here
+    // mean something.
+    {
+        mirror::Chord c;
+        c.resolve();
+        c.config().pluck_wander_enabled = false;
+        hold(c, 0.f, 0.f, 3.f);  // idle settles on its pinned chord tone
+        const float comb_before = c.voicing().comb_hz;
+        c.reset();
+        c.update(0.f, 0.f, kDt);
+        check(std::fabs(c.voicing().comb_hz - comb_before) < 0.01f,
+              "the pluck's Hz is continuous across the Idle -> Fitting reset, "
+              "offset off");
+
+        // Same, with the per-visitor offset on -- this is the case that was
+        // actually broken: the offset shaded comb_hz all through idle and
+        // used to vanish the instant update() left the idle branch.
+        mirror::Chord c2;
+        c2.config().pluck_wander_enabled = false;
+        c2.config().pluck_offset_enabled = true;
+        c2.config().pluck_offset_max_semitones = 3;
+        float offset2 = 0.f;
+        for (int tries = 0; tries < 50 && offset2 == 0.f; ++tries) {
+            c2.newVisitor();
+            c2.resolve();
+            hold(c2, 0.f, 0.f, 3.f);
+            offset2 = 12.f * std::log2(c2.voicing().comb_hz / NoteToHz(c2.voicing().pluck_note));
+        }
+        check(offset2 != 0.f, "the offset draw landed nonzero for this test too");
+        const float comb_before2 = c2.voicing().comb_hz;
+        c2.reset();
+        c2.update(0.f, 0.f, kDt);
+        check(std::fabs(c2.voicing().comb_hz - comb_before2) < 0.01f,
+              "with the per-visitor offset on, the pluck's Hz is still "
+              "continuous across the reset() -- this is the bug fixed here");
+        // The pad's root voice continues too, same as the root-continuity
+        // tests above -- confirms the pluck fix did not disturb it.
+        const float* o0 = mirror::Chord::StageOffsets(0);
+        check(std::fabs(c2.voicing().note[0] -
+                        (c2.effectiveRoot() + c2.config().octave + o0[0])) < 1e-3f,
+              "the pad's root voice still matches effectiveRoot() after the fix");
+
+        // With root_follows_idle_tuning off, the old/plain behaviour: no
+        // continuity is attempted, so the pluck is free to move at reset().
+        mirror::Chord c3;
+        c3.config().root_follows_idle_tuning = false;
+        c3.config().pluck_wander_enabled = false;
+        c3.config().pluck_offset_enabled = true;
+        c3.config().pluck_offset_max_semitones = 3;
+        float offset3 = 0.f;
+        for (int tries = 0; tries < 50 && offset3 == 0.f; ++tries) {
+            c3.newVisitor();
+            c3.resolve();
+            hold(c3, 0.f, 0.f, 3.f);
+            offset3 = 12.f * std::log2(c3.voicing().comb_hz / NoteToHz(c3.voicing().pluck_note));
+        }
+        check(offset3 != 0.f, "the offset draw landed nonzero for the flag-off case too");
+        const float comb_before3 = c3.voicing().comb_hz;
+        c3.reset();
+        c3.update(0.f, 0.f, kDt);
+        check(std::fabs(c3.voicing().comb_hz - comb_before3) > 0.01f,
+              "with the flag off, the old behaviour holds -- the pluck may "
+              "move at reset()");
     }
 
     if (failures == 0) std::printf("chord_test: OK\n");

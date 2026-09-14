@@ -2141,6 +2141,15 @@ int main(int argc, char** argv) {
                             // entry below, which is also the earliest a new
                             // visitor's own arc can begin.
                             g_chord.resolve();
+                            // A fresh per-visitor pluck offset draw for
+                            // whoever is about to be waited for -- see
+                            // Chord::newVisitor()'s comment. Deliberately
+                            // here, not at the Fitting entry below: the draw
+                            // has to hold fixed through this visitor's whole
+                            // Idle wait, or reset() (Fitting entry) has
+                            // nothing stable to continue and the pluck jumps
+                            // the moment Fitting begins.
+                            g_chord.newVisitor();
                             // The shepherd glissando forgets its position too --
                             // otherwise the next visitor's rise starts wherever
                             // the last one's left off.
@@ -2186,7 +2195,20 @@ int main(int argc, char** argv) {
                             // Wwise reads it, and the new visitor's own arc
                             // has to start from the dark opening chord anyway,
                             // so this is the natural place for both.
-                            g_chord.reset();
+                            //
+                            // Logged so the console shows the handoff was
+                            // actually continuous -- the pluck's Hz and the
+                            // pad's effective root just before and just after
+                            // reset() -- rather than trusting it by ear alone.
+                            {
+                                const float pluck_before = g_chord.voicing().comb_hz;
+                                const float root_before = g_chord.effectiveRoot();
+                                g_chord.reset();
+                                if (g_show_log)
+                                    printf("chord: handoff pluck %.2f -> %.2f root %.2f -> %.2f\n",
+                                           pluck_before, g_chord.voicing().comb_hz,
+                                           root_before, g_chord.effectiveRoot());
+                            }
                             // Start collecting the moment the phase opens, so
                             // the `min` and the collection window overlap
                             // rather than running back to back.
