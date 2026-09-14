@@ -268,12 +268,102 @@ void spawnAtMouth(bool anchorOnAxis) {
     }
 }
 
+// Hop 1 (out of the on-axis anchor, mask 0 -> mask 1) has no surface
+// coordinate to crawl between -- the anchor sits on the host's axis, not on
+// its surface -- so it should shoot straight at mask 1, not get bent by the
+// cavity/shell/rim forces that confine every other, surface-to-surface hop.
+// The species presets that actually ship (kale/maize/lupin/... -- see
+// presets/roots/*.roots) run with "crawl the cone surface" on, which is what
+// exposed the bug: rebuildTropism used to intersect the travel geometry with
+// the cone shell unconditionally whenever coneSurfaceTravel was set, with no
+// exemption for the axis-to-surface first hop, so the shell pushed the root
+// off the mask-0 -> mask-1 line even though the cavity exemption already
+// left the ellipsoids out of it.
+void firstHopStraight() {
+    printf("first hop straight (anchor on axis, no surface to crawl)\n");
+    rootsim::SimParams p;
+    p.paramDir = ROOTSIM_PARAM_DIR;
+    p.anchorOnAxis = true;
+    p.treeRelay = false;
+    p.growFromFirstMask = true;
+    // What every shipped preset but "default" actually runs with -- see
+    // presets/roots/{kale,maize,lupin,pea,pimpernel,soybean,sunflower,
+    // wheat}.roots, all "crawl the cone surface = 1". This is the setting
+    // that put the shell in the travel geometry for hop 1.
+    p.coneSurfaceTravel = true;
+    rootsim::RootSim sim;
+    if (!sim.reset(p) || !sim.valid()) {
+        printf("  skip: no sim (parameter dir %s)\n", ROOTSIM_PARAM_DIR);
+        return;
+    }
+    check(sim.currentMask() == 1, "hop 1 is the one in flight right after reset");
+    const auto& planned = sim.plannedMasks();
+    check(planned.size() >= 2, "at least two planned masks (anchor + one target)");
+    if (sim.currentMask() != 1 || planned.size() < 2) return;
+
+    const rootsim::SimMask& src = planned[0];
+    const rootsim::SimMask& dst = planned[1];
+    // hopStart(1): the mouth (== src.pos, faceMouth* all 0 here) pushed
+    // anchorSpawn further out along the anchor's own normal -- see
+    // root_sim.cpp's hopStart(). Direction vectors carry through the rigid
+    // anchor transform unchanged, so this is valid in render space too.
+    const V3 a = {src.pos[0] + src.normal[0] * p.anchorSpawn,
+                  src.pos[1] + src.normal[1] * p.anchorSpawn,
+                  src.pos[2] + src.normal[2] * p.anchorSpawn};
+    const V3 b = v3(dst.pos);
+    const V3 ab = sub(b, a);
+    const double abLen = len(ab);
+    check(abLen > 1e-6, "mask 0 and mask 1 are not coincident");
+    if (abLen < 1e-6) return;
+    const V3 dir = {ab.x / abLen, ab.y / abLen, ab.z / abLen};
+
+    int guard = 0;
+    while (!sim.arrivedAtMask() && !sim.done() && guard < 20000) {
+        sim.step();
+        ++guard;
+    }
+    check(sim.arrivedAtMask(), "hop 1 actually arrives (not just guard-capped)");
+    printf("  steps to arrival: %d\n", guard);
+
+    std::vector<float> nodes, radii; std::vector<int> segs;
+    sim.geometry(nodes, segs, radii);
+    const size_t n = nodes.size() / 3;
+    check(n >= 2, "the in-flight hop has grown at least one segment");
+
+    double maxDev = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const V3 node = {nodes[i * 3], nodes[i * 3 + 1], nodes[i * 3 + 2]};
+        const V3 ap = sub(node, a);
+        const double along = dot(ap, dir);
+        const V3 onLine = {a.x + dir.x * along, a.y + dir.y * along, a.z + dir.z * along};
+        maxDev = std::max(maxDev, len(sub(node, onLine)));
+    }
+    // Not zero: CPlantBox always starts a fresh taproot heading straight down
+    // the host's own -z (its base-root frame is hard-coded, unreachable
+    // through the species file's theta -- Seed::initialize() forces the
+    // taproot's own theta to 0 regardless of what is configured), which is
+    // mask 0's own normal for the on-axis anchor but not the direction to
+    // mask 1 (off-axis, keeping its ordinary phyllotaxis placement) -- so a
+    // few nodes of ordinary, turn-rate-limited steering onto the target
+    // remain even with every confinement force on this hop gone. What this
+    // guards is the shell: with it still applied to hop 1 (the bug this test
+    // was written for), the root gets pinned to the cone's lateral surface
+    // instead of just steering, and the deviation is an order of magnitude
+    // worse -- 5.6 cm on this species/seed, against 0.7 cm fixed.
+    const double cavityR = std::max((double)dst.rWidth, (double)dst.rHeight);
+    const double tol = 0.3 * cavityR;
+    printf("  %zu nodes; max deviation from the mask0->mask1 line: %.4f cm (tol %.4f cm, mask-1 cavity radius %.3f cm)\n",
+           n, maxDev, tol, cavityR);
+    check(maxDev < tol, "every node of the first root stays close to the axis line (no shell/cavity forces on hop 1)");
+}
+
 }  // namespace
 
 int main() {
     simFrames();
     spawnAtMouth(/*anchorOnAxis=*/true);
     spawnAtMouth(/*anchorOnAxis=*/false);
+    firstHopStraight();
     bankPose();
     printf("mask_frame_test: %s\n", g_fail ? "FAIL" : "OK");
     return g_fail ? 1 : 0;

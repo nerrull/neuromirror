@@ -340,9 +340,21 @@ struct RootSim::Impl {
         // axis, which is orthogonal to the direction of travel, so it does not
         // fight the tangential pull toward the target.
         //
+        // The first hop out of the on-axis anchor (mask 0, anchorAxis) has no
+        // surface coordinate at all -- it sits on the axis, not on the cone's
+        // surface (see hopStart/hopPathFor, which already treat it as a
+        // chord, not a surface path) -- so there is no surface for it to
+        // crawl between and the shell is skipped for it: with the shell on,
+        // it was pinning that hop to the cone's lateral surface and bending
+        // it off the straight line down to mask 1, even though the cavity
+        // exemption above already leaves both masks' ellipsoids out of the
+        // way. Every other hop (surface mask to surface mask, or the anchor's
+        // own dwell once it is reached) still gets the shell.
+        //
         // The global cone apex sits at -offset in this hop's local coordinates.
         std::shared_ptr<SignedDistanceFunction> growGeom = geom;
-        if (p.coneSurfaceTravel && travel && host) {
+        const bool firstAxisHop = anchorAxis && hopFrom(hop) == 0;
+        if (p.coneSurfaceTravel && travel && host && !firstAxisHop) {
             auto sh = host->shell(p.coneShellThickness, offset.times(-1.0));
             growGeom = std::make_shared<CPlantBox::SDF_Intersection>(geom, sh);
         }
