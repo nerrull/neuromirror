@@ -99,7 +99,15 @@ struct RootDrawU {
     // 1 = lit as normal. Anything between is a ramp between the two.
     float   lit;
     float   unlitLevel;
-    float   _pad0;
+    // The pulse clock (RootGeomU::pulseTime) at which this set's pulses
+    // started, or < 0 for always-on (the live system). Started, the set has
+    // a travelling front at pulseSpeed x (pulseTime - pulseStart) along the
+    // node distance: pulses run only behind it, and `lit` applies only behind
+    // it too -- ahead of the front the set is still dark. So a structure
+    // lights from its top mask down as its first pulses run, which is what
+    // the Reveal (root_sequence.h) lights each structure's masks in step
+    // with.
+    float   pulseStart;
     float   _pad1;
 };
 

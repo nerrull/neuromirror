@@ -399,3 +399,12 @@ target_link_libraries(chord_test PRIVATE mirror_core)
 # Pure geometry: no Metal, no fonts, no MLX.
 add_executable(text_sdf_test tests/text_sdf_test.cpp src/text_sdf.cpp)
 target_include_directories(text_sdf_test PRIVATE src)
+
+# Is a face on a root mask square to its nest: the sim's grow->render frame
+# map is one rigid transform (the cavity's axes are the face's axes), and the
+# bank's captures come out square of their sitters' head pose. Needs the
+# CPlantBox parameters and external/face_basis.bin; skips either half cleanly.
+add_executable(mask_frame_test tests/mask_frame_test.cpp)
+target_link_libraries(mask_frame_test PRIVATE mirror_sim mirror_core)
+target_compile_definitions(mask_frame_test PRIVATE
+    ROOTSIM_PARAM_DIR="${ROOTSIM_PARAM_DIR}")

@@ -511,7 +511,8 @@ void MetalRootRenderer::ensureDefaults(int segCount) {
 int MetalRootRenderer::addInstance(const std::vector<float>& nodesXYZ,
                                    const std::vector<int>&   segs,
                                    const std::vector<float>& radii,
-                                   const InstancePlacement&  place) {
+                                   const InstancePlacement&  place,
+                                   std::vector<float>* nodeDistOut) {
     const int nNodes = (int)(nodesXYZ.size() / 3);
     const int nSeg   = (int)(segs.size() / 2);
     if (nNodes == 0 || nSeg == 0) return -1;
@@ -548,6 +549,7 @@ int MetalRootRenderer::addInstance(const std::vector<float>& nodesXYZ,
     inst.node = makeBuffer(wnodes.data(), wnodes.size() * sizeof(float));
     std::vector<float> distData = computeNodeDist(wnodes.data(), segs, nNodes, pulse.hopOffset);
     inst.dist = makeBuffer(distData.data(), distData.size() * sizeof(float));
+    if (nodeDistOut) *nodeDistOut = distData;
 
     // LOD thresholds by radius percentile: coarser LODs drop the thinnest
     // laterals first (invisible once the system is small on screen).
@@ -608,6 +610,10 @@ void MetalRootRenderer::setInstanceVisible(int i, bool visible) {
 void MetalRootRenderer::setInstanceLit(int i, float lit) {
     if (i >= 0 && i < (int)instances_.size())
         instances_[size_t(i)].lit = std::clamp(lit, 0.f, 1.f);
+}
+
+void MetalRootRenderer::setInstancePulseStart(int i, float start) {
+    if (i >= 0 && i < (int)instances_.size()) instances_[size_t(i)].pulseStart = start;
 }
 
 // The glitch stage's three targets. Separate from buildTargets because they
@@ -805,11 +811,13 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // instance was set to for a cached one.
     auto drawSet = [&](id<MTLBuffer> node, id<MTLBuffer> seg, id<MTLBuffer> rad,
                        id<MTLBuffer> dist, id<MTLBuffer> grp, id<MTLBuffer> prim,
-                       id<MTLBuffer> frame, id<MTLBuffer> aux, int segc, float lit) {
+                       id<MTLBuffer> frame, id<MTLBuffer> aux, int segc, float lit,
+                       float pulseStart) {
         if (segc <= 0) return;
         RootDrawU du = {};
         du.lit = lit;
         du.unlitLevel = std::max(0.f, env.unlitLevel);
+        du.pulseStart = pulseStart;
         [ge setFragmentBytes:&du length:sizeof(du) atIndex:9];
         [ge setVertexBuffer:node  offset:0 atIndex:0];
         [ge setVertexBuffer:seg   offset:0 atIndex:1];
@@ -832,7 +840,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // The live/dynamic system (re-uploaded each frame) draws in full, unculled.
     if (segCount_ > 0) {
         drawSet(nodeBuf_, segBuf_, radBuf_, distBuf_, grpBuf_, primBuf_, frameBuf_, auxBuf_,
-                segCount_, 1.f);
+                segCount_, 1.f, -1.f);
         lastVisibleInstances++;
     }
 
@@ -875,7 +883,8 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                 if (screenPx < lodThresh[k] * lodBias) lod = k + 1;
             const InstanceLod& L = inst.lods[lod];
             drawSet(inst.node, L.seg, L.rad, inst.dist,
-                    defGrp_, defPrim_, defFrame_, defAux_, L.segCount, inst.lit);
+                    defGrp_, defPrim_, defFrame_, defAux_, L.segCount, inst.lit,
+                    inst.pulseStart);
             lastVisibleInstances++;
         }
     }

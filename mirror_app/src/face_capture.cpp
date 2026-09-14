@@ -266,4 +266,80 @@ void BakeCaptureColors(FaceCapture& c) {
     }
 }
 
+float SquareCaptureToNeutral(FaceCapture& c, const std::vector<float>& neutral) {
+    const size_t n = c.vertexCount();
+    if (n < 3 || neutral.size() != c.verts.size()) return 0.f;
+    // Both about their own centroids: the pose is a rotation about the
+    // mesh's centroid (RotateAboutCentroid) plus whatever offset the fit
+    // carried, and neither is wanted.
+    double cv[3] = {0, 0, 0}, cn[3] = {0, 0, 0};
+    for (size_t i = 0; i < n; ++i)
+        for (int k = 0; k < 3; ++k) { cv[k] += c.verts[i * 3 + k]; cn[k] += neutral[i * 3 + k]; }
+    for (int k = 0; k < 3; ++k) { cv[k] /= double(n); cn[k] /= double(n); }
+
+    // R, row-major, starting at the identity; each pass solves the 3x3
+    // normal equations for the small rotation w that best reduces
+    // sum |R p_i - q_i|^2 (d(R p)/dw = -[R p]x), and composes it on.
+    double R[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    for (int pass = 0; pass < 12; ++pass) {
+        double A[9] = {0}, b[3] = {0};
+        for (size_t i = 0; i < n; ++i) {
+            const double p[3] = {c.verts[i * 3] - cv[0], c.verts[i * 3 + 1] - cv[1], c.verts[i * 3 + 2] - cv[2]};
+            const double q[3] = {neutral[i * 3] - cn[0], neutral[i * 3 + 1] - cn[1], neutral[i * 3 + 2] - cn[2]};
+            double rp[3];
+            for (int r = 0; r < 3; ++r) rp[r] = R[r * 3] * p[0] + R[r * 3 + 1] * p[1] + R[r * 3 + 2] * p[2];
+            const double res[3] = {rp[0] - q[0], rp[1] - q[1], rp[2] - q[2]};
+            // J = -[rp]x:  rows ( 0, rp2, -rp1 ), ( -rp2, 0, rp0 ), ( rp1, -rp0, 0 )
+            const double J[9] = {0, rp[2], -rp[1], -rp[2], 0, rp[0], rp[1], -rp[0], 0};
+            for (int r = 0; r < 3; ++r)
+                for (int s = 0; s < 3; ++s) {
+                    for (int t = 0; t < 3; ++t) A[r * 3 + s] += J[t * 3 + r] * J[t * 3 + s];
+                }
+            for (int r = 0; r < 3; ++r)
+                for (int t = 0; t < 3; ++t) b[r] -= J[t * 3 + r] * res[t];
+        }
+        // Solve A w = b (A symmetric positive definite for any non-degenerate mesh).
+        const double det = A[0] * (A[4] * A[8] - A[5] * A[7]) - A[1] * (A[3] * A[8] - A[5] * A[6]) +
+                           A[2] * (A[3] * A[7] - A[4] * A[6]);
+        if (std::fabs(det) < 1e-12) break;
+        const double inv[9] = {
+            (A[4] * A[8] - A[5] * A[7]) / det, (A[2] * A[7] - A[1] * A[8]) / det, (A[1] * A[5] - A[2] * A[4]) / det,
+            (A[5] * A[6] - A[3] * A[8]) / det, (A[0] * A[8] - A[2] * A[6]) / det, (A[2] * A[3] - A[0] * A[5]) / det,
+            (A[3] * A[7] - A[4] * A[6]) / det, (A[1] * A[6] - A[0] * A[7]) / det, (A[0] * A[4] - A[1] * A[3]) / det};
+        double w[3];
+        for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] * b[0] + inv[r * 3 + 1] * b[1] + inv[r * 3 + 2] * b[2];
+        const double th = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        if (th < 1e-9) break;
+        // Rodrigues: dR = I + sin(th) K + (1 - cos(th)) K^2, K = [w/th]x.
+        const double k[3] = {w[0] / th, w[1] / th, w[2] / th};
+        const double sn = std::sin(th), cs = 1.0 - std::cos(th);
+        const double K[9] = {0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0};
+        double dR[9];
+        for (int r = 0; r < 3; ++r)
+            for (int s = 0; s < 3; ++s) {
+                double kk = 0;
+                for (int t = 0; t < 3; ++t) kk += K[r * 3 + t] * K[t * 3 + s];
+                dR[r * 3 + s] = (r == s ? 1.0 : 0.0) + sn * K[r * 3 + s] + cs * kk;
+            }
+        double Rn[9];
+        for (int r = 0; r < 3; ++r)
+            for (int s = 0; s < 3; ++s) {
+                double acc = 0;
+                for (int t = 0; t < 3; ++t) acc += dR[r * 3 + t] * R[t * 3 + s];
+                Rn[r * 3 + s] = acc;
+            }
+        std::copy(Rn, Rn + 9, R);
+        if (th < 1e-6) break;
+    }
+    // The angle of R, and R applied about the capture's own centroid.
+    const double tr = std::clamp((R[0] + R[4] + R[8] - 1.0) * 0.5, -1.0, 1.0);
+    const float deg = float(std::acos(tr) * 180.0 / M_PI);
+    for (size_t i = 0; i < n; ++i) {
+        const double p[3] = {c.verts[i * 3] - cv[0], c.verts[i * 3 + 1] - cv[1], c.verts[i * 3 + 2] - cv[2]};
+        for (int r = 0; r < 3; ++r)
+            c.verts[i * 3 + size_t(r)] = float(R[r * 3] * p[0] + R[r * 3 + 1] * p[1] + R[r * 3 + 2] * p[2] + cv[r]);
+    }
+    return deg;
+}
+
 }  // namespace mirror

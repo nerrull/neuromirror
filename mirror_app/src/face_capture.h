@@ -73,4 +73,21 @@ bool DeleteCapture(const std::string& id, std::string& err);
 // takes the nearest pixel rather than black.
 void BakeCaptureColors(FaceCapture& c);
 
+// Turn the capture's mesh square: the rotation about its own centroid that
+// best lays `verts` over `neutral` (the basis's neutral render mesh, same
+// topology and model units), applied in place. Returns the angle removed,
+// degrees; 0 and no change when the sizes disagree.
+//
+// A capture is the fitter's vertices(), which carry the visitor's head pose
+// at the moment of the cut -- the mask on the mirror is meant to follow the
+// head. Worn on a root mask, that same tilt sat the face askew inside the
+// nest the sim had grown square to the mask's frame. Captures written since
+// are saved square (main.mm's autoCaptureAtCut removes the fitter's own
+// rotation), and the bank aligns every capture it loads by this, so the ones
+// on disk from before read square too. The alignment is a small-angle
+// Gauss-Newton on the rotation vector, which is exact enough here: the
+// residual shape (identity + expression) biases the fit well under a degree,
+// and a head pose is ten.
+float SquareCaptureToNeutral(FaceCapture& c, const std::vector<float>& neutral);
+
 }  // namespace mirror

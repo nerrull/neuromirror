@@ -429,10 +429,16 @@ public:
     // radius (thin laterals drop first) and a world bounding sphere for culling.
     // Uploaded once; drawn each frame only if visible, at the LOD its projected
     // size warrants. Returns the instance index.
+    // `nodeDistOut`, when given, receives the per-node distance the pulses
+    // ride (computeNodeDist on the placed nodes: world units, hop-offset
+    // seeded) -- exactly the numbers the instance's dist buffer holds, so a
+    // caller timing something to the pulse front (setInstancePulseStart)
+    // reads the same distances the shader does.
     int  addInstance(const std::vector<float>& nodesXYZ,
                      const std::vector<int>&   segs,
                      const std::vector<float>& radii,
-                     const InstancePlacement&  place);
+                     const InstancePlacement&  place,
+                     std::vector<float>* nodeDistOut = nullptr);
     void clearInstances();
     int  instanceCount() const { return (int)instances_.size(); }
     // Per-instance state for the Reveal: an instance can be held back from
@@ -443,6 +449,12 @@ public:
     // what buildField's instances want. Out-of-range indices are ignored.
     void setInstanceVisible(int i, bool visible);
     void setInstanceLit(int i, float lit);
+    // The pulse clock (pulse.time) at which the instance's pulses start,
+    // or < 0 (the default) for always on. Started, the instance shows a
+    // travelling front -- pulse.speed x (pulse.time - start) along the node
+    // distance -- with pulses, and `lit`, only behind it; ahead of it the
+    // instance is still dark. RootDrawU::pulseStart in root_shared.h.
+    void setInstancePulseStart(int i, float start);
 
     // Culling / LOD tuning.
     bool  cullInstances = true;    // frustum-cull whole systems
@@ -634,6 +646,7 @@ private:
         float radius = 0.f;               // world-space bounding-sphere radius
         bool  visible = true;             // see setInstanceVisible
         float lit = 1.f;                  // see setInstanceLit
+        float pulseStart = -1.f;          // see setInstancePulseStart
     };
     std::vector<Instance> instances_;
     id<MTLBuffer> defPrim_ = nil, defAux_ = nil, defGrp_ = nil, defFrame_ = nil;

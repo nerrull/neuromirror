@@ -493,27 +493,39 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
         }
     }
 
+    // Where along the root this pixel is (node distance from the root's
+    // base, hop-offset seeded -- computeNodeDist), for the pulses and the
+    // front below.
+    float3 ab = b - a;
+    float tpar = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
+    float s = mix(nodeD[seg.x], nodeD[seg.y], tpar);
+    // The travelling front (RootDrawU::pulseStart): 1 behind it, 0 ahead, a
+    // pulse-width's soft edge between; 1 everywhere for a set that was
+    // never started (pulseStart < 0), which is the live system.
+    float front = 1.0;
+    if (D.pulseStart >= 0.0) {
+        const float head = (U.pulseTime - D.pulseStart) * U.pulseSpeed;
+        front = saturate((head - s) / max(U.pulseWidth, 1e-4));
+        front = front * front * (3.0 - 2.0 * front);
+    }
+
     // travelling light pulses
     if (U.pulseEnabled == 1 && U.pulseSpacing > 0.0) {
-        float3 ab = b - a;
-        float tpar = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
-        float da = nodeD[seg.x];
-        float db = nodeD[seg.y];
-        float s = mix(da, db, tpar);
         float phase = s - U.pulseTime * U.pulseSpeed;
         float d = abs(glmod(phase, U.pulseSpacing) - 0.5 * U.pulseSpacing);
         d = 0.5 * U.pulseSpacing - d;
         float band = clamp(1.0 - d / max(U.pulseWidth, 1e-4), 0.0, 1.0);
         band = band * band * (3.0 - 2.0 * band);
-        color += U.pulseColor.xyz * (band * U.pulseIntensity);
+        color += U.pulseColor.xyz * (band * U.pulseIntensity * front);
     }
 
     // A dark set: present and occluding, but keeping only a sliver of its
     // radiance. Applied to everything including the pulses -- an unlit
     // structure with light travelling along it would not read as unlit --
     // and to both sides of the indirect/total split, so the alpha below is
-    // unchanged and the fog treats it as it would any surface.
-    const float litScale = mix(D.unlitLevel, 1.0, saturate(D.lit));
+    // unchanged and the fog treats it as it would any surface. A started
+    // set is lit only behind its front.
+    const float litScale = mix(D.unlitLevel, 1.0, saturate(D.lit) * front);
     color    *= litScale;
     indirect *= litScale;
 

@@ -71,7 +71,10 @@ std::vector<int> cropOvalTris(const std::vector<float>& v, const std::vector<int
 }
 
 // One placed mask (render world space; Y-up).
-struct Mask { F3 pos, normal, tangent, bitangent; float rDepth, rWidth, rHeight; };
+// faceUnit is the mask's size unit (SimMask::faceUnit): the face mesh is
+// drawn at faceScale x faceUnit, the same product the sim built the cavity
+// radii from, so the face and its nest agree by construction.
+struct Mask { F3 pos, normal, tangent, bitangent; float rDepth, rWidth, rHeight; float faceUnit; };
 
 // Build interleaved face triangles (MetalRootRenderer::kFaceFloats per vertex)
 // for a set of masks.
@@ -92,7 +95,10 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
                           float lit = 1.f) {
     F3 n = m.normal, t = m.tangent, b = m.bitangent;
     F3 p = sub(m.pos, mul(n, m.rDepth * recess));
-    float scale = faceScale * std::min(m.rWidth, m.rHeight);
+    // faceScale x the mask's own unit, not x its cavity radius: the cavity is
+    // now sized *from* the face (root_sim.cpp's reset), so sizing the face
+    // from the cavity would be circular.
+    float scale = faceScale * m.faceUnit;
     F3 lightPos = add(p, mul(n, lightDist));
 
     // Place every vertex once, then accumulate area-weighted face normals onto
@@ -186,7 +192,7 @@ Mask makeMask(F3 pos, F3 n, float r) {
     if (dot(t, t) < 1e-6f) t = (F3){1, 0, 0};
     t = norm(t);
     F3 bit = norm(cross(n, t));
-    return {pos, n, t, bit, r, r, r};
+    return {pos, n, t, bit, r, r, r, r};
 }
 }  // namespace
 
@@ -278,8 +284,25 @@ void RootScene::setSpeciesIndex(int i) {
     if (i >= 0 && i < (int)sp.size()) simParams_.speciesXml = sp[size_t(i)].second;
 }
 
+void RootScene::syncFaceParams() {
+    simParams_.faceScale = faceScale;
+    // The mesh is normalised about its centroid (largest coordinate 1) but
+    // not symmetric about it: a chin reaches further down than a brow up.
+    // The ellipsoid is centred on the mask, so each half-extent is the
+    // further of the two sides.
+    const std::vector<float>& fv = faceVerts_.empty() ? canonVerts_ : faceVerts_;
+    if (fv.size() < 3) return;
+    float half[3] = {0.f, 0.f, 0.f};
+    for (size_t i = 0; i + 2 < fv.size(); i += 3)
+        for (int c = 0; c < 3; ++c) half[c] = std::max(half[c], std::fabs(fv[i + size_t(c)]));
+    simParams_.faceHalfW = std::max(0.1f, half[0]);
+    simParams_.faceHalfH = std::max(0.1f, half[1]);
+    simParams_.faceHalfD = std::max(0.1f, half[2]);
+}
+
 void RootScene::regrow() {
     if (!sim_) return;
+    syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
@@ -290,6 +313,7 @@ void RootScene::regrow() {
 
 void RootScene::replant() {
     if (!sim_) return;
+    syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
@@ -381,6 +405,7 @@ void RootScene::finishGrowth() {
 
 void RootScene::resetGrowth() {
     if (!sim_) return;
+    syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
@@ -547,7 +572,8 @@ void RootScene::addNeighbours(int count, int variations, float spacing, float st
         pl.translate[0] = want[0] - ( lx * cy + lz * sy);
         pl.translate[1] = want[1] -   ly;
         pl.translate[2] = want[2] - (-lx * sy + lz * cy);
-        const int inst = rr_->addInstance(v.nodes, v.segs, v.radii, pl);
+        std::vector<float> nodeDist;
+        const int inst = rr_->addInstance(v.nodes, v.segs, v.radii, pl, &nodeDist);
         if (inst < 0) continue;
         rr_->setInstanceVisible(inst, false);
         rr_->setInstanceLit(inst, 0.f);
@@ -558,7 +584,37 @@ void RootScene::addNeighbours(int count, int variations, float spacing, float st
         np.instance = inst;
         np.radius = v.radius * pl.scale;
         np.visible = false; np.lit = false;
+        np.pulseStart = -1.f;
         np.maskLit.assign(v.masks.size(), 0);
+        // Where along the roots each mask is: the smallest node distance
+        // among the nodes within the mask's reach (its bound, and a little
+        // more -- the dwell wraps the cavity, so the first arrival is just
+        // outside it), the nearest node when none is that close. The nodes
+        // are placed the way addInstance placed them (scale, yaw,
+        // translate), so this is measured in the same world the pulses run
+        // in. The anchor (mask 0) has no root arriving at it: 0.
+        np.maskDist.assign(v.masks.size(), 0.f);
+        for (size_t j = 1; j < v.masks.size(); ++j) {
+            const auto& sm = v.masks[j];
+            const float lx = sm.pos[0] * pl.scale, ly = sm.pos[1] * pl.scale, lz = sm.pos[2] * pl.scale;
+            const float mx = lx * cy + lz * sy + pl.translate[0];
+            const float my = ly + pl.translate[1];
+            const float mz = -lx * sy + lz * cy + pl.translate[2];
+            const float reach = std::max(sm.rWidth, sm.rHeight) * pl.scale * 1.5f;
+            float best = 1e30f, nearestD = 0.f, nearest = 1e30f;
+            for (size_t n = 0; n + 2 < v.nodes.size() && n / 3 < nodeDist.size(); n += 3) {
+                const float nx = v.nodes[n] * pl.scale, ny = v.nodes[n + 1] * pl.scale,
+                            nz = v.nodes[n + 2] * pl.scale;
+                const float wx = nx * cy + nz * sy + pl.translate[0];
+                const float wy = ny + pl.translate[1];
+                const float wz = -nx * sy + nz * cy + pl.translate[2];
+                const float d = std::sqrt((wx - mx) * (wx - mx) + (wy - my) * (wy - my) + (wz - mz) * (wz - mz));
+                const float nd = nodeDist[n / 3];
+                if (d < nearest) { nearest = d; nearestD = nd; }
+                if (d <= reach) best = std::min(best, nd);
+            }
+            np.maskDist[j] = best < 1e30f ? best : nearestD;
+        }
         neighbours.push_back(np);
     }
     rebuildFace();
@@ -590,10 +646,30 @@ void RootScene::setStructureLit(int k, bool lit) {
     bool changed = np.lit != lit;
     np.lit = lit;
     for (char& c : np.maskLit) { changed = changed || (c != 0) != lit; c = lit ? 1 : 0; }
+    // Whole-structure on or off has no front: the pulses run everywhere
+    // (lit) or nowhere (dark).
+    if (np.pulseStart >= 0.f) { changed = true; np.pulseStart = -1.f; if (rr_) rr_->setInstancePulseStart(np.instance, -1.f); }
     if (!changed) return;
     if (rr_) rr_->setInstanceLit(np.instance, lit ? 1.f : 0.f);
     rebuildFace();
 }
+
+void RootScene::setStructureRootsLit(int k, bool lit) {
+    if (k < 0 || k >= (int)neighbours.size()) return;
+    NeighbourPlacement& np = neighbours[size_t(k)];
+    if (np.lit == lit) return;
+    np.lit = lit;
+    if (rr_) rr_->setInstanceLit(np.instance, lit ? 1.f : 0.f);
+}
+
+void RootScene::setStructurePulseStart(int k, float t) {
+    if (k < 0 || k >= (int)neighbours.size()) return;
+    NeighbourPlacement& np = neighbours[size_t(k)];
+    np.pulseStart = t;
+    if (rr_) rr_->setInstancePulseStart(np.instance, t);
+}
+
+float RootScene::pulseClock() const { return rr_ ? rr_->pulse.time : 0.f; }
 
 void RootScene::setStructureMaskLit(int k, int j, bool lit) {
     if (k < 0 || k >= (int)neighbours.size()) return;
@@ -652,6 +728,7 @@ void RootScene::uploadFaceFromMasks() {
         if (mi == anchorMask && clothActive_ && clothPressOffset_ != 0.f)
             m.pos = sub(m.pos, mul(m.normal, clothPressOffset_));
         m.rDepth = sm.rDepth; m.rWidth = sm.rWidth; m.rHeight = sm.rHeight;
+        m.faceUnit = sm.faceUnit;
         appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                              maskColor, *face.colors, rr_->face.smoothNormals);
     }
@@ -687,6 +764,7 @@ void RootScene::uploadFaceFromMasks() {
             m.rDepth = sm.rDepth * pl.scale;
             m.rWidth = sm.rWidth * pl.scale;
             m.rHeight = sm.rHeight * pl.scale;
+            m.faceUnit = sm.faceUnit * pl.scale;
             // Per mask: the Reveal lights the faces one at a time, ahead of
             // the structure's roots (pl.lit, the instance's own flag).
             const bool litMask = ni < (int)pl.maskLit.size() ? pl.maskLit[size_t(ni)] != 0 : pl.lit;
@@ -810,6 +888,7 @@ void RootScene::refreshClothAnchor() {
         clothAnchorT_   = simd_make_float3(m.tangent[0], m.tangent[1], m.tangent[2]);
         clothAnchorB_   = simd_make_float3(m.bitangent[0], m.bitangent[1], m.bitangent[2]);
         clothAnchorRW_ = m.rWidth; clothAnchorRH_ = m.rHeight; clothAnchorRD_ = m.rDepth;
+        clothAnchorFU_ = m.faceUnit;
     } else {
         clothAnchorPos_ = simd_make_float3(0, 0, 0);
         clothAnchorN_   = simd_make_float3(0, 0, 1);
@@ -999,7 +1078,7 @@ void RootScene::rasteriseClothField() {
     const int fw = clothField_.w, fh = clothField_.h;
     if (fw < 2 || fh < 2) return;
 
-    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    const float scale = faceScale * std::max(0.05f, clothAnchorFU_);
     // The same base placement appendFaceVertexData uses for this mask
     // (recessed into its cavity), retracted further by the current press
     // offset -- see uploadFaceFromMasks' anchor special-case above.
@@ -1096,7 +1175,7 @@ void RootScene::updateClothClearance() {
 // the collider, the clearance signal and the press schedule all read it, so the
 // visible mask and the thing the cloth collides with cannot drift apart.
 float RootScene::anchorFrontLocalZ() const {
-    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    const float scale = faceScale * std::max(0.05f, clothAnchorFU_);
     return -(clothAnchorRD_ * faceRecess) - clothPressOffset_ + clothFaceZMax_ * scale;
 }
 
@@ -1205,7 +1284,7 @@ void RootScene::advanceCloth(double dt) {
     // there is no second resting depth to keep in sync with it. Flagged here
     // as a deliberate simplification against the original port.
     const float pe = smoothstep01(clothPress());
-    const float scale = faceScale * std::max(0.05f, std::min(clothAnchorRW_, clothAnchorRH_));
+    const float scale = faceScale * std::max(0.05f, clothAnchorFU_);
     // Where the press starts: far enough back that the mask's own frontmost
     // point is clear behind the sheet's rest plane, and no further. Measured
     // (clothFaceZMax_) rather than the constant the first version of this port
@@ -1452,6 +1531,7 @@ void RootScene::rebuildFace() {
     // driven off a depth belonging to whatever mesh happened to be loaded
     // before the visitor arrived.
     measureClothFaceDepth();
+    syncFaceParams();
     if (useSim_) { uploadFaceFromMasks(); return; }
     if (!showFace || faceVerts_.empty() || faceTris_.empty()) {
         rr_->uploadFaceMesh({});

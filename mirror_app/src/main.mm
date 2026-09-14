@@ -1478,6 +1478,14 @@ int main(int argc, char** argv) {
                 cap.film.clear();
                 cap.film.shrink_to_fit();
                 cap.filmW = cap.filmH = 0;
+                // Square of its sitter's head pose (see autoCaptureAtCut):
+                // captures from before that was saved out carry 10-40
+                // degrees of it, and a face that tilted on its mask read as
+                // askew from the nest. A no-op on one already square.
+                if (g_fitter.valid()) {
+                    const float deg = mirror::SquareCaptureToNeutral(cap, g_fitter.basis().neutral());
+                    if (deg > 2.f) printf("face bank: %s squared by %.0f deg\n", it->c_str(), deg);
+                }
                 c = bankCache.emplace(*it, std::move(cap)).first;
             }
             bank.push_back(c->second);
@@ -1502,7 +1510,19 @@ int main(int argc, char** argv) {
         mirror::FaceCapture cap;
         cap.id = mirror::NewCaptureId();
         cap.created = cap.id;
+        // Square, not posed: vertices() carries the head rotation the mask
+        // on the mirror follows (RotateAboutCentroid by rotation()), and a
+        // bank face worn on a root mask with that tilt still in it sat
+        // askew inside the nest the sim had grown square to the mask's
+        // frame. The rotation is orthonormal, so its transpose undoes it
+        // about the same centroid; the uv below is projected from the
+        // fitter's own (posed) state and is per vertex, so it is unaffected.
         cap.verts = verts;
+        {
+            const float* r = g_fitter.rotation();
+            const float rt[9] = {r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]};
+            mirror::RotateAboutCentroid(cap.verts, rt);
+        }
         cap.tris  = g_fitter.basis().triangles();
         cap.colors = g_face_colors;
         float ps = 1.f, uo = 0.f, vo = 0.f;
@@ -2751,6 +2771,29 @@ int main(int argc, char** argv) {
                     clothClearHoldElapsed = true;
                 }
             };
+            // The moment the viewer stops driving mask 0 (the sequence leaving
+            // Face, by its own clock or a jump), the mask freezes on whatever
+            // pose their head was in on that last frame -- and a tilted head
+            // left the face askew in the nest the sim grew square to the
+            // mask's frame, the same fault the bank's captures had. Upload
+            // it once more, squared: the fitter's own rotation undone about
+            // the centroid, exactly as autoCaptureAtCut saves it. Only the
+            // live tracker's mesh: a loaded capture or a replayed sitting is
+            // already the mask's own business.
+            auto squareAnchorMaskOnLeavingFace = [&](RootSequence::Stage before) {
+                if (!rootSeqActive || !rootSeq.valid()) return;
+                if (before != RootSequence::Stage::Face || rootSeq.stage() == RootSequence::Stage::Face) return;
+                if (!g_capture_loaded.empty() || rootFaceSeq.valid()) return;
+                if (!(g_fitter.valid() && roots.usingFittedFace())) return;
+                std::vector<float> v = g_fitter.vertices();
+                if (v.size() < 9) return;
+                const float* r = g_fitter.rotation();
+                const float rt[9] = {r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]};
+                mirror::RotateAboutCentroid(v, rt);
+                roots.setFittedFace(v, rootFaceTrisUploaded ? std::vector<int>()
+                                                            : g_fitter.basis().triangles());
+                rootFaceTrisUploaded = true;
+            };
             g_root_stage = -1;   // set below by whichever root branch renders
 
             // Hand the captured neural texture over. The mirror is not running
@@ -2883,6 +2926,7 @@ int main(int argc, char** argv) {
                 // layout with no masks at all (the synthetic stand-in) leaves
                 // it invalid and the fallback framing in charge.
                 rootsClock += rootDt;
+                const RootSequence::Stage stageBefore = rootSeq.stage();
                 honourRootJump();
                 const bool cleared = roots.clothCleared();
                 if (cleared && clothClearAtPreWarm < 0.0) clothClearAtPreWarm = rootsClock;
@@ -2899,6 +2943,7 @@ int main(int argc, char** argv) {
                     // next step; held for this frame only.
                     roots.simPaused = true;
                 }
+                squareAnchorMaskOnLeavingFace(stageBefore);
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
@@ -2971,6 +3016,7 @@ int main(int argc, char** argv) {
                 // same clock RootSequence and (while it is still active)
                 // faceTrackRec.record() use below.
                 rootsClock += rootDt;
+                const RootSequence::Stage stageBefore = rootSeq.stage();
                 honourRootJump();
                 if (rootSeqActive && !rootHold) {
                     // No wantOutro: the visitor leaving does not shorten the
@@ -3001,6 +3047,7 @@ int main(int argc, char** argv) {
                     // the next step; this frame the growth stands still.
                     roots.simPaused = true;
                 }
+                squareAnchorMaskOnLeavingFace(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
                 if (rootFaceSeq.valid() && !rootHold)
                     rootFaceSeq.step(roots, g_show.phaseTime(), dt);

@@ -15,16 +15,18 @@
 //   Turn    the finished chain is turned to hang: the camera rotates about
 //           the structure's centre to a low elevation, framing the whole of
 //           it, so the axis reads vertical on screen.
-//   Reveal  the other structures -- baked variations of this plant, wearing
+//   Orbit   the other structures -- baked variations of this plant, wearing
 //           previous visitors' faces -- stand around this one on a fan
-//           behind it. They all appear at once, dark, on entry; then each
-//           Wwise marker (or the timer where no marker comes) lights one
-//           face mask somewhere in the hood, in a fixed shuffled order, and
-//           a structure's roots light once every one of its masks has. The
-//           camera keeps the Turn's angles and backs off to frame the hood.
-//           Ends when the last mask is lit.
-//   Orbit   a slow orbit of everything, for its authored seconds. The
-//           visitor leaving changes nothing: the piece runs to the end.
+//           behind it. They all appear at once, dark, on entry, and the
+//           camera starts its slow orbit of everything at once. Then each
+//           Wwise marker (or the timer where no marker comes) lights the
+//           next unlit structure, nearest first: its top mask comes on and
+//           its pulse front starts there, and the rest of its masks light
+//           in order as the front reaches them (the roots light behind the
+//           front too -- see RootDrawU::pulseStart). Ends into the Outro
+//           once every structure is fully lit *and* the orbit has run its
+//           authored seconds. The visitor leaving changes nothing: the
+//           piece runs to the end.
 //   Outro   the datamosh, then the screen fade. Done when the fade lands.
 //
 // This replaces RootCameraSequence (Face -> Deal -> Growth -> Meander), which
@@ -42,8 +44,8 @@
 // piece); step() once per rendered frame after that. step() writes
 // roots.target/radius/azimuth/elevation, roots.simPaused and
 // roots.simStepsPerFrame, forces roots.autoFrame off, -- in WhenFramed
-// reveal mode -- flags planned masks visible, and in Reveal places the other
-// structures and steps them visible/lit. Nothing else on the scene.
+// reveal mode -- flags planned masks visible, and in Orbit places the other
+// structures and steps them lit. Nothing else on the scene.
 // jumpTo() is the operator's cut to the start of any stage (see its comment):
 // it does to the scene what the skipped stages would have, at once.
 #pragma once
@@ -56,7 +58,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -127,19 +128,26 @@ struct RootSequenceParams {
     // bound, as a fraction of its extent.
     float frame_margin           = 0.25f;
 
-    // --- Reveal ------------------------------------------------------------
+    // --- Reveal (the lighting, inside Orbit) --------------------------------
     // Spacing of the other structures: structure k stands
     // reveal_spacing x this structure's radius x sqrt(k+1) from its centre
     // (a sunflower, so the hood packs evenly at any count). The radius is the
     // masks' bound, which the tall cone makes mostly height; at 1.2 the
     // structures interleaved and read as one tangle from the Turn-end
     // camera, and at ~2.2 each stands clear of the next while the hood is
-    // still one grove inside the fog's range. A step (one mask lit) happens
-    // on a Wwise marker, or after this many seconds without one (markers
-    // need the SDK and a bank built with cue-carrying audio, neither of
-    // which every dev machine has).
+    // still one grove inside the fog's range. A step (the next structure's
+    // top mask lit and its pulse front started) happens on a Wwise marker,
+    // or after this many seconds without one (markers need the SDK and a
+    // bank built with cue-carrying audio, neither of which every dev
+    // machine has).
     float reveal_spacing          = 2.2f;
     float reveal_fallback_seconds = 2.5f;
+    // The rest of a structure's masks light as its pulse front reaches them
+    // (the node distance the root arrived at each mask, against pulse speed
+    // x seconds since the front started). This many seconds' extra delay on
+    // each, for a front that reads as arriving a little after the numbers
+    // say it has.
+    float reveal_pulse_lag        = 0.f;
     // How many other structures stand around this one. reveal_structures
     // is the operator's say: 0 leaves it to the face bank (one structure per
     // N older captures, at least min, at most max -- see the plan's "face
@@ -168,6 +176,14 @@ struct RootSequenceParams {
     // 1.5 visibilities into the fog, and what is nearer the lens still reads.
     float orbit_bound_frac    = 0.7f;
     float orbit_max_radius    = 150.f;
+    // The framing itself. The fitted radius (every kept structure inside the
+    // frustum with frame_margin) x orbit_zoom: under 1 lets the outer ones
+    // run off the frame's edge so the near ones fill it -- the strict fit
+    // stood so far back that the hood was a clump in the middle of the fog.
+    // orbit_target_lift raises (or lowers) the point the orbit looks at, in
+    // world units, off the kept set's mean.
+    float orbit_zoom          = 0.55f;
+    float orbit_target_lift   = 0.f;
 
     // --- Outro -------------------------------------------------------------
     float datamosh_seconds = 3.0f;
@@ -184,7 +200,7 @@ struct RootSequenceParams {
 
 class RootSequence {
 public:
-    enum class Stage { Face = 0, Grow, Turn, Reveal, Orbit, Outro, Done };
+    enum class Stage { Face = 0, Grow, Turn, Orbit, Outro, Done };
 
     // Per-frame inputs from the host, all levels for this one frame:
     //   wantOutro     skip the rest of the orbit and go out now. Only
@@ -196,7 +212,8 @@ public:
     //   clothCleared  RootScene::clothCleared() -- the first clock it is seen
     //                 true is when Face's clear-tail timer starts.
     //   markerHit     a "fire reverb drop" cue (a FirePlucker marker) came in
-    //                 this frame. Reveal's step trigger.
+    //                 this frame. The Orbit's lighting trigger: the next
+    //                 structure's top mask.
     //   tracked*      the tracked face's centre, [0,1] from the top-left
     //                 (FaceResult::centre_x/y), for the head pan.
     struct Inputs {
@@ -210,23 +227,22 @@ public:
     // Read the planned layout and pick the anchor and the structure's
     // geometry. `neighboursGen_` is deliberately NOT reset here -- it tracks
     // whether the neighbour hood matches the plant's current generation, not
-    // whether this visit has built it yet; see the Reveal branch of step().
+    // whether this visit has built it yet; see enterOrbit().
     void begin(RootScene& roots, const RootSequenceParams& P) {
         stage_        = Stage::Face;
         stageT0_      = 0.0;
         clothClearAt_ = -1.0;
         fade_         = 0.f;
         moshFired_    = false;
-        revealStep_   = 0;
+        litNext_      = 0;
         revealLastT_  = 0.0;
         panAz_ = panEl_ = 0.f;
         prevAz_ = prevEl_ = 0.f;
         prevValid_ = false;
-        revealWantR_ = 0.f;
         // A hood still placed from a previous run on the same plant (the
         // operator re-entering the phase without a replant) starts hidden
-        // and dark again, so Reveal has something to reveal. No-ops when the
-        // hood is already gone, which is the show's own case.
+        // and dark again, so the Orbit has something to reveal. No-ops when
+        // the hood is already gone, which is the show's own case.
         for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
             roots.setStructureVisible(k, false);
             roots.setStructureLit(k, false);
@@ -245,7 +261,11 @@ public:
         valid_ = true;
         anchor_ = planned.front();
         anchorExt_ = std::max(anchor_.rWidth, anchor_.rHeight);
-        tightR_ = anchorExt_ * 2.6f;
+        // Tight on the face: 3.8 x its drawn half-height (faceScale x the
+        // mask's unit, the mesh normalised to 1 tall). In the face's own
+        // size rather than the cavity's, which now hugs the face and would
+        // otherwise have moved this framing with the cavity margin.
+        tightR_ = std::max(0.05f, roots.faceScale) * anchor_.faceUnit * 3.8f;
 
         // The structure: its centre and a sphere about that centre covering
         // every mask plus that mask's own size. Roots trail past the masks,
@@ -375,70 +395,33 @@ public:
             curEl_ = turnFromEl_ + (endEl - turnFromEl_) * u;
             curR_  = turnFromR_ + (endR - turnFromR_) * u;
             for (int k = 0; k < 3; ++k) curT_[k] = turnFromT_[k] + (centroid_[k] - turnFromT_[k]) * u;
-            if (u >= 1.f) { enter(Stage::Reveal, clock); revealLastT_ = clock; }
-            break;
-        }
-        case Stage::Reveal: {
-            // The other structures, placed on entry and shown at once, dark;
-            // then lit one face mask at a time, in a fixed shuffled order
-            // over every mask of every structure, and a structure's roots
-            // once all of its masks are. A step fires on a marker, or after
-            // reveal_fallback_seconds without one. The camera holds the
-            // Turn's angles (the head pan still applies below) and backs off
-            // to frame the hood. Gated on the plant's generation rather
-            // than "have I done this for this visitor yet": placement re-bakes
-            // every structure into fresh GPU buffers and only needs redoing
-            // when what it reads has changed -- and replant() bumps the
-            // generation, having dropped the last visitor's hood. The
-            // variations behind the placement are cached one level down, in
-            // RootScene, and survive the replant.
-            stepGrowth(roots, fdt);
-            if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P, clock);
-            const int total = (int)revealOrder_.size();
-            const bool fire = in.markerHit ||
-                              (clock - revealLastT_) >= std::max(0.1, (double)P.reveal_fallback_seconds);
-            if (fire && revealStep_ < total) {
-                const int k = revealOrder_[size_t(revealStep_)].first;
-                const int j = revealOrder_[size_t(revealStep_)].second;
-                roots.setStructureMaskLit(k, j, true);
-                // The roots -- the capsules' own lit, with their pulses --
-                // only once the whole structure's faces are on.
-                if (roots.neighbours[size_t(k)].allMasksLit()) roots.setStructureLit(k, true);
-                ++revealStep_;
-                revealLastT_ = clock;
-            }
-            // The camera holds the Turn's angles and target but gives ground
-            // to the hood: the radius that frames this structure and every
-            // neighbour, each as its own bound, and it never comes back in.
-            // The placement keeps the hood in the Turn-end frustum where it
-            // can, but a wide hood at a tall structure's framing has its
-            // outer ones past the edge, and a structure that lights out of
-            // frame has not been revealed.
-            revealWantR_ = std::max(revealWantR_, revealFitRadius(roots, P));
-            easeTo(curR_, revealWantR_, kEase);
-            if (revealStep_ >= total) {
-                enter(Stage::Orbit, clock);
-                orbitBound(roots, P);
-            }
+            if (u >= 1.f) { enter(Stage::Orbit, clock); enterOrbit(roots, P, clock); }
             break;
         }
         case Stage::Orbit:
         case Stage::Outro: {
-            // Orbit everything: azimuth advancing, elevation and radius eased
-            // in to frame the whole hood. The orbit keeps running through the
-            // outro -- the datamosh reads camera motion, and a camera that
-            // froze the moment it fired would have nothing to smear.
+            // The hood is standing, dark; the lighting runs on markers while
+            // the camera orbits. Orbit everything: azimuth advancing,
+            // elevation, target and radius eased in to the orbit's own
+            // framing from the Turn-end pose. The orbit keeps running
+            // through the outro -- the datamosh reads camera motion, and a
+            // camera that froze the moment it fired would have nothing to
+            // smear -- and so does the lighting, so a structure caught
+            // mid-front is not left half dark.
             stepGrowth(roots, fdt);
+            stepLighting(roots, P, in, clock);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
             easeAngle(curEl_, wantEl, kEase);
-            for (int k = 0; k < 3; ++k) easeTo(curT_[k], orbitC_[k], kEase);
-            const float wantR = std::min(orbitFitRadius(roots, curAz_, wantEl, P),
-                                         std::max(1.f, P.orbit_max_radius));
-            easeTo(curR_, wantR, kEase);
+            float wantT[3];
+            orbitTarget(P, wantT);
+            for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kEase);
+            easeTo(curR_, orbitRadius(roots, curAz_, wantEl, P), kEase);
 
             if (stage_ == Stage::Orbit) {
-                if (tIn >= (double)P.orbit_seconds) enter(Stage::Outro, clock);
+                // Both: the orbit's seconds, and every structure lit to its
+                // last mask -- a hood still lighting is not over.
+                if (tIn >= (double)P.orbit_seconds && allLit(roots)) enter(Stage::Outro, clock);
             } else {
                 // The datamosh once, on entry; then the fade once the mosh
                 // has had its time. The host owns the screen-wide fade
@@ -531,11 +514,13 @@ public:
     //           1 about to start off the Face pose.
     //   Turn    the whole chain grown now (RootScene::finishGrowth), camera
     //           on the pose Grow ends on, the Turn about to begin.
-    //   Reveal  ...and the camera on the Turn-end pose; the hood is placed
-    //           on the next step() (all structures visible, dark) and lights
-    //           one mask per marker from there exactly as in the show.
-    //   Orbit   ...and the hood placed and every structure lit.
-    //   Outro   as Orbit; the datamosh fires on the next step().
+    //   Orbit   ...and the hood placed (all structures visible, dark), the
+    //           camera snapped to the orbit's own framing (the pose the show
+    //           eases into over cam_ease_seconds), and the lighting running
+    //           from the first structure on markers / the fallback timer
+    //           exactly as in the show.
+    //   Outro   as Orbit with every structure lit; the datamosh fires on
+    //           the next step().
     //
     // Every pose is snapped: no ease, no angular clamp on the cut. `clock` is
     // the host's sequence clock, as for step(); the stage's own time starts
@@ -566,19 +551,12 @@ private:
 
         // Going back to before the chain exists, or restarting Grow, is a
         // reseed; so is coming back from a placed hood to a stage before
-        // Reveal, since the Reveal re-places the hood only for a new
+        // Orbit, since the Orbit re-places the hood only for a new
         // generation and the plant is the cheap part of that.
         const bool reseed = s == Stage::Face ||
                             (s == Stage::Grow && stage_ != Stage::Face) ||
                             (s <= Stage::Turn && neighboursGen_ == roots.growGeneration());
         if (reseed) roots.resetGrowth();
-        // ...and, going back into Reveal from Orbit/Outro with the hood still
-        // placed, the hood dark again so there is something to reveal.
-        if (s == Stage::Reveal && neighboursGen_ == roots.growGeneration())
-            for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
-                roots.setStructureVisible(k, true);
-                roots.setStructureLit(k, false);
-            }
 
         // The Face pose is where every stage starts from.
         curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
@@ -604,29 +582,21 @@ private:
         for (int k = 0; k < 3; ++k) turnFromT_[k] = curT_[k];
         if (s == Stage::Turn) { enter(Stage::Turn, clock); return; }
 
-        // Reveal onward: the Turn's end pose.
+        // Orbit onward: the Turn's end pose (the hood is placed from it),
+        // the hood standing dark with its lighting about to start, then the
+        // camera snapped onto the orbit's framing -- the same fit step()
+        // eases into, so the jump shows the frame the show settles on.
         turnEndPose(roots, P);
-        revealLastT_ = clock;
-        revealWantR_ = curR_;
-        if (s == Stage::Reveal) {
-            // A hood already standing (back from Orbit) keeps its lighting
-            // order and starts it over; a new one is placed by step().
-            revealStep_ = 0;
-            enter(Stage::Reveal, clock);
-            return;
-        }
-
-        // Orbit onward: the hood placed and lit, the camera backed off to
-        // frame it as the Reveal's end would have.
-        if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P, clock);
-        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
-            roots.setStructureVisible(k, true);
-            roots.setStructureLit(k, true);
-        }
-        revealStep_ = (int)revealOrder_.size();
-        curR_ = std::max(curR_, revealFitRadius(roots, P));
         enter(s == Stage::Orbit ? Stage::Orbit : Stage::Outro, clock);
-        orbitBound(roots, P);
+        enterOrbit(roots, P, clock);
+        curEl_ = P.orbit_elevation_deg * kDeg;
+        orbitTarget(P, curT_);
+        curR_ = orbitRadius(roots, curAz_, curEl_, P);
+        if (s == Stage::Outro) {
+            // Everything lit, no fronts: the outro's own frame.
+            for (int k = 0; k < (int)roots.neighbours.size(); ++k) roots.setStructureLit(k, true);
+            litNext_ = (int)litOrder_.size();
+        }
     }
 public:
 
@@ -640,7 +610,6 @@ public:
             case Stage::Face:   return "face";
             case Stage::Grow:   return "grow";
             case Stage::Turn:   return "turn";
-            case Stage::Reveal: return "reveal";
             case Stage::Orbit:  return "orbit";
             case Stage::Outro:  return "outro";
             case Stage::Done:   return "done";
@@ -666,11 +635,38 @@ private:
         roots.simStepsPerFrame = std::max(1, steps);
     }
 
-    // Reveal's entry: place the other structures about this one from the
-    // current pose, show them all dark, and draw the lighting order. Gated
-    // by the caller on the plant's generation -- see the Reveal branch of
-    // step() for why generation rather than "this visit".
-    void placeHood(RootScene& roots, const RootSequenceParams& P, double clock) {
+    // Orbit's entry, from the Turn-end pose: the hood placed (once per
+    // plant generation -- placement re-bakes every structure into fresh GPU
+    // buffers and only needs redoing when what it reads has changed, and
+    // replant() bumps the generation having dropped the last visitor's
+    // hood; the variations behind it are cached one level down, in
+    // RootScene, and survive the replant), every structure visible and
+    // dark, the lighting order drawn and its clock started, and what the
+    // orbit frames decided.
+    void enterOrbit(RootScene& roots, const RootSequenceParams& P, double clock) {
+        if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P);
+        // A hood already standing (a jump back into Orbit) starts over: all
+        // of it visible and dark.
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
+            roots.setStructureVisible(k, true);
+            roots.setStructureLit(k, false);
+        }
+        // The lighting order: nearest structure first, so what lights first
+        // is what is in front. Fixed by the placement, so a rerun lights the
+        // same structures in the same order.
+        litOrder_.clear();
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k) litOrder_.push_back(k);
+        std::sort(litOrder_.begin(), litOrder_.end(), [&](int a, int b) {
+            return dist3(roots.neighbours[size_t(a)].centre, centroid_) <
+                   dist3(roots.neighbours[size_t(b)].centre, centroid_);
+        });
+        litNext_     = 0;
+        revealLastT_ = clock;
+        orbitBound(roots, P);
+    }
+    // Place the other structures about this one from the current pose, all
+    // hidden and dark (enterOrbit shows them).
+    void placeHood(RootScene& roots, const RootSequenceParams& P) {
         const int fromBank = roots.structureCount() > 0 ? roots.structureCount()
                                                         : P.reveal_min_structures;
         const int count = std::clamp(P.reveal_structures > 0 ? P.reveal_structures : fromBank,
@@ -684,27 +680,64 @@ private:
         roots.renderer().lodBias = 0.5f;
         roots.renderer().subpixelCull = false;
         neighboursGen_ = roots.growGeneration();
-        roots.setAllStructuresVisible(true);
-        // The lighting order: every (structure, mask) once, shuffled on a
-        // fixed seed so a rerun lights the same faces in the same order.
-        revealOrder_.clear();
-        for (int k = 0; k < (int)roots.neighbours.size(); ++k)
-            for (int j = 0; j < roots.neighbours[size_t(k)].maskCount(); ++j)
-                revealOrder_.push_back({k, j});
-        std::mt19937 rng(0x5eed1u);
-        std::shuffle(revealOrder_.begin(), revealOrder_.end(), rng);
-        revealStep_  = 0;
-        revealLastT_ = clock;
-        revealWantR_ = curR_;
     }
-    // The radius that frames this structure and every visible neighbour from
-    // the current pose, each as its own bound -- what Reveal backs off to.
-    float revealFitRadius(const RootScene& roots, const RootSequenceParams& P) const {
-        std::vector<Bound> bs;
-        bs.push_back({{centroid_[0], centroid_[1], centroid_[2]}, structR_});
-        for (const auto& pl : roots.neighbours)
-            if (pl.visible) bs.push_back({{pl.centre[0], pl.centre[1], pl.centre[2]}, pl.radius});
-        return fitRadius(roots, curT_, curAz_, curEl_, bs.data(), (int)bs.size(), P.frame_margin);
+    // The lighting, one frame: a marker (or the fallback timer) lights the
+    // next structure in litOrder_ -- its top mask on, its roots allowed lit,
+    // its pulse front started at the renderer's pulse clock -- and then
+    // every started structure's remaining masks light, in order, as its
+    // front reaches the node distance the root arrived at them
+    // (NeighbourPlacement::maskDist), reveal_pulse_lag seconds later. With
+    // pulses that do not travel (speed 0) there is no front to wait for:
+    // the whole structure lights on its marker.
+    void stepLighting(RootScene& roots, const RootSequenceParams& P, const Inputs& in,
+                      double clock) {
+        const int n = (int)litOrder_.size();
+        const bool fire = in.markerHit ||
+                          (clock - revealLastT_) >= std::max(0.1, (double)P.reveal_fallback_seconds);
+        const float speed = roots.renderer().pulse.speed;
+        if (fire && litNext_ < n) {
+            const int k = litOrder_[size_t(litNext_)];
+            if (speed > 1e-3f) {
+                roots.setStructureRootsLit(k, true);
+                roots.setStructurePulseStart(k, roots.pulseClock());
+                roots.setStructureMaskLit(k, 0, true);
+            } else {
+                roots.setStructureLit(k, true);
+            }
+            ++litNext_;
+            revealLastT_ = clock;
+        }
+        if (speed <= 1e-3f) return;
+        const float now = roots.pulseClock();
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
+            const auto& np = roots.neighbours[size_t(k)];
+            if (np.pulseStart < 0.f) continue;
+            const float head = speed * (now - np.pulseStart - std::max(0.f, P.reveal_pulse_lag));
+            for (int j = 1; j < np.maskCount(); ++j) {
+                if (np.maskLit[size_t(j)]) continue;
+                const float at = j < (int)np.maskDist.size() ? np.maskDist[size_t(j)]
+                                                             : float(j) * roots.renderer().pulse.hopOffset;
+                if (head >= at) roots.setStructureMaskLit(k, j, true);
+            }
+        }
+    }
+    // Every structure lit to its last mask (a hood of none is).
+    static bool allLit(const RootScene& roots) {
+        for (const auto& np : roots.neighbours)
+            if (!np.allMasksLit()) return false;
+        return true;
+    }
+    // The orbit's own framing: its target (the kept set's mean, lifted) and
+    // the radius that fits the kept set from (az, el) x orbit_zoom, capped.
+    void orbitTarget(const RootSequenceParams& P, float out[3]) const {
+        out[0] = orbitC_[0];
+        out[1] = orbitC_[1] + P.orbit_target_lift;
+        out[2] = orbitC_[2];
+    }
+    float orbitRadius(const RootScene& roots, float az, float el,
+                      const RootSequenceParams& P) const {
+        return std::min(orbitFitRadius(roots, az, el, P) * std::max(0.05f, P.orbit_zoom),
+                        std::max(1.f, P.orbit_max_radius));
     }
     // The pose Grow's last hop settles on once the root has arrived: square
     // on the last mask, at it, far enough out to hold it, the mask before it
@@ -868,7 +901,9 @@ private:
     // disc is fitted on a height it does not have.
     float orbitFitRadius(const RootScene& roots, float az, float el,
                          const RootSequenceParams& P) const {
-        return fitRadius(roots, orbitC_, az, el, orbitBs_.data(), (int)orbitBs_.size(),
+        float t[3];
+        orbitTarget(P, t);
+        return fitRadius(roots, t, az, el, orbitBs_.data(), (int)orbitBs_.size(),
                          P.frame_margin);
     }
 
@@ -886,7 +921,6 @@ private:
     float growStepsPerSec_ = 100.f;
     float growStepAcc_ = 0.f;              // fractional steps owed, see stepGrowth
     float growTimeout_ = 30.f;
-    float revealWantR_ = 0.f;              // Reveal's framing radius, monotonic
 
     // Where the Turn started from, captured at its entry.
     float turnFromAz_ = 0.f, turnFromEl_ = 0.f, turnFromR_ = 0.f;
@@ -897,11 +931,11 @@ private:
     std::vector<Bound> orbitBs_;
 
     int neighboursGen_ = -1;   // plant generation the placed structures were built for
-    // Reveal's lighting order -- (structure, mask), one entry per face in
-    // the hood, shuffled -- its step counter, and the clock the last step
-    // fired at, for the fallback timer.
-    std::vector<std::pair<int, int>> revealOrder_;
-    int    revealStep_  = 0;
+    // The Orbit's lighting order -- structures, nearest first -- the next
+    // one to light, and the clock the last one lit at, for the fallback
+    // timer.
+    std::vector<int> litOrder_;
+    int    litNext_     = 0;
     double revealLastT_ = 0.0;
 
     // The camera, before the head pan and the angular clamp.

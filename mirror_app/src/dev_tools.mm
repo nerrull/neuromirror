@@ -2125,13 +2125,15 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 // moments the stages are about: the chain at 25/50/75 % grown (with the
 // tip's and the anchor's distances from the eye, so "toward the lens" is a
 // number), the Turn's end pose before anything has popped in, the hood
-// half-way (some structures dark, some lit), all of it lit, and a frame into
-// the Orbit; then the Outro is run and the datamosh's state checked through
-// the fade and across a re-entry. The live path needs a visitor and the show clock;
+// standing dark as the orbit starts, the first structure's top mask lit
+// with its pulse front just started, that structure lit to its last mask
+// while the others are not, all of it lit, a frame further into the Orbit,
+// and the Outro's first frame; then the Outro is run and the datamosh's
+// state checked through the fade and across a re-entry. The live path needs a visitor and the show clock;
 // this runs the same RootSequence against the canonical mask with no film
 // (skipCloth), the stages retimed short so the growth is a few hundred sim
 // frames rather than a minute, and a marker fed in every `markerEvery`
-// frames of Reveal in place of the pluck track's cues. Growth fields are
+// frames of Orbit in place of the pluck track's cues. Growth fields are
 // --growshot's key=value ones, so the bake can be timed against the show's
 // own preset (N=6, hopDays=60 ...) rather than the constructor's defaults.
 // SEQSHOT_POST takes the same keys as GROWSHOT_POST, SEQSHOT_FACES=<amount>
@@ -2141,7 +2143,7 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 // sequence's framing knobs (see below), and SEQSHOT_REALTIME=1 runs Face ->
 // Turn at the show's own timings and 60 fps to measure Grow's real length
 // against what the params promise. Also reports how long the variations took
-// to bake, which is the one-off stall the plan accepts on the first Reveal.
+// to bake, which is the one-off stall the plan accepts on the first Orbit.
 int seqshot(const char* prefix, int W, int H,
             const std::vector<std::pair<std::string, std::string>>& fields) {
     MetalContext ctx;
@@ -2175,8 +2177,9 @@ int seqshot(const char* prefix, int W, int H,
     // worth of variations.
     if (const char* n = getenv("SEQSHOT_STRUCTURES")) sp.reveal_structures = atoi(n);
     // SEQSHOT_SEQ="lead=0.3,faceSec=3.3,spacing=2.2,margin=0.3,orbitEl=15,orbitFrac=0.85,
-    // orbitMax=130,growMargin=0.35" overrides the framing knobs being tuned,
-    // so a still can be re-shot without a rebuild.
+    // orbitMax=130,orbitZoom=0.55,orbitLift=0,pulseLag=0,growMargin=0.35"
+    // overrides the framing knobs being tuned, so a still can be re-shot
+    // without a rebuild.
     if (const char* spec = getenv("SEQSHOT_SEQ")) {
         std::string t;
         for (const char* c = spec;; ++c) {
@@ -2194,6 +2197,9 @@ int seqshot(const char* prefix, int W, int H,
                 else if (k == "orbitEl")    sp.orbit_elevation_deg = v;
                 else if (k == "orbitFrac")  sp.orbit_bound_frac = v;
                 else if (k == "orbitMax")   sp.orbit_max_radius = v;
+                else if (k == "orbitZoom")  sp.orbit_zoom = v;
+                else if (k == "orbitLift")  sp.orbit_target_lift = v;
+                else if (k == "pulseLag")   sp.reveal_pulse_lag = v;
                 else fprintf(stderr, "seqshot: unknown SEQSHOT_SEQ key '%s'\n", k.c_str());
             }
             t.clear();
@@ -2224,12 +2230,18 @@ int seqshot(const char* prefix, int W, int H,
     }
 
     const double dt = realtime ? 1.0 / 60.0 : 1.0 / 30.0;
-    const int markerEvery = 6;
+    // A marker a second (the show's cues come slower still): each lights
+    // the next structure's top mask, and its front takes a few seconds to
+    // run the chain, so the first structure is still lighting when the
+    // second starts.
+    const int markerEvery = 30;
     double clock = 0.0;
-    int frame = 0, shot = 0, revealFrames = 0;
+    int frame = 0, shot = 0, orbitFrames = 0;
     RootSequence::Stage last = seq.stage();
     double bakeSeconds = 0.0, orbitT0 = -1.0, growT0 = -1.0, growStartedT = -1.0;
-    bool placedShot = false, masksShot = false, halfShot = false, wantOutro = false;
+    bool placedShot = false, topShot = false, fullShot = false, allShot = false, wantOutro = false;
+    int  firstLit = -1;         // the structure the first marker lit
+    double firstLitT = -1.0;    // ...and when
     bool moshBeforeFade = true;
     int  moshDuringFade = 0, fadeFrames = 0;
     int growQuarter = 0;   // stills at 25/50/75 % of the hops
@@ -2283,11 +2295,11 @@ int seqshot(const char* prefix, int W, int H,
         RootSequence::Inputs in;
         in.clothCleared = roots.clothCleared();
         in.wantOutro = wantOutro;
-        in.markerHit = seq.stage() == RootSequence::Stage::Reveal && revealFrames > 0 &&
-                       (revealFrames % markerEvery) == 0;
-        // The Reveal's first step is the one that bakes and places, and it is
-        // the frame after the stage is entered; the longest step seen in the
-        // stage is that one.
+        // Markers from the Orbit's second frame on: the first is the one that
+        // bakes and places the hood (the longest step seen in the stage), and
+        // a hood has to be standing before anything lights.
+        in.markerHit = seq.stage() == RootSequence::Stage::Orbit && orbitFrames > 0 &&
+                       (orbitFrames % markerEvery) == 0;
         const auto t0 = std::chrono::steady_clock::now();
         seq.step(roots, clock, dt, sp, in);
         const double stepSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -2306,9 +2318,8 @@ int seqshot(const char* prefix, int W, int H,
                 if (!snap("grow_end")) return 1;
                 if (realtime) break;
             }
-            // Into Orbit means the last structure has just been lit; the
-            // camera has not moved off the Turn pose yet.
-            if (seq.stage() == RootSequence::Stage::Orbit && !snap("reveal_all_lit")) return 1;
+            // Into the Outro: the frame the datamosh fires on.
+            if (seq.stage() == RootSequence::Stage::Outro && !snap("outro")) return 1;
             last = seq.stage();
         }
         // Quarter-way stills through the chain, with where the tip is on
@@ -2358,45 +2369,70 @@ int seqshot(const char* prefix, int W, int H,
                 if (!snap(tag)) return 1;
             }
         }
-        if (seq.stage() == RootSequence::Stage::Reveal) {
-            ++revealFrames;
+        if (seq.stage() == RootSequence::Stage::Orbit) {
+            ++orbitFrames;
             if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;
+            if (orbitT0 < 0.0) orbitT0 = clock;
             int vis = 0, lit = 0;
             for (const auto& n : roots.neighbours) { vis += n.visible; lit += n.lit; }
+            // The hood placed, all of it standing dark, on the Orbit's first
+            // frame -- the structures appear right as the camera starts to
+            // back off the Turn-end pose, not after.
             if (!placedShot && !roots.neighbours.empty()) {
                 placedShot = true;
-                printf("seqshot: variations baked + placed in %.2f s (%d variations, %zu placed)\n",
-                       stepSecs, roots.variationCount(), roots.neighbours.size());
+                printf("seqshot: variations baked + placed in %.2f s (%d variations, %zu placed); "
+                       "%d visible, %d lit at orbit entry (%s)\n",
+                       stepSecs, roots.variationCount(), roots.neighbours.size(), vis, lit,
+                       vis == (int)roots.neighbours.size() && lit == 0 ? "OK" : "FAIL");
                 for (size_t k = 0; k < roots.neighbours.size(); ++k) {
                     const auto& n = roots.neighbours[k];
                     const float dx = n.centre[0] - roots.target[0], dz = n.centre[2] - roots.target[2];
-                    printf("seqshot:   structure %zu  variation %d  at az %.2f  %.1f out  y %.1f  r %.1f\n",
+                    printf("seqshot:   structure %zu  variation %d  at az %.2f  %.1f out  y %.1f  r %.1f  mask dists",
                            k, n.variation, std::atan2(dx, dz), std::sqrt(dx * dx + dz * dz),
                            n.centre[1], n.radius);
+                    for (float d : n.maskDist) printf(" %.0f", d);
+                    printf("\n");
                 }
-                if (!snap("reveal_placed")) return 1;
+                if (!snap("orbit_placed")) return 1;
             }
-            // Some masks lit, no structure's roots yet; then the first
-            // structure fully lit (its roots on) while others are not.
-            int masksLit = 0, masksAll = 0;
-            for (const auto& n : roots.neighbours)
-                for (char c : n.maskLit) { masksAll += 1; masksLit += c ? 1 : 0; }
-            if (!masksShot && lit == 0 && masksLit >= std::max(2, masksAll / 4)) {
-                masksShot = true;
-                printf("seqshot: %d/%d masks lit, no roots lit\n", masksLit, masksAll);
-                if (!snap("reveal_masks")) return 1;
+            // The first marker: one structure's top mask on, its front
+            // started (pulseStart set, roots flagged lit so they light behind
+            // it), every other mask of it still dark.
+            if (!topShot && lit > 0) {
+                topShot = true;
+                for (size_t k = 0; k < roots.neighbours.size() && firstLit < 0; ++k)
+                    if (roots.neighbours[k].lit) firstLit = (int)k;
+                const auto& n = roots.neighbours[size_t(firstLit)];
+                int ml = 0;
+                for (char c : n.maskLit) ml += c ? 1 : 0;
+                firstLitT = clock;
+                printf("seqshot: first marker lit structure %d: top mask %s, %d/%d masks lit, front started %s "
+                       "(pulse clock %.2f, speed %.1f)  %s\n",
+                       firstLit, n.maskLit.empty() || !n.maskLit[0] ? "OFF" : "on", ml, n.maskCount(),
+                       n.pulseStart >= 0.f ? "yes" : "NO", n.pulseStart, roots.renderer().pulse.speed,
+                       (!n.maskLit.empty() && n.maskLit[0] && ml == 1 && n.pulseStart >= 0.f) ? "OK" : "FAIL");
+                if (!snap("orbit_first_top")) return 1;
             }
-            if (!halfShot && lit > 0 && vis > lit) {
-                halfShot = true;
-                printf("seqshot: %d/%d masks lit, %d/%d structures' roots lit\n",
-                       masksLit, masksAll, lit, vis);
-                if (!snap("reveal_half")) return 1;
+            // ...its front has reached its last mask while later ones are
+            // still lighting.
+            if (topShot && !fullShot && firstLit >= 0 && roots.neighbours[size_t(firstLit)].allMasksLit()) {
+                fullShot = true;
+                int full = 0;
+                for (const auto& n : roots.neighbours) full += n.allMasksLit() ? 1 : 0;
+                printf("seqshot: structure %d fully lit %.1f s after its marker; %d/%d structures started, %d full\n",
+                       firstLit, clock - firstLitT, lit, vis, full);
+                if (!snap("orbit_first_full")) return 1;
             }
-        }
-        if (seq.stage() == RootSequence::Stage::Orbit) {
-            // A few seconds into the orbit, then done.
-            if (orbitT0 < 0.0) orbitT0 = clock;
-            if (clock - orbitT0 > 4.0) {
+            // Everything lit to its last mask.
+            bool all = !roots.neighbours.empty();
+            for (const auto& n : roots.neighbours) all = all && n.allMasksLit();
+            if (!allShot && all) {
+                allShot = true;
+                printf("seqshot: all %d structures lit, %.1f s into the orbit\n", vis, clock - orbitT0);
+                if (!snap("orbit_all_lit")) return 1;
+            }
+            // A few seconds on from that, then done.
+            if (allShot && clock - orbitT0 > 4.0) {
                 // Where the lens is against the hood, for judging the framing
                 // numbers rather than the picture alone.
                 const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);
@@ -2453,13 +2489,14 @@ int seqshot(const char* prefix, int W, int H,
     // The operator's jumps (RootSequence::jumpTo), on the re-begun sequence:
     // each one has to land in its stage, survive one step + advance, and
     // render -- and the two that place the hood have to leave it dark
-    // (Reveal) or lit (Orbit). Run out of order on purpose, so the
-    // back-jumps (Outro -> Face, Reveal -> Turn) exercise the reseed.
+    // (Orbit: no marker has come) or lit (Outro). Run out of order on
+    // purpose, so the back-jumps (Outro -> Face, Orbit -> Turn) exercise
+    // the reseed.
     {
         using S = RootSequence::Stage;
         struct Jump { S s; int wantLit; };   // wantLit: -1 don't care, else lit == visible?
-        const Jump jumps[] = {{S::Turn, -1}, {S::Reveal, 0}, {S::Orbit, 1}, {S::Outro, 1},
-                              {S::Face, -1}, {S::Grow, -1}, {S::Reveal, 0}, {S::Turn, -1}};
+        const Jump jumps[] = {{S::Turn, -1}, {S::Orbit, 0}, {S::Outro, 1},
+                              {S::Face, -1}, {S::Grow, -1}, {S::Orbit, 0}, {S::Turn, -1}};
         int jumpBad = 0;
         for (const Jump& j : jumps) {
             clock += dt;

@@ -585,7 +585,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     {"face",   RootSequence::Stage::Face},
                                     {"grow",   RootSequence::Stage::Grow},
                                     {"turn",   RootSequence::Stage::Turn},
-                                    {"reveal", RootSequence::Stage::Reveal},
                                     {"orbit",  RootSequence::Stage::Orbit},
                                     {"outro",  RootSequence::Stage::Outro},
                                 };
@@ -607,8 +606,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                                "chain grown or reseeded, the hood placed or\n"
                                                "dropped, the camera on the stage's opening\n"
                                                "pose. The stage then runs on from there --\n"
-                                               "pause to hold the frame. Reveal still lights\n"
-                                               "one mask per marker after a jump."
+                                               "pause to hold the frame. Orbit still lights\n"
+                                               "one structure per marker after a jump."
                                              : "The root sequence is not running: it only\n"
                                                "runs while the phase is Transition or Roots\n"
                                                "(and the plant has a layout). Jump there\n"
@@ -740,9 +739,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                                 0.2f, 20.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
-                                        "Each structure pops in on a FirePlucker marker;\n"
-                                        "this is the fallback used when no marker\n"
+                                        "Every structure stands dark from the Orbit's\n"
+                                        "first frame; each FirePlucker marker lights the\n"
+                                        "next one's top mask and starts its pulse front.\n"
+                                        "This is the fallback used when no marker\n"
                                         "arrives (audio off, or no SDK).");
+                                }
+                                ui::SliderFloat("reveal pulse lag", &S.reveal_pulse_lag, 0.f, 5.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "A structure's other masks light as its pulse\n"
+                                        "front (pulse speed x seconds since the marker)\n"
+                                        "reaches the point on the root where each sits.\n"
+                                        "Seconds of extra delay on each, for a front that\n"
+                                        "reads as arriving a little after it has.");
                                 }
                                 ui::SliderInt("reveal structures", &S.reveal_structures, 0, 32);
                                 if (ImGui::IsItemHovered()) {
@@ -777,6 +787,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "the hood's centre, whatever the bound asks. World\n"
                                         "units, because the fog is: past about three\n"
                                         "visibilities nothing reads at all.");
+                                }
+                                ui::SliderFloat("orbit zoom", &S.orbit_zoom, 0.1f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The fitted radius (every kept structure inside\n"
+                                        "the frame with the margin) x this. Under 1 lets\n"
+                                        "the outer ones run off the edge so the near ones\n"
+                                        "fill the frame. One framing from the moment the\n"
+                                        "structures appear: the reveal and the orbit share it.");
+                                }
+                                ui::SliderFloat("orbit target lift", &S.orbit_target_lift, -40.f, 40.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Raises (or lowers) the point the orbit looks at,\n"
+                                        "in world units, off the framed structures' mean.");
                                 }
                             }
                             ui::EndHeader();

@@ -109,6 +109,7 @@ struct RootSim::Impl {
     SimParams p;
     std::string paramPath;
     double tipRadius = 0.0;
+    double maskR = 2.6;               // the mask size unit, see SimMask::faceUnit
 
     // The anchor-first placement (see reset()): a rigid transform, computed once
     // per reset from mask 0's own natural frame, applied to every mask's render-
@@ -148,6 +149,7 @@ struct RootSim::Impl {
     std::vector<MaskNode> revealed;   // grow space
     std::vector<SimMask>  revealedRender;
     std::vector<SimMask>  plannedRender;    // every mask, from reset
+    std::vector<SimMask>  plannedGrow;      // ...and the same in grow space
     std::vector<FrozenHop> frozen;
 
     // Current hop state.
@@ -364,6 +366,7 @@ struct RootSim::Impl {
         sm.tangent[0] = (float)t.x; sm.tangent[1] = (float)t.y; sm.tangent[2] = (float)t.z;
         sm.bitangent[0] = (float)b.x; sm.bitangent[1] = (float)b.y; sm.bitangent[2] = (float)b.z;
         sm.rDepth = (float)m.r_depth; sm.rWidth = (float)m.r_width; sm.rHeight = (float)m.r_height;
+        sm.faceUnit = (float)maskR;
         return sm;
     }
 
@@ -512,6 +515,7 @@ bool RootSim::reset(const SimParams& p) {
     impl_->revealed.clear();
     impl_->revealedRender.clear();
     impl_->plannedRender.clear();
+    impl_->plannedGrow.clear();
     impl_->frozen.clear();
     impl_->liveNodes.clear(); impl_->liveSegs.clear(); impl_->liveRadii.clear();
     impl_->reports.clear();
@@ -520,7 +524,7 @@ bool RootSim::reset(const SimParams& p) {
     impl_->ok = false;
 
     const double goldenRad = M_PI * (3.0 - std::sqrt(5.0));
-    const double maskR = 2.6;
+    const double maskR = impl_->maskR;
     // Host and pattern, composed. Anything unrecognised falls back to the cone
     // and the spiral rather than to an empty scene: a preset from a later build
     // naming a host this one does not have should still grow something.
@@ -577,6 +581,22 @@ bool RootSim::reset(const SimParams& p) {
         }
     }
     if (impl_->masks.empty()) return false;
+
+    // The cavity is the face: every mask's ellipsoid radii are the drawn
+    // face's half-extents in the mask's frame plus the margin, whatever the
+    // host's maskAt gave it (a fixed oval that was 1.5x the default face and
+    // did not follow faceScale -- the nest wrapped air). Everything the nest
+    // is built from reads these: the cavity, the keep-clear tube's radius,
+    // the rim attractors, the spawn point at the chin and the arrival test.
+    {
+        const double fs = std::max(0.05, (double)p.faceScale) * maskR;
+        const double m = 1.0 + std::max(0.0, (double)p.cavityMargin);
+        for (MaskNode& mn : impl_->masks) {
+            mn.r_width  = std::max(0.2, fs * (double)p.faceHalfW * m);
+            mn.r_height = std::max(0.2, fs * (double)p.faceHalfH * m);
+            mn.r_depth  = std::max(0.2, fs * (double)p.faceHalfD * m);
+        }
+    }
 
     // Anchor-first placement.
     //
@@ -655,7 +675,18 @@ bool RootSim::reset(const SimParams& p) {
         return false;
     }
     impl_->ok = true;
-    for (const auto& m : impl_->masks) impl_->plannedRender.push_back(impl_->toSimMask(m));
+    for (const auto& m : impl_->masks) {
+        impl_->plannedRender.push_back(impl_->toSimMask(m));
+        SimMask g;
+        auto put = [](float out[3], const Vector3d& v) {
+            out[0] = (float)v.x; out[1] = (float)v.y; out[2] = (float)v.z;
+        };
+        put(g.pos, m.pos); put(g.normal, m.normal); put(g.tangent, m.tangent);
+        put(g.bitangent, m.bitangent);
+        g.rDepth = (float)m.r_depth; g.rWidth = (float)m.r_width; g.rHeight = (float)m.r_height;
+        g.faceUnit = (float)impl_->maskR;
+        impl_->plannedGrow.push_back(g);
+    }
     impl_->evenAgeDays = impl_->commonAge();
 
     // Growing out of the first mask: mask 0 is revealed here, bare, with no
@@ -729,6 +760,7 @@ bool RootSim::tip(float out[3]) const {
 }
 
 const std::vector<SimMask>& RootSim::plannedMasks() const { return impl_->plannedRender; }
+const std::vector<SimMask>& RootSim::plannedMasksGrow() const { return impl_->plannedGrow; }
 
 const std::vector<HopReport>& RootSim::hops() const { return impl_->reports; }
 

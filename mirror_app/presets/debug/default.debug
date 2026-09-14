@@ -1,0 +1,9 @@
+# mirror_app settings -- bank: debug
+p debug/camera overlay = 0
+p debug/corner = 1
+p debug/input corner = 3
+p debug/input size = 260
+p debug/landmarks = 1
+p debug/network input = 1
+p debug/size = 298
+p debug/untrained dim = 0.22

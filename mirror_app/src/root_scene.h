@@ -273,9 +273,18 @@ public:
         bool  visible;        // drawn at all (capsules and masks)
         bool  lit;            // its roots shaded as normal, else dark (env.unlitLevel)
         // ...and each of its masks, one flag per mask of its variation's
-        // layout. The Reveal lights the masks one at a time and the roots
-        // (`lit`) only once every mask is; see setStructureMaskLit.
+        // layout. The Reveal lights the top mask on a marker and the rest as
+        // the structure's pulse front reaches them; see setStructureMaskLit
+        // and setStructurePulseStart.
         std::vector<char> maskLit;
+        // Per mask, the node distance (the pulses' own arc length, world
+        // units, hop-offset seeded -- MetalRootRenderer::addInstance) at
+        // which the root arrived at it: the first node the instance has
+        // inside the mask's own reach. What the front is measured against
+        // to light mask j; the anchor's is 0.
+        std::vector<float> maskDist;
+        // The pulse clock the structure's front started at, < 0 until it has.
+        float pulseStart;
         int  maskCount() const { return (int)maskLit.size(); }
         bool allMasksLit() const {
             for (char c : maskLit) if (!c) return false;
@@ -294,6 +303,15 @@ public:
     void setAllStructuresVisible(bool visible);
     void setStructureLit(int k, bool lit);
     void setStructureMaskLit(int k, int j, bool lit);
+    // The roots alone (the instance's lit), the masks untouched: with a
+    // pulse front started the capsules light behind the front, so this is
+    // "let it light as the front passes" rather than "on now".
+    void setStructureRootsLit(int k, bool lit);
+    // Start (t = the renderer's pulse clock, pulseClock()) or clear (t < 0)
+    // structure k's pulse front -- MetalRootRenderer::setInstancePulseStart.
+    // No face rebuild: the front is the shader's.
+    void setStructurePulseStart(int k, float t);
+    float pulseClock() const;
 
     // Where the growth currently is, in render space; false when nothing is
     // growing. For a camera that follows the tip instead of the structure.
@@ -453,6 +471,12 @@ public:
     const Cloth& cloth() const { return cloth_; }
 
     bool  showFace  = true;
+    // The face mesh's draw scale, x the mask's own unit (SimMask::faceUnit).
+    // Also the size of the cavity the roots nest around: syncFaceParams()
+    // copies it (and the mesh's half-extents) into simParams_ at every sim
+    // reset, so the plant grows a nest that hugs the face it will show. A
+    // change mid-growth redraws the faces at once but the nests already
+    // grown keep their size -- regrow() to refit them.
     float faceScale = 0.85f;
     // How deep the face sits inside its cavity, in multiples of the cavity's
     // half-depth along the mask normal. The roots dwell around the cavity, so
@@ -572,6 +596,11 @@ public:
 private:
     void buildSyntheticRoots(uint32_t seed);
     void uploadFaceFromMasks();      // build face verts from the live sim's masks
+    // faceScale and the face mesh's half-extents into simParams_ -- what the
+    // sim sizes every mask's cavity from (root_sim.h, SimParams::faceScale).
+    // Called before every sim reset and by rebuildFace(), so the probes that
+    // copy simParams_ (growthStepEstimate, ensureVariations) see them too.
+    void syncFaceParams();
 
     // --- cloth internals (see the public section above) --------------------
     void refreshClothAnchor();       // cache the anchor mask's frame for this frame
@@ -644,6 +673,7 @@ private:
     simd_float3 clothAnchorT_   = simd_make_float3(1, 0, 0);
     simd_float3 clothAnchorB_   = simd_make_float3(0, 1, 0);
     float clothAnchorRW_ = 2.6f, clothAnchorRH_ = 2.6f, clothAnchorRD_ = 2.6f;
+    float clothAnchorFU_ = 2.6f;     // the anchor's faceUnit (SimMask), the face's draw scale / faceScale
 
     std::unique_ptr<MetalRootRenderer> rr_;
     std::unique_ptr<rootsim::RootSim>  sim_;

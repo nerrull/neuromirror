@@ -123,6 +123,21 @@ struct SimParams {
     // you are looking at. 1 puts it at the chin, in view from the first
     // segment.
     float spawnRim     = 1.0f;
+    // The cavity a mask sits in is the face it will show, not a fixed oval.
+    // RootScene draws a mask's face at faceScale x faceUnit (SimMask::
+    // faceUnit, the layout's mask size) times a mesh normalised to a largest
+    // coordinate of 1, so the face's half-extents in the mask's frame
+    // (tangent, bitangent, normal) are faceScale x faceUnit x faceHalf*.
+    // Those, plus cavityMargin around them, are what the ellipsoid, the rim
+    // attractors and the arrival test are built on -- so a face scale change
+    // regrows a nest that hugs the face it shows, where the old fixed radii
+    // (maskR x 1.0/1.25/0.55) sat 1.5x too large for the default face and
+    // never moved with it. faceScale and faceHalf* are RootScene's, copied in
+    // at every reset (see RootScene::syncFaceParams): not settings of the
+    // growth, so not in visitSimParams. cavityMargin is.
+    float faceScale    = 0.85f;
+    float faceHalfW    = 0.75f, faceHalfH = 1.0f, faceHalfD = 0.5f;
+    float cavityMargin = 0.15f;
     unsigned seed      = 42u;
     std::string paramDir;          // CPlantBox modelparameter dir (trailing slash)
     std::string speciesXml = "Zea_mays_6_Leitner_2014.xml";
@@ -173,6 +188,7 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("growthDt", p.growthDt);
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
     f("spawnRim", p.spawnRim);
+    f("cavityMargin", p.cavityMargin);
     f("seed", p.seed);
 }
 
@@ -204,7 +220,13 @@ struct SimMask {
     float normal[3];
     float tangent[3];
     float bitangent[3];
+    // The cavity's half-extents along normal / tangent / bitangent -- the
+    // face's own, plus the margin (SimParams::cavityMargin).
     float rDepth, rWidth, rHeight;
+    // The mask's size unit: the face mesh is drawn at faceScale x this
+    // (RootScene::appendFaceVertexData), and the radii above were built from
+    // the same product, so face and cavity agree by construction.
+    float faceUnit;
 };
 
 class RootSim {
@@ -237,6 +259,13 @@ public:
     // into a pump. The layout is fixed at reset; the camera can know the whole
     // of it from the first frame and move once.
     const std::vector<SimMask>& plannedMasks() const;
+    // The same layout in CPlantBox's own grow space (z-up, no anchor-first
+    // transform): the frames the cavities, the rim attractors and the
+    // arrival test are built from. Diagnostics only -- tests/mask_frame_test
+    // checks that plannedMasks() is exactly one rigid transform of these, so
+    // a face drawn from the render frame sits square in the nest grown
+    // round the grow frame.
+    const std::vector<SimMask>& plannedMasksGrow() const;
 
     // The hop in flight: which mask it is heading for, and whether it has got
     // there. A camera that follows the growth wants to follow the tip while it
