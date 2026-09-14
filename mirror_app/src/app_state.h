@@ -97,6 +97,10 @@ extern bool g_open_sensor;
 // watchdog declares the sensor lost and starts retrying. Panel: "kinect
 // stall s", next to "open sensor".
 extern float g_kinect_stall_s;
+// Hidden dev hook (--kinect-drop-test): fires KinectFitTarget::forceLossForTest()
+// a few seconds into the run, then tracks max frame dt through recovery -- see
+// main.mm's render loop. No effect unless the flag is passed on the command line.
+extern bool g_kinect_drop_test;
 // IOKit USB attach/detach observer -- diagnostic only, see kinect_usb_watch.h.
 extern mirror::KinectUsbWatch g_kinect_usb_watch;
 #endif

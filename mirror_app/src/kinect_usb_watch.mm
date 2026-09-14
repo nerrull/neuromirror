@@ -3,7 +3,9 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 
+#include <chrono>
 #include <cstdio>
+#include <vector>
 
 namespace mirror {
 
@@ -52,6 +54,34 @@ struct KinectUsbWatch::Impl {
     io_iterator_t matched_legacy = 0, terminated_legacy = 0;
     std::function<void(bool, const std::string&)> cb;
 
+    // Debounces one real transition being reported more than once. This
+    // watcher matches both "IOUSBHostDevice" and "IOUSBDevice" (see start()
+    // -- which class name a given macOS/driver combination actually
+    // publishes for the Kinect's controller isn't pinned down), so a device
+    // that satisfies both class matches gets IOKit's notification twice for
+    // the same physical event, with the same sessionID both times. A
+    // genuine re-enumeration gets a new sessionID from IOKit, so this never
+    // collapses real flapping -- only the duplicate delivery of one event.
+    struct Recent { long session; bool attached; std::chrono::steady_clock::time_point at; };
+    std::vector<Recent> recent;
+
+    bool ShouldEmit(long session, bool attached) {
+        const auto now = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < recent.size();) {
+            if (now - recent[i].at > std::chrono::seconds(2)) {
+                recent[i] = recent.back();
+                recent.pop_back();
+                continue;
+            }
+            if (recent[i].session == session && recent[i].attached == attached) {
+                return false;
+            }
+            ++i;
+        }
+        recent.push_back({session, attached, now});
+        return true;
+    }
+
     // Drains an iterator IOKit handed back (both the arming call and every
     // later notification use the same shape), releasing each io_service_t as
     // required regardless of whether it matched the Kinect.
@@ -65,11 +95,13 @@ struct KinectUsbWatch::Impl {
                 const long loc = NumberProp(svc, CFSTR("locationID"));
                 const long sess = NumberProp(svc, CFSTR("sessionID"));
                 const long speed = NumberProp(svc, CFSTR("Device Speed"));
-                char buf[192];
-                snprintf(buf, sizeof(buf),
-                         "pid 0x%04lx locationID 0x%lx sessionID 0x%lx %s",
-                         pid, loc, sess, SpeedName(speed).c_str());
-                self->cb(attached, buf);
+                if (self->ShouldEmit(sess, attached)) {
+                    char buf[192];
+                    snprintf(buf, sizeof(buf),
+                             "pid 0x%04lx locationID 0x%lx sessionID 0x%lx %s",
+                             pid, loc, sess, SpeedName(speed).c_str());
+                    self->cb(attached, buf);
+                }
             }
             IOObjectRelease(svc);
         }

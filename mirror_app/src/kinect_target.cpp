@@ -6,7 +6,11 @@
 #include <libfreenect2/logger.h>
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
+#include <thread>
 
 namespace mirror {
 
@@ -36,7 +40,15 @@ struct DownsampleCache {
 };
 
 struct KinectFitTarget::Impl {
-    KinectSource src;
+    // The colour source, owned by whichever side currently holds it: the
+    // main thread while streaming normally, or the worker while it is
+    // closing a dead device and/or retrying open() on it. Ownership itself
+    // is what keeps two threads from ever touching one KinectSource at
+    // once -- there is no lock around the calls into it, only around the
+    // handoff of the pointer. Null means "the worker has it" (a loss is
+    // being recovered from) or "never opened / deliberately closed".
+    std::unique_ptr<KinectSource> src{new KinectSource()};
+
     FrameSnapshot frame;      // most recent colour frame, kept across polls
     std::string err;
     uint64_t frames = 0;
@@ -56,25 +68,160 @@ struct KinectFitTarget::Impl {
     // recovery honours whatever the panel last asked for.
     float rate_hz = 30.f;
 
-    // --- watchdog -----------------------------------------------------
+    // --- watchdog (main-thread state) --------------------------------------
     float stall_s = 3.f;
     double last_ok_time = 0;          // NowSeconds() of the last colour frame
     double opened_at = 0;              // NowSeconds() of the current open()
+    double last_handled_detach = -1.0; // a detach already acted on -- see tick()
     KinectFitTarget::SensorState state = KinectFitTarget::SensorState::kClosed;
-    bool auto_retry = false;          // the watchdog (not the user) closed it
-    double next_retry_time = 0;
-    double backoff_s = 1.0;
+    bool auto_retry = false;           // a loss is being recovered by the worker
     double outage_start = 0;
-    int attempts = 0;                 // failed reopen attempts this outage
 
     void noteFrameOk() { last_ok_time = NowSeconds(); }
+
+    // --- recovery worker ----------------------------------------------
+    //
+    // KinectSource::close()/open() are synchronous libfreenect2/libusb calls.
+    // Against an already-dead device each one alone measured several
+    // seconds in the field (close(): ~4s waiting on doomed USB transfers to
+    // time out; open(): ~1-3s enumerating and starting streams) -- long
+    // enough that doing this inline in tick(), on the render thread, froze
+    // the whole app for the duration. This worker exists to own that I/O
+    // instead: the render thread only ever moves a unique_ptr and locks
+    // `mu` for as long as the swap itself takes.
+    //
+    // One thread for the object's whole lifetime, parked on `cv` between
+    // jobs. A "job" is one dead KinectSource to close and then retry open()
+    // on; there is at most one in flight (tick() only ever hands off a new
+    // one once the previous outage's source has already been picked up as
+    // `recovered`, since isOpen() is false / auto_retry is true the whole
+    // time in between).
+    std::thread worker;
+    mutable std::mutex mu;   // guards every field below this line
+    std::condition_variable cv;
+    bool stop = false;
+    bool have_job = false;                     // main -> worker: a source is waiting
+    std::unique_ptr<KinectSource> job;          // "
+    std::unique_ptr<KinectSource> recovered;    // worker -> main: reopened, ready to swap in
+    int attempts_done = 0;                      // attempts taken by the job now in `recovered`
+    double next_retry_time = 0;                 // for the panel's countdown only
+
+    void startWorker() {
+        worker = std::thread([this] { workerMain(); });
+    }
+
+    void workerMain() {
+        for (;;) {
+            std::unique_ptr<KinectSource> dead;
+            {
+                std::unique_lock<std::mutex> lk(mu);
+                cv.wait(lk, [&] { return stop || have_job; });
+                if (stop) return;
+                dead = std::move(job);
+                have_job = false;
+            }
+
+            // From here `dead` is this thread's alone until it is handed
+            // back (or dropped) below -- no lock needed to call into it.
+            //
+            // close()'s own NO_DEVICE line (libusb reliably prints one when
+            // releasing interfaces on a device that already left the bus)
+            // is suppressed from setting UsbErrorSeen by kinect_source.cpp's
+            // close() itself (it brackets the call with SetClosingForLog).
+            // Without that, the very first tick() after this job succeeds
+            // would see a stale flag and declare a fresh loss immediately --
+            // which is exactly what produced the repeated close/reopen loop
+            // this worker was written to fix.
+            dead->close();
+
+            double backoff = 1.0;
+            int local_attempts = 0;
+            bool ok = false;
+            for (;;) {
+                std::string open_err;
+                ok = dead->open(/*use_opengl=*/true, KinectSource::UsbReset::kReset,
+                                open_err, /*want_depth=*/false);
+                ++local_attempts;
+                if (ok) break;
+
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                         "kinect: reopen attempt %d failed (%s) -- retrying in %.0fs",
+                         local_attempts, open_err.c_str(), backoff);
+                kinectlog::Log(buf);
+
+                std::unique_lock<std::mutex> lk(mu);
+                next_retry_time = NowSeconds() + backoff;
+                cv.wait_for(lk, std::chrono::duration<double>(backoff),
+                           [&] { return stop; });
+                if (stop) break;
+                lk.unlock();
+                backoff = std::min(backoff * 2.0, 15.0);
+            }
+
+            std::lock_guard<std::mutex> lk(mu);
+            if (stop) {
+                if (ok) dead->close();  // opened just as shutdown began;
+                                        // nobody is left to claim it.
+                return;
+            }
+            if (ok) {
+                // Discard anything UsbErrorSeen() picked up from this
+                // device's own close()/retry history -- see the comment on
+                // dead->close() above for why a stale flag here would
+                // immediately relose the very device that just recovered.
+                UsbErrorSeen();
+                recovered = std::move(dead);
+                attempts_done = local_attempts;
+            }
+            // ok is always true here (the loop only exits via `break` on
+            // success or on `stop`, and `stop` already returned above).
+        }
+    }
 };
 
-KinectFitTarget::KinectFitTarget() : impl_(new Impl()) {}
-KinectFitTarget::~KinectFitTarget() { close(); }
+KinectFitTarget::KinectFitTarget() : impl_(new Impl()) {
+    impl_->startWorker();
+}
+
+KinectFitTarget::~KinectFitTarget() {
+    if (impl_) {
+        std::unique_ptr<KinectSource> orphan;
+        {
+            std::lock_guard<std::mutex> lk(impl_->mu);
+            impl_->stop = true;
+            if (impl_->have_job) {
+                // The worker never got to this one -- safe to close it here,
+                // nothing else can be touching it.
+                orphan = std::move(impl_->job);
+                impl_->have_job = false;
+            }
+        }
+        impl_->cv.notify_all();
+        // Bounded by whatever the worker is doing right now -- at most one
+        // in-flight open() or close() call, the same single hitch tick()
+        // itself used to pay before this worker existed. Nothing better to
+        // do at shutdown than wait for it.
+        if (impl_->worker.joinable()) impl_->worker.join();
+        if (orphan) orphan->close();
+    }
+    close();  // the still-open source, if any -- deliberate and synchronous;
+              // see close()'s own comment on the cost against a dead device.
+}
 
 bool KinectFitTarget::open(std::string& err) {
-    if (impl_->src.isOpen()) return true;
+    if (impl_->src && impl_->src->isOpen()) return true;
+    if (impl_->auto_retry) {
+        // The worker owns the only KinectSource instance right now, mid
+        // close/reopen. Racing it with a second open() here would mean two
+        // libfreenect2 contexts reaching for the same physical device --
+        // let the worker finish (the panel already shows "sensor lost --
+        // retrying").
+        err = "recovery already in progress -- see the sensor state above";
+        return false;
+    }
+    if (!impl_->src) impl_->src.reset(new KinectSource());
+
     // The USB reset is the validator's default: it clears a sensor left
     // wedged by a previous run, which matters here because this app and
     // kinect_v2_demo cannot hold the device at the same time.
@@ -84,9 +231,9 @@ bool KinectFitTarget::open(std::string& err) {
     // decodes depth any differently; colour goes through the same decoder
     // either way, so there is no GPU depth pipeline left running for a result
     // nothing reads, and no GL context for a reopen to trip over.
-    const bool ok = impl_->src.open(/*use_opengl=*/true,
-                                    KinectSource::UsbReset::kReset, err,
-                                    /*want_depth=*/false);
+    const bool ok = impl_->src->open(/*use_opengl=*/true,
+                                     KinectSource::UsbReset::kReset, err,
+                                     /*want_depth=*/false);
     if (!ok) {
         impl_->err = err;
         return false;
@@ -96,26 +243,35 @@ bool KinectFitTarget::open(std::string& err) {
     // color_hz_ across a close()/open() (see kinect_source.h), but this used
     // to stomp it back to 30 -- silently undoing a panel-set rate every time
     // the watchdog recovered the sensor.
-    impl_->src.setColorRate(impl_->rate_hz);
+    impl_->src->setColorRate(impl_->rate_hz);
+    // Discard anything stale before starting the clock -- see the worker's
+    // own note on why a leftover UsbErrorSeen flag must never survive an
+    // open() it didn't just report on.
+    UsbErrorSeen();
     impl_->noteFrameOk();   // don't start the stall clock already behind
     impl_->opened_at = NowSeconds();
     impl_->state = SensorState::kOpen;
     impl_->auto_retry = false;
-    impl_->backoff_s = 1.0;
     return true;
 }
 
 void KinectFitTarget::close() {
-    if (impl_ && impl_->src.isOpen()) impl_->src.close();
-    if (impl_) {
-        // A deliberate close (the panel's "close sensor") is not something
-        // the watchdog should try to undo.
-        impl_->auto_retry = false;
-        impl_->state = SensorState::kClosed;
+    if (!impl_) return;
+    if (impl_->src && impl_->src->isOpen()) {
+        // Deliberate and synchronous -- this runs at quit or from the
+        // panel's "close sensor", never from the watchdog. Against an
+        // already-dead device it can still take several seconds (libusb
+        // waiting out doomed transfers); see the worker in Impl for why the
+        // *automatic* recovery path does not pay this on the render thread.
+        impl_->src->close();
     }
+    impl_->auto_retry = false;
+    impl_->state = SensorState::kClosed;
 }
 
-bool KinectFitTarget::isOpen() const { return impl_->src.isOpen(); }
+bool KinectFitTarget::isOpen() const {
+    return impl_->src && impl_->src->isOpen();
+}
 std::string KinectFitTarget::error() const { return impl_->err; }
 uint64_t KinectFitTarget::frames() const { return impl_->frames; }
 void KinectFitTarget::setMirrored(bool m) { impl_->mirrored = m; }
@@ -124,26 +280,27 @@ void KinectFitTarget::setCrop(const FeedCrop& c) { impl_->crop = c; }
 FeedCrop KinectFitTarget::crop() const { return impl_->crop; }
 void KinectFitTarget::setRateHz(float hz) {
     impl_->rate_hz = hz;
-    impl_->src.setColorRate(hz);
+    if (impl_->src) impl_->src->setColorRate(hz);
 }
 void KinectFitTarget::setStallSeconds(float s) { impl_->stall_s = s; }
 KinectFitTarget::SensorState KinectFitTarget::state() const { return impl_->state; }
 
 float KinectFitTarget::retryInSeconds() const {
-    if (impl_->src.isOpen() || !impl_->auto_retry) return 0.f;
+    if ((impl_->src && impl_->src->isOpen()) || !impl_->auto_retry) return 0.f;
+    std::lock_guard<std::mutex> lk(impl_->mu);
     const double remain = impl_->next_retry_time - NowSeconds();
     return remain > 0.0 ? (float)remain : 0.f;
 }
 
 std::string KinectFitTarget::deviceInfo() const {
-    if (!impl_->src.isOpen()) return "not open";
-    return impl_->src.serial() + "  fw " + impl_->src.firmware() + "  " +
-           impl_->src.pipelineName();
+    if (!impl_->src || !impl_->src->isOpen()) return "not open";
+    return impl_->src->serial() + "  fw " + impl_->src->firmware() + "  " +
+           impl_->src->pipelineName();
 }
 
 bool KinectFitTarget::pump() {
-    if (!impl_->src.isOpen()) return false;
-    if (!impl_->src.pollColor(impl_->frame)) return false;
+    if (!impl_->src || !impl_->src->isOpen()) return false;
+    if (!impl_->src->pollColor(impl_->frame)) return false;
     if (!impl_->frame.valid || impl_->frame.data.empty()) return false;
     impl_->have_frame = true;
     ++impl_->frames;
@@ -151,100 +308,127 @@ bool KinectFitTarget::pump() {
     return true;
 }
 
+void KinectFitTarget::declareLost(const std::string& log_line) {
+    std::unique_ptr<KinectSource> dead = std::move(impl_->src);
+    impl_->src.reset();   // isOpen()/pump() see "no source" from this line on
+    impl_->state = SensorState::kLost;
+    impl_->auto_retry = true;
+    impl_->outage_start = NowSeconds();
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        impl_->job = std::move(dead);
+        impl_->have_job = true;
+        impl_->next_retry_time = NowSeconds();  // "retrying" from now
+    }
+    impl_->cv.notify_one();
+    kinectlog::Log(log_line);
+}
+
+void KinectFitTarget::forceLossForTest() {
+    if (!(impl_->src && impl_->src->isOpen())) return;
+    declareLost("kinect: --kinect-drop-test forcing a simulated loss");
+}
+
 void KinectFitTarget::tick(const char* show_phase, double usb_detach_time) {
     const double now = NowSeconds();
 
-    if (impl_->src.isOpen()) {
-        // The direct signal first: libfreenect2 already told us, via its
-        // logger, that the USB transport is gone. This can fire well inside
-        // one stall window.
-        const bool usb_err = UsbErrorSeen();
-        bool stalled = false;
-        if (!usb_err) {
-            if (impl_->src.colorPaused()) {
-                // Deliberately quiet -- not a stall. Keep the clock from
-                // accumulating so un-pausing doesn't immediately trip it.
-                impl_->noteFrameOk();
-            } else {
-                const float rate = impl_->src.colorRateHz();
-                // A poll rate slower than the stall window is not a fault --
-                // extend the allowance to what that rate actually implies
-                // (with slack) instead of raising a false alarm on a
-                // deliberately down-rated stream.
-                const float effective_stall =
-                    (rate > 0.f) ? std::max(impl_->stall_s, 2.f / rate)
-                                 : impl_->stall_s;
-                stalled = (now - impl_->last_ok_time) > effective_stall;
+    // Pick up a recovered source, if the worker finished one since the last
+    // tick -- the only place recovery touches impl_->src, and the only
+    // thing tick() ever blocks on (a same-thread pointer swap under an
+    // uncontended lock).
+    {
+        std::unique_ptr<KinectSource> got;
+        int attempts_done = 0;
+        {
+            std::lock_guard<std::mutex> lk(impl_->mu);
+            if (impl_->recovered) {
+                got = std::move(impl_->recovered);
+                attempts_done = impl_->attempts_done;
             }
         }
-
-        if (usb_err || stalled) {
-            const double elapsed = now - impl_->last_ok_time;
-            std::string reason;
-            char buf[256];
-            if (usb_err) {
-                snprintf(buf, sizeof(buf),
-                         "kinect: USB transport error reported by libfreenect2 "
-                         "(phase %s, %.1fs since last colour frame) -- "
-                         "closing and retrying",
-                         show_phase ? show_phase : "?", elapsed);
-            } else if (usb_detach_time >= 0.0 &&
-                       (now - usb_detach_time) < elapsed + 5.0) {
-                snprintf(buf, sizeof(buf),
-                         "kinect: stalled -- %.1fs since last colour frame "
-                         "(phase %s); USB detach seen %.1fs ago -- USB/power. "
-                         "closing and retrying",
-                         elapsed, show_phase ? show_phase : "?",
-                         now - usb_detach_time);
-            } else {
-                snprintf(buf, sizeof(buf),
-                         "kinect: stalled -- %.1fs since last colour frame "
-                         "(phase %s); no USB detach seen -- device still "
-                         "enumerated, likely a firmware wedge. closing and "
-                         "retrying",
-                         elapsed, show_phase ? show_phase : "?");
-            }
+        if (got) {
+            impl_->src = std::move(got);
+            impl_->src->setColorRate(impl_->rate_hz);
+            impl_->noteFrameOk();
+            impl_->opened_at = now;
+            impl_->last_handled_detach = usb_detach_time;
+            impl_->state = SensorState::kOpen;
+            impl_->auto_retry = false;
+            char buf[192];
+            snprintf(buf, sizeof(buf),
+                     "kinect: recovered after %.1fs (%d attempt%s) -- %s",
+                     now - impl_->outage_start, attempts_done,
+                     attempts_done == 1 ? "" : "s", deviceInfo().c_str());
             kinectlog::Log(buf);
-
-            impl_->src.close();
-            impl_->state = SensorState::kLost;
-            impl_->auto_retry = true;
-            impl_->backoff_s = 1.0;
-            impl_->outage_start = now;
-            impl_->attempts = 0;
-            impl_->next_retry_time = now + impl_->backoff_s;
         }
+    }
+
+    if (!(impl_->src && impl_->src->isOpen())) {
+        // Either deliberately closed, or the worker is mid-recovery -- both
+        // handled above/elsewhere. Nothing to check on this thread.
         return;
     }
 
-    // Not open. Only a loss the watchdog itself declared is retried
-    // automatically -- a user-pressed "close sensor" waits for the button.
-    if (!impl_->auto_retry) return;
-    if (now < impl_->next_retry_time) return;
-
-    // One attempt per tick: open() is synchronous and can take ~1-2s, which
-    // is a one-time hitch in the render loop on the frame a retry lands --
-    // acceptable at a 1-15s backoff cadence, and simpler than moving open()
-    // onto a helper thread for a hitch this rare and this short.
-    std::string err;
-    ++impl_->attempts;
-    if (open(err)) {
-        char buf[192];
-        snprintf(buf, sizeof(buf),
-                 "kinect: recovered after %.1fs (%d attempt%s) -- %s",
-                 now - impl_->outage_start, impl_->attempts,
-                 impl_->attempts == 1 ? "" : "s", deviceInfo().c_str());
-        kinectlog::Log(buf);
-        return;
+    // The direct signal first: libfreenect2 already told us, via its
+    // logger, that the USB transport is gone. This can fire well inside
+    // one stall window.
+    const bool usb_err = UsbErrorSeen();
+    // A detach observed during *this* open session that tick() has not
+    // already acted on -- no reason to wait out the stall timer for
+    // something already known.
+    const bool fresh_detach = usb_detach_time >= 0.0 &&
+                              usb_detach_time > impl_->opened_at &&
+                              usb_detach_time > impl_->last_handled_detach;
+    bool stalled = false;
+    if (!usb_err && !fresh_detach) {
+        if (impl_->src->colorPaused()) {
+            // Deliberately quiet -- not a stall. Keep the clock from
+            // accumulating so un-pausing doesn't immediately trip it.
+            impl_->noteFrameOk();
+        } else {
+            const float rate = impl_->src->colorRateHz();
+            // A poll rate slower than the stall window is not a fault --
+            // extend the allowance to what that rate actually implies
+            // (with slack) instead of raising a false alarm on a
+            // deliberately down-rated stream. This same allowance is also
+            // what gives a fresh open() its start-up grace: last_ok_time is
+            // reset to "now" at open (see open() / the recovery swap
+            // above), and the device takes a couple of seconds to start
+            // streaming (USB negotiation -- see the "status 0x090000"
+            // lines), which a shorter grace would read as an instant stall.
+            const float effective_stall =
+                (rate > 0.f) ? std::max(impl_->stall_s, 2.f / rate)
+                             : impl_->stall_s;
+            stalled = (now - impl_->last_ok_time) > effective_stall;
+        }
     }
-    impl_->err = err;
-    impl_->backoff_s = std::min(impl_->backoff_s * 2.0, 15.0);
-    impl_->next_retry_time = now + impl_->backoff_s;
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "kinect: reopen attempt %d failed (%s) -- retrying in %.0fs",
-             impl_->attempts, err.c_str(), impl_->backoff_s);
-    kinectlog::Log(buf);
+
+    if (usb_err || fresh_detach || stalled) {
+        const double elapsed = now - impl_->last_ok_time;
+        char buf[320];
+        if (usb_err) {
+            snprintf(buf, sizeof(buf),
+                     "kinect: USB transport error reported by libfreenect2 "
+                     "(phase %s, %.1fs since last colour frame) -- "
+                     "closing and retrying",
+                     show_phase ? show_phase : "?", elapsed);
+        } else if (fresh_detach) {
+            snprintf(buf, sizeof(buf),
+                     "kinect: USB detach observed (phase %s, %.1fs since "
+                     "last colour frame) -- closing and retrying "
+                     "immediately rather than waiting out the stall timer",
+                     show_phase ? show_phase : "?", elapsed);
+            impl_->last_handled_detach = usb_detach_time;
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "kinect: stalled -- %.1fs since last colour frame "
+                     "(phase %s); no USB detach seen -- device still "
+                     "enumerated, likely a firmware wedge. closing and "
+                     "retrying",
+                     elapsed, show_phase ? show_phase : "?");
+        }
+        declareLost(buf);
+    }
 }
 
 bool KinectFitTarget::lastFrameRGB8(int w, int h,
@@ -307,14 +491,14 @@ bool KinectFitTarget::poll(int w, int h, std::vector<float>& rgb) {
 
 bool KinectFitTarget::poll(int w, int h, std::vector<float>& rgb,
                            const DstRect& fill) {
-    if (!impl_->src.isOpen() || w <= 0 || h <= 0) return false;
+    if (!impl_->src || !impl_->src->isOpen() || w <= 0 || h <= 0) return false;
 
     // A new sensor frame is not required every call: the colour camera runs at
     // 30 Hz (15 under long auto-exposure) while the render loop may be well
     // above that, so most frames legitimately have nothing new. Returning false
     // leaves the caller training against the previous target, which is correct
     // -- the alternative would be a stutter in the fit every other frame.
-    if (!impl_->src.pollColor(impl_->frame)) return false;
+    if (!impl_->src->pollColor(impl_->frame)) return false;
     if (!impl_->frame.valid || impl_->frame.data.empty()) return false;
     impl_->have_frame = true;
     ++impl_->frames;
@@ -343,12 +527,12 @@ bool KinectFitTarget::poll(int w, int h, std::vector<float>& rgb,
 }
 
 double KinectFitTarget::secondsSinceLastFrame() const {
-    if (!impl_->src.isOpen()) return 0.0;
+    if (!impl_->src || !impl_->src->isOpen()) return 0.0;
     return NowSeconds() - impl_->last_ok_time;
 }
 
 double KinectFitTarget::uptimeSeconds() const {
-    if (!impl_->src.isOpen()) return 0.0;
+    if (!impl_->src || !impl_->src->isOpen()) return 0.0;
     return NowSeconds() - impl_->opened_at;
 }
 

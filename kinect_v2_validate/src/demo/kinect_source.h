@@ -197,3 +197,12 @@ double NowSeconds();
 void NoteFreenect2LogLine(const std::string& message);
 // Consumes the flag: returns true at most once per transport failure.
 bool UsbErrorSeen();
+
+// Brackets a close() of a device that may already be gone: closing a dead
+// device reliably prints the very same NO_DEVICE line UsbErrorSeen() exists
+// to catch, and if that were allowed to set the flag, the next open() to
+// succeed on that device would look like it had immediately failed again --
+// the watchdog would relose the device the instant it recovered. Set true
+// for the duration of any close() call (KinectSource::close() does this
+// itself), false after; NoteFreenect2LogLine ignores every line while set.
+void SetClosingForLog(bool closing);

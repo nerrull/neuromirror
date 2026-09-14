@@ -100,12 +100,17 @@ public:
     // The installation has nobody at the panel to notice a dead feed and
     // press "open sensor" again. If the colour stream goes quiet for
     // `setStallSeconds()` while it is open and nobody deliberately paused or
-    // slowed it down, or libfreenect2 itself reports the USB transport gone
+    // slowed it down, libfreenect2 itself reports the USB transport gone
     // (see kinect_source.h's UsbErrorSeen -- a faster, direct signal that
-    // beats waiting the stall out), the device is declared lost: closed,
-    // logged, and reopened on a backoff (1s, 2s, 4s, ... capped at 15s) until
-    // it comes back. The re-enumeration this waits for is real: on the
-    // installation the sensor is alone on its own XHCI controller.
+    // beats waiting the stall out), or a USB detach was directly observed
+    // (see kinect_usb_watch.h), the device is declared lost and handed to a
+    // background worker: it closes the dead source and retries open() on a
+    // backoff (1s, 2s, 4s, ... capped at 15s) until it comes back, then hands
+    // the reopened source back for tick() to swap in. Closing and reopening
+    // a dead device are each libfreenect2/libusb calls that can take single-
+    // digit seconds -- see the worker note below for why none of that runs
+    // on the render thread. The re-enumeration this waits for is real: on
+    // the installation the sensor is alone on its own XHCI controller.
     //
     // A user-initiated close() (the panel's "close sensor") does not arm
     // this -- only a loss the watchdog itself declared gets auto-retried.
@@ -118,16 +123,18 @@ public:
     void setStallSeconds(float s);
 
     // Call once per frame, unconditionally -- whether or not anything polled
-    // a frame this frame, and whether or not the sensor is even open, so the
-    // backoff timer keeps advancing after a loss. This is also where the one
-    // (synchronous, ~1-2s) reopen attempt per backoff tick happens: it is not
-    // run more than once per call, so it costs at most one hitch per retry,
-    // not one per frame.
+    // a frame this frame, and whether or not the sensor is even open. This
+    // never blocks: declaring a loss only moves a pointer and wakes the
+    // worker thread (see the Impl comment in kinect_target.cpp), and picking
+    // up a recovered source is the same pointer swap in the other direction.
+    // All of the actual close()/open() I/O happens off this thread.
     //
     // `show_phase` and `usb_detach_time` (steady-clock seconds, < 0 if none
     // seen) are for the log line only -- they let it say whether the loss
     // looks like a USB/power event (a detach was observed) or a firmware
     // wedge (the device stayed enumerated but the colour stream still died).
+    // A detach observed *after* the current open() also skips the stall
+    // wait entirely -- there is nothing to learn by waiting it out.
     void tick(const char* show_phase, double usb_detach_time = -1.0);
 
     SensorState state() const;
@@ -139,7 +146,19 @@ public:
     double secondsSinceLastFrame() const;
     double uptimeSeconds() const;
 
+    // Hidden dev hook for exercising the recovery path without physically
+    // unplugging anything: --kinect-drop-test (see main.mm) calls this a few
+    // seconds into a run to force the same "declare lost, hand to worker"
+    // path a real stall or USB error would. Cheap and harmless to leave in
+    // -- a no-op unless something calls it, and it takes the exact same code
+    // path recovery always takes.
+    void forceLossForTest();
+
 private:
+    // Both tick() and forceLossForTest() declare a loss the same way: detach
+    // the current source, hand it to the worker, arm auto-retry, log.
+    void declareLost(const std::string& log_line);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

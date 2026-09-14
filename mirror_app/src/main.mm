@@ -599,6 +599,14 @@ int main(int argc, char** argv) {
         if (a == "--windowed")     { g_fullscreen = false; continue; }
 #if MIRROR_HAVE_KINECT
         if (a == "--no-sensor")    { g_open_sensor = false; continue; }
+        // Hidden dev hook: exercises the watchdog's recovery path -- close,
+        // background reopen, swap back in -- without physically unplugging
+        // anything. 5s into the run it calls the exact same "declare lost"
+        // code a real stall or USB error would (see
+        // KinectFitTarget::forceLossForTest). Frame dt is tracked for the
+        // 20s after so a max can be printed -- the render loop must not
+        // notice the recovery happening on the worker thread.
+        if (a == "--kinect-drop-test") { g_kinect_drop_test = true; continue; }
 #endif
         // Write the settings document and quit. It has to run the real panel
         // for a frame -- the registry *is* the panel -- but only one, because
@@ -1616,7 +1624,8 @@ int main(int argc, char** argv) {
 
         // Diagnostic only (see kinect_usb_watch.h) -- says *why* a later
         // stall happened (USB/power vs. a firmware wedge) but does not drive
-        // the watchdog's own recovery.
+        // the watchdog's own recovery: nothing in this callback closes or
+        // reopens anything.
         g_kinect_usb_watch.start([](bool attached, const std::string& detail) {
             char buf[384];
             if (attached) {
@@ -1628,6 +1637,27 @@ int main(int argc, char** argv) {
                 } else {
                     snprintf(buf, sizeof(buf), "kinect usb: attached (%s)",
                              detail.c_str());
+                }
+
+                // A rolling count over the last 60s: one attach is a normal
+                // startup; more than one is the flapping this exists to make
+                // visible (a re-enumerating hub, a marginal cable/power
+                // connection) even though each individual event alone looks
+                // harmless once recovered from.
+                static std::vector<double> recent_attach_times;
+                const double now = glfwGetTime();
+                recent_attach_times.push_back(now);
+                recent_attach_times.erase(
+                    std::remove_if(recent_attach_times.begin(),
+                                   recent_attach_times.end(),
+                                   [&](double t) { return now - t > 60.0; }),
+                    recent_attach_times.end());
+                if (recent_attach_times.size() > 1) {
+                    char summary[96];
+                    snprintf(summary, sizeof(summary),
+                             "kinect usb: %zu attach events in the last 60s",
+                             recent_attach_times.size());
+                    mirror::kinectlog::Log(summary);
                 }
             } else {
                 mirror::NoteKinectUsbDetach();
@@ -1719,6 +1749,38 @@ int main(int argc, char** argv) {
             static double prevT = glfwGetTime();
             double nowT = glfwGetTime();
             double dt = nowT - prevT; prevT = nowT;
+#if MIRROR_HAVE_KINECT
+            // --kinect-drop-test: force a simulated sensor loss 5s in, then
+            // watch this same dt for the ~20s the recovery worker needs to
+            // notice, close, and reopen -- if the worker-thread offload in
+            // KinectFitTarget actually keeps close()/open() off this thread,
+            // dt here should never show the 4s/3s hitches a synchronous
+            // recovery used to cause. One log line reports what happened.
+            if (g_kinect_drop_test) {
+                static double t0 = nowT;
+                static bool fired = false, reported = false;
+                static double max_dt = 0.0;
+                static double fire_time = 0.0;
+                const double since_start = nowT - t0;
+                if (!fired && since_start >= 5.0) {
+                    fired = true;
+                    fire_time = nowT;
+                    max_dt = 0.0;
+                    g_kinect.forceLossForTest();
+                }
+                if (fired && !reported) {
+                    max_dt = std::max(max_dt, dt);
+                    if (nowT - fire_time >= 20.0) {
+                        reported = true;
+                        char buf[160];
+                        snprintf(buf, sizeof(buf),
+                                 "kinect-drop-test: max frame dt during recovery window = %.1fms",
+                                 max_dt * 1000.0);
+                        mirror::kinectlog::Log(buf);
+                    }
+                }
+            }
+#endif
             // --- the frame, pulled once ---------------------------------
             //
             // Everything downstream reads the retained snapshot, so the pull

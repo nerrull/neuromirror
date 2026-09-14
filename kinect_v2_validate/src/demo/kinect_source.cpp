@@ -11,6 +11,7 @@ namespace {
 constexpr double kRateWindow = 0.5;  // seconds per rate-estimate window
 
 std::atomic<bool> g_usb_error_seen{false};
+std::atomic<bool> g_closing_for_log{false};
 
 // libfreenect2's default logger is Info level, which makes the RGB decoder
 // (VTRgbPacketProcessor on macOS, TurboJpegRgbPacketProcessor elsewhere) print
@@ -45,6 +46,14 @@ struct InstallQuietFreenect2Logger {
 }  // namespace
 
 void NoteFreenect2LogLine(const std::string& message) {
+  // Closing a device that has already left the bus reliably prints this
+  // exact family of lines itself (see close(), below) -- during that window
+  // they are expected, not news, and must not set the flag: a watchdog that
+  // just finished closing a dead device would otherwise see a stale
+  // "transport error" the instant it looked again, and relose the device it
+  // had not even finished reopening yet.
+  if (g_closing_for_log.load()) return;
+
   // The three lines libusb prints when the sensor drops off the bus mid-
   // stream (see kinect_target.cpp's watchdog for the failure this exists to
   // catch): a dead device that isOpen() still reports as open. Catching the
@@ -58,6 +67,8 @@ void NoteFreenect2LogLine(const std::string& message) {
 }
 
 bool UsbErrorSeen() { return g_usb_error_seen.exchange(false); }
+
+void SetClosingForLog(bool closing) { g_closing_for_log.store(closing); }
 
 double NowSeconds() {
   using Clock = std::chrono::steady_clock;
@@ -269,9 +280,15 @@ bool KinectSource::openOnce(bool use_opengl, bool with_reset,
 
 void KinectSource::close() {
   if (!dev_) return;
+  // See SetClosingForLog's comment: closing a device that already left the
+  // bus is expected to print a NO_DEVICE line of its own, and that must not
+  // be mistaken for a fresh transport failure by whoever is watching
+  // UsbErrorSeen().
+  SetClosingForLog(true);
   dev_->stop();
   dev_->close();
   dev_ = nullptr;
+  SetClosingForLog(false);
 }
 
 bool KinectSource::pollStream(libfreenect2::Frame::Type type,
