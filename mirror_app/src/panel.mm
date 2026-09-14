@@ -907,6 +907,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 }
                             }
                             ui::EndHeader();
+                            ui::BeginHeader("debug", false);
+                            {
+                                ui::Checkbox("debug spawn markers", &S.debug_spawn_markers);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Small coloured spheres in the root scene: each\n"
+                                        "mask's spawn point (red for mask 0's hop,\n"
+                                        "orange for the rest), mouth point (green), the\n"
+                                        "first CPlantBox node actually placed for that\n"
+                                        "hop (blue) and the mask centre (white). Also\n"
+                                        "prints one line per hop to stdout. --seqshot\n"
+                                        "always turns this on (SEQSHOT_DEBUG_MARKERS).");
+                                }
+                            }
+                            ui::EndHeader();
                         }
                     }
                     ui::EndHeader();

@@ -139,6 +139,15 @@ struct RootSim::Impl {
     // behind it.
     bool anchorAxis = false;
 
+    // The first hop that actually grows a RootSystem: 1 with
+    // growFromFirstMask (mask 0 is revealed bare, hop 0 never runs), else 0.
+    // frozen[k] is that hop's own finished nodes, in order, so hop h's
+    // buffer is frozen[h - firstGrowingHop] once finished, or the live one
+    // while h == hop and nothing later has started yet.
+    int firstGrowingHop = 0;
+
+    Vector3d toRender(const Vector3d& v) const { return applyAnchorPoint(toYup(v)); }
+
     // The travelling root's own growth law, read off the species file once:
     // elongation rate, maximal length, and the function relating the two. The
     // hop budget is derived from these -- see travelDaysFor.
@@ -729,6 +738,7 @@ bool RootSim::reset(const SimParams& p) {
     // the relay starts at hop 1, leaving it. A zero-day report stands in for
     // the hop it did not take, so hops() still has one entry per mask.
     impl_->hop = 0;
+    impl_->firstGrowingHop = p.growFromFirstMask ? 1 : 0;
     if (p.growFromFirstMask) {
         impl_->revealed.push_back(impl_->masks[0]);
         impl_->pushRevealedRender(impl_->masks[0]);
@@ -798,5 +808,66 @@ const std::vector<SimMask>& RootSim::plannedMasks() const { return impl_->planne
 const std::vector<SimMask>& RootSim::plannedMasksGrow() const { return impl_->plannedGrow; }
 
 const std::vector<HopReport>& RootSim::hops() const { return impl_->reports; }
+
+int RootSim::hopCount() const { return impl_->ok ? (int)impl_->masks.size() : 0; }
+
+bool RootSim::hopMaxLateralDeviation(int h, const float a[3], const float b[3], float& maxDev) const {
+    if (!impl_->ok || h < 0) return false;
+    const int idx = h - impl_->firstGrowingHop;
+    if (idx < 0 || idx >= (int)impl_->frozen.size()) return false;
+    const Vector3d A(a[0], a[1], a[2]), B(b[0], b[1], b[2]);
+    Vector3d dir = B.minus(A);
+    const double len = dir.length();
+    if (len < 1e-9) return false;
+    dir = dir.times(1.0 / len);
+    double worst = 0.0;
+    for (const auto& n : impl_->frozen[size_t(idx)].nodes) {
+        const Vector3d p = impl_->toRender(n);
+        const Vector3d v = p.minus(A);
+        const double proj = v.times(dir);
+        const Vector3d perp = v.minus(dir.times(proj));
+        worst = std::max(worst, perp.length());
+    }
+    maxDev = (float)worst;
+    return true;
+}
+
+bool RootSim::maskMouthPoint(int m, float out[3]) const {
+    if (!impl_->ok || m < 0 || m >= (int)impl_->masks.size()) return false;
+    const Vector3d y = impl_->toRender(impl_->mouthPoint(impl_->masks[size_t(m)]));
+    out[0] = (float)y.x; out[1] = (float)y.y; out[2] = (float)y.z;
+    return true;
+}
+
+RootSim::HopSpawn RootSim::hopSpawn(int h) const {
+    HopSpawn info;
+    if (!impl_->ok || h < 0 || h >= (int)impl_->masks.size()) return info;
+    info.fromMask = impl_->hopFrom(h);
+
+    const Vector3d spawn = impl_->toRender(impl_->hopStart(h));
+    info.spawn[0] = (float)spawn.x; info.spawn[1] = (float)spawn.y; info.spawn[2] = (float)spawn.z;
+
+    if (info.fromMask >= 0 && info.fromMask < (int)impl_->masks.size()) {
+        const Vector3d mouth = impl_->toRender(impl_->mouthPoint(impl_->masks[size_t(info.fromMask)]));
+        info.mouth[0] = (float)mouth.x; info.mouth[1] = (float)mouth.y; info.mouth[2] = (float)mouth.z;
+    }
+
+    // The actual node buffer CPlantBox placed for this hop, node 0 -- not a
+    // recomputed point. Finished hops read it from `frozen`; the hop in
+    // flight (h == impl_->hop, nothing frozen for it yet) from the live
+    // snapshot; anything not yet started has none.
+    const int idx = h - impl_->firstGrowingHop;
+    const std::vector<Vector3d>* nodes = nullptr;
+    if (idx >= 0 && idx < (int)impl_->frozen.size())
+        nodes = &impl_->frozen[size_t(idx)].nodes;
+    else if (h == impl_->hop && !impl_->doneFlag && !impl_->liveNodes.empty())
+        nodes = &impl_->liveNodes;
+    if (nodes && !nodes->empty()) {
+        info.started = true;
+        const Vector3d n0 = impl_->toRender(nodes->front());
+        info.firstNode[0] = (float)n0.x; info.firstNode[1] = (float)n0.y; info.firstNode[2] = (float)n0.z;
+    }
+    return info;
+}
 
 }  // namespace rootsim

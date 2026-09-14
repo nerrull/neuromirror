@@ -190,6 +190,8 @@ int growshot(const char* path, int steps, float az, float el, float rad,
     RootScene roots(ctx, W, H);
     if (!roots.valid()) { fprintf(stderr, "growshot: root scene invalid\n"); return 1; }
     printf("growshot: sim active = %d\n", roots.simActive() ? 1 : 0);
+    if (getenv("SEQSHOT_DEBUG_MARKERS") && atoi(getenv("SEQSHOT_DEBUG_MARKERS")) != 0)
+        roots.debugSpawnMarkers = true;
     // Growth fields off the command line, so a look dialled in with root_sweep
     // can be *seen* without going through the panel. Same names root_sweep and
     // --rootpreset take.
@@ -2152,6 +2154,13 @@ int seqshot(const char* prefix, int W, int H,
     if (!roots.valid()) { fprintf(stderr, "seqshot: root scene invalid\n"); return 1; }
     applyGrowthFields(roots, fields);
     applyPostOverride(roots, getenv("SEQSHOT_POST"));
+    // The per-hop spawn/mouth/first-node log line (task: verify the mouth
+    // spawn on the live path) always runs in seqshot, regardless of the
+    // panel toggle -- see RootScene::rebuildDebugMarkers. SEQSHOT_DEBUG_MARKERS=1
+    // additionally asks for two close-up stills of the markers themselves.
+    roots.debugSpawnMarkers = true;
+    const bool debugMarkerShots = getenv("SEQSHOT_DEBUG_MARKERS") &&
+                                  atoi(getenv("SEQSHOT_DEBUG_MARKERS")) != 0;
     if (const char* f = getenv("SEQSHOT_FACES"))
         roots.setTestIdentities(roots.simParams().N, 7u, (float)atof(f));
     roots.skipCloth();
@@ -2446,6 +2455,32 @@ int seqshot(const char* prefix, int W, int H,
                     char tag[32];
                     snprintf(tag, sizeof(tag), "hop%d_end", lastMask);
                     if (!snap(tag)) return 1;
+                    // SEQSHOT_DEBUG_MARKERS=1: an extra still at hop 1's end,
+                    // close up on mask 0 at the Face framing (task 5's
+                    // seq02b_hop1_markers), and one more at hop 2's end in
+                    // whatever framing Grow is already holding.
+                    if (debugMarkerShots && lastMask == 1) {
+                        const auto& pm = roots.plannedMasks();
+                        if (!pm.empty()) {
+                            const float saveAz = roots.azimuth, saveEl = roots.elevation,
+                                        saveR = roots.radius;
+                            float saveT[3] = {roots.target[0], roots.target[1], roots.target[2]};
+                            const auto& a = pm[0];
+                            float n[3] = {a.normal[0], a.normal[1], a.normal[2]};
+                            const float ln = std::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+                            if (ln > 1e-6f) { n[0] /= ln; n[1] /= ln; n[2] /= ln; }
+                            roots.azimuth = std::atan2(n[0], n[2]);
+                            roots.elevation = std::asin(std::clamp(n[1], -1.f, 1.f));
+                            roots.radius = std::max(0.05f, roots.faceScale) * a.faceUnit * 3.8f;
+                            roots.target[0] = a.pos[0]; roots.target[1] = a.pos[1]; roots.target[2] = a.pos[2];
+                            if (!snap("seq02b_hop1_markers")) return 1;
+                            roots.azimuth = saveAz; roots.elevation = saveEl; roots.radius = saveR;
+                            roots.target[0] = saveT[0]; roots.target[1] = saveT[1]; roots.target[2] = saveT[2];
+                        }
+                    }
+                    if (debugMarkerShots && lastMask == 2) {
+                        if (!snap("hop2_end_markers")) return 1;
+                    }
                 }
                 lastMask = cm; lastArrived = false; hopT0 = clock;
             } else if (arrived && !lastArrived && cm >= 0) {

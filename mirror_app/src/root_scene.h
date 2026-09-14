@@ -320,6 +320,16 @@ public:
     void setStructurePulseStart(int k, float t);
     float pulseClock() const;
 
+    // --- debug: spawn-point markers ------------------------------------------
+    // Small coloured spheres at every mask's spawn point (RootSim::hopSpawn,
+    // red for mask 0's hop, orange for the rest), mouth point (green), first
+    // CPlantBox node of the hop (blue) and mask centre (white) -- see
+    // root_scene.mm's rebuildDebugMarkers. Also prints one line per hop, the
+    // moment that hop starts, to stdout: spawn vs. mouth vs. the actual first
+    // node CPlantBox placed. Declared every frame regardless (PANEL.md); off
+    // by default.
+    bool debugSpawnMarkers = false;
+
     // Where the growth currently is, in render space; false when nothing is
     // growing. For a camera that follows the tip instead of the structure.
     bool  growthTip(float out[3]) const;
@@ -738,6 +748,12 @@ private:
     std::vector<char> maskFlagged_;
     float idleCentre_[3] = {0.f, 0.f, 0.f};
     float idleExtent_ = 10.f;
+    // See debugSpawnMarkers above. Rebuilds the marker mesh every advance()
+    // (a handful of spheres, same "just redo it" call as uploadFaceFromMasks)
+    // and prints the per-hop line the first time each hop is seen.
+    void  rebuildDebugMarkers();
+    int   debugLastLoggedHop_ = -2;
+    bool  debugMarkersUploaded_ = false;
     void  updateBounds(const std::vector<float>& nodes);
     void  applyFraming(double dt = 0.0);
     bool  camPrimed_ = false;   // false until the first frame has snapped

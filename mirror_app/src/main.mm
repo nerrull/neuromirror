@@ -3196,6 +3196,7 @@ int main(int argc, char** argv) {
                 roots.ensureSize(compW / std::max(1, rootDownscale),
                                  compH / std::max(1, rootDownscale));
                 applyFogFade(rootsClock);
+                roots.debugSpawnMarkers = g_root_seq.debug_spawn_markers;
                 roots.advance(rootDt);
                 sceneTex = roots.render(cb);
             } else if (scene == (int)Scene::Roots && roots.valid()) {
@@ -3315,6 +3316,7 @@ int main(int argc, char** argv) {
 
                 applyFogFade(rootsClock);
 
+                roots.debugSpawnMarkers = g_root_seq.debug_spawn_markers;
                 roots.advance(rootDt);
                 sceneTex = roots.render(cb);   // encodes geometry + fog passes into cb
             }

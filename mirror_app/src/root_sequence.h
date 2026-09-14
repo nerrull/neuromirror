@@ -239,6 +239,13 @@ struct RootSequenceParams {
     bool  head_pan_enabled = true;
     float head_pan_deg     = 5.f;
     float head_pan_tau     = 0.6f;
+
+    // --- debug ---------------------------------------------------------------
+    // RootScene::debugSpawnMarkers -- see root_scene.h. Held here (rather
+    // than on RootScene directly) so it round-trips through the show bank
+    // like everything else in this panel section; main.mm copies it onto
+    // the scene every frame.
+    bool  debug_spawn_markers = false;
 };
 
 class RootSequence {

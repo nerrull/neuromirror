@@ -84,7 +84,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (100 parameters)
+## show (101 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -113,6 +113,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/cam ease seconds` | float | 0.05 .. 5 | 1.2 |
 | `show/roots/cam max angular speed (rad-s)` | float | 0.05 .. 4 | 1.2 |
 | `show/roots/datamosh seconds` | float | 0 .. 10 | 3 |
+| `show/roots/debug spawn markers` | bool | -- | 0 |
 | `show/roots/face hold after cloth s` | float | 0 .. 30 | 10 |
 | `show/roots/face seconds` | float | 0.2 .. 20 | 2.3 |
 | `show/roots/fade seconds` | float | 0.2 .. 10 | 2 |

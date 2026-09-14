@@ -478,6 +478,13 @@ void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {
                      interleaved.size() * sizeof(float));
 }
 
+void MetalRootRenderer::uploadDebugMarkers(const std::vector<float>& interleaved) {
+    debugMarkerVertCount_ = (int)(interleaved.size() / kFaceFloats);
+    if (debugMarkerVertCount_ > 0)
+        uploadBuffer(debugMarkerBuf_, debugMarkerCap_, interleaved.data(),
+                     interleaved.size() * sizeof(float));
+}
+
 void MetalRootRenderer::uploadLeafMesh(const std::vector<float>& interleaved) {
     leafVertCount_ = (int)(interleaved.size() / 12);
     if (leafVertCount_ > 0)
@@ -891,7 +898,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
 
     // Face mid-geometry pass: mask triangles into the same colour+depth target,
     // depth-composited against the capsules (matches RootRenderer's midGeometryHook).
-    if (faceVertCount_ > 0 && facePipe_) {
+    if ((faceVertCount_ > 0 || debugMarkerVertCount_ > 0) && facePipe_) {
         RootFaceU ffu = {};
         ffu.viewProj = vp;
         ffu.eye = gu.eye;
@@ -931,11 +938,23 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         [ge setRenderPipelineState:facePipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];
-        [ge setVertexBuffer:faceBuf_ offset:0 atIndex:0];
         [ge setVertexBytes:&ffu length:sizeof(ffu) atIndex:1];
         [ge setFragmentBytes:&ffu length:sizeof(ffu) atIndex:1];
-        [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                vertexCount:(NSUInteger)faceVertCount_];
+        if (faceVertCount_ > 0) {
+            [ge setVertexBuffer:faceBuf_ offset:0 atIndex:0];
+            [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                    vertexCount:(NSUInteger)faceVertCount_];
+        }
+        // Debug spawn markers: the same pipeline/uniforms, a different
+        // buffer. Vertex colour already carries the marker's flat colour and
+        // lit is always 1 -- see RootScene::rebuildDebugMarkers/
+        // appendDebugMarker -- so this reads the mask pass's own lighting
+        // uniforms but never the mask's own lightPos/vein terms.
+        if (debugMarkerVertCount_ > 0 && debugMarkerBuf_) {
+            [ge setVertexBuffer:debugMarkerBuf_ offset:0 atIndex:0];
+            [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                    vertexCount:(NSUInteger)debugMarkerVertCount_];
+        }
     }
 
     // Leaf mid-geometry pass: meshed leaves, same targets and depth convention

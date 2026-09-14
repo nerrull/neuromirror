@@ -254,6 +254,63 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
     }
 }
 
+// --- debug spawn markers (RootScene::debugSpawnMarkers) --------------------
+//
+// Small unlit-ish spheres at the points task 1/2/3 of the spawn-point audit
+// want to see: reuses the face pipeline/vertex format (kFaceFloats) rather
+// than a dedicated pipeline -- one static low-poly UV sphere, transformed
+// (translate + uniform scale, so its normals carry straight through) and
+// coloured per marker. Shaded like any other mid-geometry mesh (it will pick
+// up fog/AO like the faces do); good enough for a diagnostic overlay.
+namespace {
+struct DebugSphereMesh {
+    std::vector<F3> pos, nrm;
+    std::vector<int> tris;
+    DebugSphereMesh() {
+        const int lat = 6, lon = 10;
+        for (int i = 0; i <= lat; ++i) {
+            const float phi = (float)i / lat * (float)M_PI;
+            for (int j = 0; j <= lon; ++j) {
+                const float theta = (float)j / lon * 2.f * (float)M_PI;
+                F3 v = {std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
+                pos.push_back(v); nrm.push_back(v);
+            }
+        }
+        for (int i = 0; i < lat; ++i) {
+            for (int j = 0; j < lon; ++j) {
+                const int a = i * (lon + 1) + j, b = a + lon + 1;
+                tris.push_back(a); tris.push_back(b); tris.push_back(a + 1);
+                tris.push_back(a + 1); tris.push_back(b); tris.push_back(b + 1);
+            }
+        }
+    }
+};
+const DebugSphereMesh& debugSphereMesh() {
+    static DebugSphereMesh mesh;
+    return mesh;
+}
+}  // namespace
+
+void appendDebugMarker(std::vector<float>& out, const float center[3], float radius,
+                       const float color[3]) {
+    const DebugSphereMesh& s = debugSphereMesh();
+    const F3 lightPos = {center[0] + radius * 6.f, center[1] + radius * 6.f, center[2] + radius * 6.f};
+    for (size_t i = 0; i + 2 < s.tris.size(); i += 3) {
+        for (int k = 0; k < 3; ++k) {
+            const int vi = s.tris[i + k];
+            const F3 p = {center[0] + s.pos[size_t(vi)].x * radius,
+                          center[1] + s.pos[size_t(vi)].y * radius,
+                          center[2] + s.pos[size_t(vi)].z * radius};
+            const F3 n = s.nrm[size_t(vi)];
+            out.push_back(p.x); out.push_back(p.y); out.push_back(p.z);
+            out.push_back(n.x); out.push_back(n.y); out.push_back(n.z);
+            out.push_back(color[0]); out.push_back(color[1]); out.push_back(color[2]);
+            out.push_back(lightPos.x); out.push_back(lightPos.y); out.push_back(lightPos.z);
+            out.push_back(1.f);
+        }
+    }
+}
+
 // --- cloth helpers (see advanceCloth/rasteriseClothField/packClothMesh) ----
 float smoothstep01(float x) {
     x = std::clamp(x, 0.f, 1.f);
@@ -414,6 +471,7 @@ void RootScene::regrow() {
     growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
     variations_.clear();        // ...and so may the plants they were grown from
     ++growGeneration_;
+    debugLastLoggedHop_ = -2;
 }
 
 void RootScene::replant() {
@@ -424,6 +482,7 @@ void RootScene::replant() {
     simAvailable_ = simAvailable_ || useSim_;
     // growthStepEstimate_ deliberately kept -- see the header.
     ++growGeneration_;
+    debugLastLoggedHop_ = -2;
     // The renderer is still holding the *last* visitor's geometry, and nothing
     // else would drop it: the segment buffers are only rewritten by a growth
     // step, and the stage that follows this call holds the growth paused. So a
@@ -515,6 +574,7 @@ void RootScene::resetGrowth() {
     useSim_ = sim_->reset(simParams_);
     simAvailable_ = simAvailable_ || useSim_;
     ++growGeneration_;
+    debugLastLoggedHop_ = -2;
     // The uploaded plant and the placed hood -- see replant() for why each
     // has to be undone here rather than left to the next growth step.
     if (rr_) { rr_->uploadSegments({}, {}, {}); rr_->clearInstances(); }
@@ -898,6 +958,94 @@ void RootScene::uploadFaceFromMasks() {
         }
     }
     rr_->uploadFaceMesh(data);
+}
+
+// See root_scene.h's debugSpawnMarkers. Every planned mask gets a mouth
+// marker (green) and a centre marker (white); every hop 1..N-1 gets a spawn
+// marker (RootSim::hopSpawn -- red if it leaves mask 0, orange otherwise)
+// and, once that hop has actually started, a marker on the first node
+// CPlantBox placed for it (blue). Radius is 0.15 x the mask's own r_width,
+// per task -- the mask a hop leaves from for the spawn/first-node pair, the
+// mask itself for its own mouth/centre pair.
+void RootScene::rebuildDebugMarkers() {
+    if (!rr_ || !sim_) return;
+    const auto& pm = sim_->plannedMasks();
+
+    if (!debugSpawnMarkers) {
+        if (debugMarkersUploaded_) { rr_->uploadDebugMarkers({}); debugMarkersUploaded_ = false; }
+        return;
+    }
+    {
+        static const float kRed[3]    = {1.f, 0.1f, 0.1f};
+        static const float kOrange[3] = {1.f, 0.55f, 0.05f};
+        static const float kGreen[3]  = {0.15f, 1.f, 0.25f};
+        static const float kBlue[3]   = {0.2f, 0.4f, 1.f};
+        static const float kWhite[3]  = {1.f, 1.f, 1.f};
+
+        std::vector<float> data;
+        for (size_t m = 0; m < pm.size(); ++m) {
+            const float rad = 0.15f * pm[m].rWidth;
+            appendDebugMarker(data, pm[m].pos, rad, kWhite);
+            float mouth[3];
+            if (sim_->maskMouthPoint((int)m, mouth)) appendDebugMarker(data, mouth, rad, kGreen);
+        }
+        for (int h = 1; h < sim_->hopCount(); ++h) {
+            const rootsim::RootSim::HopSpawn info = sim_->hopSpawn(h);
+            const float rad = (info.fromMask >= 0 && (size_t)info.fromMask < pm.size())
+                                  ? 0.15f * pm[size_t(info.fromMask)].rWidth
+                                  : 0.3f;
+            appendDebugMarker(data, info.spawn, rad, info.fromMask == 0 ? kRed : kOrange);
+            if (info.started) appendDebugMarker(data, info.firstNode, rad, kBlue);
+        }
+        rr_->uploadDebugMarkers(data);
+        debugMarkersUploaded_ = true;
+    }
+
+    // The per-hop log line (task 2/3) prints whenever the toggle is on --
+    // *or* unconditionally in --seqshot/--growshot, which force the toggle
+    // on for exactly this reason (see dev_tools.mm) -- so there is no
+    // separate gate here: it is on debugSpawnMarkers throughout. Once, the
+    // first frame each hop is seen (hopSpawn already has the actual first
+    // node by then -- initHop populates the live snapshot before advance()
+    // returns). fromMask's deviation is measured along that mask's own
+    // normal (the spawn/mouth offset is meant to be purely along -normal --
+    // spawnBehind/anchorSpawn) and tangentially (anything left over is
+    // drift, not the intended recess/advance).
+    const int cur = sim_->currentMask();
+    if (cur >= 0 && cur != debugLastLoggedHop_) {
+        const int prevHop = debugLastLoggedHop_;
+        debugLastLoggedHop_ = cur;
+        const rootsim::RootSim::HopSpawn info = sim_->hopSpawn(cur);
+        F3 spawn{info.spawn[0], info.spawn[1], info.spawn[2]};
+        F3 mouth{info.mouth[0], info.mouth[1], info.mouth[2]};
+        F3 d = sub(spawn, mouth);
+        float along = 0.f, tang = 0.f;
+        if (info.fromMask >= 0 && (size_t)info.fromMask < pm.size()) {
+            F3 n = norm(F3{pm[size_t(info.fromMask)].normal[0], pm[size_t(info.fromMask)].normal[1],
+                          pm[size_t(info.fromMask)].normal[2]});
+            along = dot(d, n);
+            const F3 dt = sub(d, mul(n, along));
+            tang = std::sqrt(std::max(0.f, dot(dt, dt)));
+        }
+        const F3 fn{info.firstNode[0], info.firstNode[1], info.firstNode[2]};
+        const F3 df = sub(fn, spawn);
+        const float firstNodeErr = info.started ? std::sqrt(std::max(0.f, dot(df, df))) : -1.f;
+        printf("root debug: hop %d: from mask %d, spawn (%.2f %.2f %.2f), mouth (%.2f %.2f %.2f), "
+               "|spawn-mouth| along n = %.3f, tangential = %.3f, first node (%.2f %.2f %.2f), "
+               "|first node - spawn| = %.3f\n",
+               cur, info.fromMask, spawn.x, spawn.y, spawn.z, mouth.x, mouth.y, mouth.z,
+               along, tang, fn.x, fn.y, fn.z, firstNodeErr);
+
+        // Task 3: hop 1's own nodes against the mask0->mask1 line, once hop 1
+        // has actually finished (its buffer is frozen the moment hop 2
+        // starts, i.e. right here).
+        if (prevHop == 1 && pm.size() > 1) {
+            float dev = 0.f;
+            if (sim_->hopMaxLateralDeviation(1, pm[0].pos, pm[1].pos, dev))
+                printf("root debug: hop 1 nodes: max lateral deviation from the mask0->mask1 line = %.3f\n",
+                       dev);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1958,6 +2106,7 @@ void RootScene::advance(double dt) {
     // alternative is a one-shot flag that has to know about every reason a
     // mask might move.
     if (useSim_ && sim_ && (simPaused || clothActive_)) uploadFaceFromMasks();
+    if (useSim_ && sim_) rebuildDebugMarkers();
     applyFraming(dt);
     // The fog's near clearing and its height gradient both follow the camera,
     // so a pull-back does not change how much fog sits in front of the subject

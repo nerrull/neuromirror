@@ -398,6 +398,11 @@ public:
     static constexpr int kFaceFloats = 13;
     void uploadFaceMesh(const std::vector<float>& interleaved);
 
+    // Debug spawn-point markers (RootScene::debugSpawnMarkers): same
+    // kFaceFloats layout and pipeline as the face mesh, uploaded to its own
+    // buffer so it never competes with the actual faces. Empty clears it.
+    void uploadDebugMarkers(const std::vector<float>& interleaved);
+
     // Leaf mid-geometry mesh: same 12-floats/vertex layout, but the last three
     // are (s, t, vein) rather than a light position, and it is drawn with leaf
     // shading instead of stone. Leaves are meshed rather than drawn on the
@@ -560,6 +565,10 @@ private:
 
     id<MTLBuffer> faceBuf_ = nil;
     int faceVertCount_ = 0;
+
+    id<MTLBuffer> debugMarkerBuf_ = nil;
+    int debugMarkerVertCount_ = 0;
+    size_t debugMarkerCap_ = 0;
 
     id<MTLBuffer> leafBuf_ = nil;
     int leafVertCount_ = 0;

@@ -296,6 +296,36 @@ public:
     // One entry per hop that has finished. Diagnostics, not scene data.
     const std::vector<HopReport>& hops() const;
 
+    // --- debug: where a hop starts, and where CPlantBox actually put it -----
+    //
+    // hopStart()/mouthPoint() (see the .cpp) are pure functions of the fixed
+    // mask layout, not of anything the growth has done yet -- so "planned"
+    // and "actual" read the same number for a hop that has not started. What
+    // can differ is firstNode: the position of node 0 in the buffer CPlantBox
+    // actually simulated for that hop (SegmentAnalyser's own nodes, the same
+    // ones geometry() draws), which `started` is false for until initHop(h)
+    // has run. Render space throughout, i.e. after toYup + the anchor-first
+    // transform -- the same space plannedMasks() and geometry() report in.
+    struct HopSpawn {
+        int   fromMask     = -1;     // hopFrom(h): which mask this hop leaves
+        bool  started      = false;  // firstNode is only meaningful if true
+        float spawn[3]     = {0, 0, 0};      // hopStart(h)
+        float mouth[3]     = {0, 0, 0};      // mouthPoint(masks[fromMask])
+        float firstNode[3] = {0, 0, 0};      // node 0 of this hop's own buffer
+    };
+    HopSpawn hopSpawn(int h) const;
+    int hopCount() const;
+
+    // mouthPoint() for mask m alone (every mask has one, not only the ones a
+    // hop leaves from -- the green markers want all of them).
+    bool maskMouthPoint(int m, float out[3]) const;
+
+    // Diagnostic for the "no shell on hop 1" check: the largest distance any
+    // node of hop h's own finished buffer strays from the infinite line
+    // through a->b (render space). False until that hop has finished (its
+    // nodes are only fixed once frozen).
+    bool hopMaxLateralDeviation(int h, const float a[3], const float b[3], float& maxDev) const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
