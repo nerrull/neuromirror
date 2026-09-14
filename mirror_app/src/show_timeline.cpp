@@ -16,7 +16,10 @@ namespace show {
 namespace {
 
 const Edge kIdleEdges[] = {
-    {Event::FacePresent, Phase::Fitting, "face_hold", 1.5f},
+    // Grace 0.5s: the whole point of this edge is "how long has a face been
+    // seen", not "how long since the last dropped tracker frame" -- so a
+    // single missed detection must not throw the accumulated hold away.
+    {Event::FacePresent, Phase::Fitting, "face_hold", 1.5f, 0.5f},
 };
 const Edge kFittingEdges[] = {
     {Event::FitConverged, Phase::Transition, "fit_hold", 1.5f},
@@ -32,7 +35,11 @@ const Edge kRootsEdges[] = {
 
 const PhaseGraph kGraph[(int)Phase::Count] = {
     // edges,          n, timeout,          min,  max
-    {kIdleEdges,       1, Phase::Idle,       8.f,  0.f},
+    // Idle's min is 0: the only control on how long Idle holds someone is
+    // face_hold (how long a face must be seen), not a fixed floor on the
+    // phase's age. An operator who wants a floor back can still raise this
+    // from the panel.
+    {kIdleEdges,       1, Phase::Idle,       0.f,  0.f},
     // A fit that never converges still has to go somewhere: 30s in, the
     // visitor has had a fair try, and sending them to Idle would throw away
     // the sitting and reset the room out from under someone still standing
@@ -98,7 +105,10 @@ Timeline::Timeline() {
         const PhaseGraph& g = kGraph[i];
         min_time_[i] = g.min_time;
         max_time_[i] = g.max_time;
-        for (int e = 0; e < g.edge_count; ++e) hold_[i][e] = g.edges[e].hold;
+        for (int e = 0; e < g.edge_count; ++e) {
+            hold_[i][e] = g.edges[e].hold;
+            grace_[i][e] = g.edges[e].grace;
+        }
     }
     restart();
 }
@@ -115,6 +125,13 @@ void Timeline::setHold(Phase p, int edge_index, float hold) {
     if (i < 0 || i >= (int)Phase::Count) return;
     if (edge_index < 0 || edge_index >= kMaxEdges) return;
     hold_[i][edge_index] = hold;
+}
+
+void Timeline::setGrace(Phase p, int edge_index, float grace) {
+    const int i = (int)p;
+    if (i < 0 || i >= (int)Phase::Count) return;
+    if (edge_index < 0 || edge_index >= kMaxEdges) return;
+    grace_[i][edge_index] = grace;
 }
 
 void Timeline::restart() { enter(Phase::Idle, "restart"); }
@@ -135,7 +152,10 @@ void Timeline::enter(Phase p, const std::string& reason) {
     scene_done_ = false;
     ++entries_;
 
-    for (int i = 0; i < kMaxEdges; ++i) held_[i] = 0.f;
+    for (int i = 0; i < kMaxEdges; ++i) {
+        held_[i] = 0.f;
+        absent_[i] = 0.f;
+    }
 }
 
 bool Timeline::eventLevel(Event e) const {
@@ -160,7 +180,19 @@ void Timeline::advance(double dt) {
     for (int i = 0; i < g.edge_count; ++i) {
         const Edge& e = g.edges[i];
         const bool level = eventLevel(e.event);
-        held_[i] = level ? held_[i] + fdt : 0.f;
+        if (level) {
+            held_[i] += fdt;
+            absent_[i] = 0.f;
+        } else {
+            // Hysteresis: a false frame does not zero the accumulated hold
+            // outright. It keeps counting for up to `grace` seconds of
+            // continuous absence -- a dropped tracker frame, not somebody
+            // stepping away -- and only resets once that runs out. If the
+            // level returns inside the grace window, accumulation resumes
+            // from held_'s last value.
+            absent_[i] += fdt;
+            if (absent_[i] > grace_[pi][i]) held_[i] = 0.f;
+        }
         if (!level || held_[i] < hold_[pi][i]) continue;
 
         // The floor gates the conditions the room produces on its own. It does

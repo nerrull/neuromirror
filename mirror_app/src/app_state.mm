@@ -177,6 +177,7 @@ int g_show_scene[(int)show::Phase::Count] = {0, 0, 2, 1};  // mirror,mirror,tran
 float g_show_min[(int)show::Phase::Count] = {};
 float g_show_max[(int)show::Phase::Count] = {};
 float g_show_hold[(int)show::Phase::Count][show::kMaxEdges] = {};
+float g_show_grace[(int)show::Phase::Count][show::kMaxEdges] = {};
 
 // The Roots timeline's knobs (stage durations, growth-rate range, camera
 // angles and easing, reveal, orbit, outro, head pan) -- panel-declared under

@@ -555,15 +555,43 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ui::SliderFloat("min", &g_show_min[pi], 0.f, 120.f, "%.1fs");
                         ui::SliderFloat("max (0 = no ceiling)", &g_show_max[pi],
                                         0.f, 120.f, "%.1fs");
-                        for (int e = 0; e < g.edge_count; ++e)
-                            ui::SliderFloat(g.edges[e].key, &g_show_hold[pi][e],
-                                            0.f, 30.f, "%.1fs");
+                        for (int e = 0; e < g.edge_count; ++e) {
+                            // Idle's face_hold is the main Idle timing control
+                            // (min is 0 by default -- see show_timeline.cpp),
+                            // so it gets a plainer label and a tooltip saying
+                            // so, rather than the graph's own edge key.
+                            const bool is_idle_face_hold =
+                                p == show::Phase::Idle &&
+                                std::string(g.edges[e].key) == "face_hold";
+                            ui::SliderFloat(is_idle_face_hold ? "face hold s"
+                                                              : g.edges[e].key,
+                                            &g_show_hold[pi][e], 0.f, 30.f, "%.1fs");
+                            if (is_idle_face_hold && ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip(
+                                    "How long a face must be seen in Idle before\n"
+                                    "Fitting starts -- the main Idle timing\n"
+                                    "control.");
+                            }
+                            if (is_idle_face_hold) {
+                                ui::SliderFloat("face drop grace s",
+                                                &g_show_grace[pi][e], 0.f, 3.f, "%.1fs");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How long a dropped face frame is\n"
+                                        "forgiven before the face-hold clock\n"
+                                        "resets -- so one missed detection does\n"
+                                        "not throw away an almost-there hold.");
+                                }
+                            }
+                        }
                         ui::SliderFloat("fog intensity (visibility, world u)",
                                         &g_phase_fog_intensity[pi], 8.f, 600.f, "%.0f",
                                         ImGuiSliderFlags_Logarithmic);
                         g_show.setTiming(p, g_show_min[pi], g_show_max[pi]);
-                        for (int e = 0; e < g.edge_count; ++e)
+                        for (int e = 0; e < g.edge_count; ++e) {
                             g_show.setHold(p, e, g_show_hold[pi][e]);
+                            g_show.setGrace(p, e, g_show_grace[pi][e]);
+                        }
 
                         if (p == show::Phase::Idle) {
                             ui::SliderFloat("intro fade-in (s)", &g_idle_intro_seconds,

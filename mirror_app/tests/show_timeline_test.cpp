@@ -125,6 +125,55 @@ int main() {
         check(tl.phaseTime() < 1.0, "no double wait");
     }
 
+    // --- Idle's min is 0: face_hold alone gates Fitting, not a floor --------
+    {
+        Timeline tl;
+        check(near(tl.minTime(Phase::Idle), 0.f, 1e-6f),
+              "idle's min defaults to 0 -- face_hold is the only Idle timing knob");
+        tl.setHold(Phase::Idle, 0, 1.f);   // well under the old 8s Idle floor
+        run(tl, 1.05, kFace);              // a hair past 1s, clear of float roundoff
+        check(tl.phase() == Phase::Fitting,
+              "a 1s face_hold fires at t~1s, inside the old 8s Idle minimum");
+    }
+
+    // --- grace: a dropped face frame does not reset the accumulating hold ---
+    {
+        Timeline tl;
+        tl.setHold(Phase::Idle, 0, 1.5f);
+        tl.setGrace(Phase::Idle, 0, 0.5f);
+        run(tl, 1.0, kFace);
+        check(tl.phase() == Phase::Idle, "not yet -- only 1.0s of the 1.5s hold");
+        run(tl, 0.2, kNothing);   // a dropped frame, well inside the 0.5s grace
+        check(tl.phase() == Phase::Idle, "still waiting, the grace hasn't run out");
+        run(tl, 0.6, kFace);      // resumes; 1.0 + 0.6 = 1.6 >= 1.5
+        check(tl.phase() == Phase::Fitting,
+              "accumulation resumed across the drop and cleared the hold");
+
+        // Grace 0 is the old all-or-nothing behaviour: the same drop resets it.
+        Timeline tl0;
+        tl0.setHold(Phase::Idle, 0, 1.5f);
+        tl0.setGrace(Phase::Idle, 0, 0.f);
+        run(tl0, 1.0, kFace);
+        run(tl0, 0.2, kNothing);
+        run(tl0, 0.6, kFace);
+        check(tl0.phase() == Phase::Idle,
+              "with no grace the drop resets the hold: 0.6s alone isn't 1.5s");
+    }
+
+    // --- grace: an absence longer than grace resets the hold -----------------
+    {
+        Timeline tl;
+        tl.setHold(Phase::Idle, 0, 1.5f);
+        tl.setGrace(Phase::Idle, 0, 0.5f);
+        run(tl, 1.0, kFace);
+        run(tl, 0.6, kNothing);   // longer than the 0.5s grace
+        run(tl, 1.0, kFace);      // fresh accumulation, well under 1.5s alone
+        check(tl.phase() == Phase::Idle,
+              "an absence past grace resets held_, so 1.0s alone isn't enough");
+        run(tl, 0.55, kFace);     // 1.0 + 0.55, a hair past 1.5s from the reset
+        check(tl.phase() == Phase::Fitting, "and it fires once that baseline hits 1.5s");
+    }
+
     // --- debounce: a dropped tracker frame is not somebody leaving ----------
     {
         Timeline tl;

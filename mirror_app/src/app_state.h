@@ -141,6 +141,7 @@ extern int g_show_scene[(int)show::Phase::Count];
 extern float g_show_min[(int)show::Phase::Count];
 extern float g_show_max[(int)show::Phase::Count];
 extern float g_show_hold[(int)show::Phase::Count][show::kMaxEdges];
+extern float g_show_grace[(int)show::Phase::Count][show::kMaxEdges];
 extern RootSequenceParams g_root_seq;
 extern float g_phase_fog_intensity[(int)show::Phase::Count];
 extern float g_screen_fade;

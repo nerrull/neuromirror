@@ -83,7 +83,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (96 parameters)
+## show (97 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -97,11 +97,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 61.2 |
 | `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
-| `show/idle/face_hold` | float | 0 .. 30 | 1.5 |
+| `show/idle/face drop grace s` | float | 0 .. 3 | 0.5 |
+| `show/idle/face hold s` | float | 0 .. 30 | 1.5 |
 | `show/idle/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/idle/intro fade-in (s)` | float | 0 .. 8 | 1.5 |
 | `show/idle/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
-| `show/idle/min` | float | 0 .. 120 | 8 |
+| `show/idle/min` | float | 0 .. 120 | 0 |
 | `show/log phase changes` | bool | -- | 1 |
 | `show/mesh fit residual, diagnostic (px)` | float | 1 .. 20 | 6 |
 | `show/phase CC` | int | 0 .. 127 | 101 |

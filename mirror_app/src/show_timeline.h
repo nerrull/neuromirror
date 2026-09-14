@@ -91,6 +91,12 @@ struct Edge {
     Phase target;
     const char* key;
     float hold;          // default debounce, seconds
+    // Grace, seconds: while the level is false, `held_` survives up to this
+    // long before it resets, so one dropped tracker frame does not throw away
+    // an accumulating hold. 0 (the default) is the old all-or-nothing
+    // behaviour. Only meaningful for level-derived events (see eventLevel());
+    // PhaseStart/SceneDone ignore it.
+    float grace = 0.f;
 };
 
 // A phase's outgoing edges, in priority order: they are checked in this order
@@ -132,11 +138,17 @@ public:
     void setTiming(Phase p, float min_time, float max_time);
     // Set one edge's debounce. `edge_index` indexes Graph(p).edges.
     void setHold(Phase p, int edge_index, float hold);
+    // Set one edge's hysteresis grace, seconds. `edge_index` indexes
+    // Graph(p).edges. See Edge::grace.
+    void setGrace(Phase p, int edge_index, float grace);
 
     float minTime(Phase p) const { return min_time_[(int)p]; }
     float maxTime(Phase p) const { return max_time_[(int)p]; }
     float hold(Phase p, int edge_index) const {
         return hold_[(int)p][edge_index];
+    }
+    float grace(Phase p, int edge_index) const {
+        return grace_[(int)p][edge_index];
     }
 
     void setSignals(const Signals& s) { sig_ = s; }
@@ -182,11 +194,14 @@ private:
     float min_time_[(int)Phase::Count] = {};
     float max_time_[(int)Phase::Count] = {};
     float hold_[(int)Phase::Count][kMaxEdges] = {};
+    float grace_[(int)Phase::Count][kMaxEdges] = {};
 
     Signals sig_;
     bool scene_done_ = false;
 
     float held_[kMaxEdges] = {};      // per-edge continuous-true accumulator
+    float absent_[kMaxEdges] = {};    // per-edge continuous-false accumulator,
+                                       // for the grace above
 };
 
 }  // namespace show

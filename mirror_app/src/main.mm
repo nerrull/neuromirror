@@ -1586,7 +1586,10 @@ int main(int argc, char** argv) {
         const show::PhaseGraph& g = show::Graph((show::Phase)pi);
         g_show_min[pi] = g.min_time;
         g_show_max[pi] = g.max_time;
-        for (int e = 0; e < g.edge_count; ++e) g_show_hold[pi][e] = g.edges[e].hold;
+        for (int e = 0; e < g.edge_count; ++e) {
+            g_show_hold[pi][e] = g.edges[e].hold;
+            g_show_grace[pi][e] = g.edges[e].grace;
+        }
     }
 
 #if MIRROR_HAVE_KINECT
