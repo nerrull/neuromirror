@@ -337,27 +337,31 @@ int main() {
     // --- root follows idle tuning --------------------------------------------
     //
     // Simulate an idle wait: fit held at 0 (idle never trains the pond) with
-    // wander on, long enough for the pinned pluck to drift off the plain
-    // root+pluck_high tone. reset() -- the Idle -> Fitting handoff for the
-    // next visitor -- should then pick up that exact note, transposed by
+    // wander on -- and on with a large amplitude, deliberately, so a bug that
+    // let the root pick up the wander's drift (rather than the pluck's target
+    // note, ignoring it) would show up unmistakably. reset() -- the Idle ->
+    // Fitting handoff for the next visitor -- should carry the pluck's
+    // *target* note (`pluck_note`, the snapped chord tone -- unaffected by
+    // wander, which only shades the Hz the comb rings with), transposed by
     // whole octaves into the pad's register, as this visitor's root.
     {
         mirror::Chord c;
         check(c.config().root_follows_idle_tuning, "on by default");
         c.config().pluck_wander_enabled = true;
         c.config().pluck_wander_period_s = 1.f;
+        c.config().pluck_wander_depth = 0.3f;  // large: up to +/-30% of the pinned Hz
         hold(c, 0.f, 0.3f, 3.f);
+        const float pluck_note = c.voicing().pluck_note;
         const float idle_hz = c.voicing().comb_hz;
-        check(std::fabs(idle_hz - NoteToHz(48.f + 34.f)) > 0.5f,
-              "the wander actually moved the pinned pluck off its plain tone");
+        check(std::fabs(idle_hz - NoteToHz(pluck_note)) > 5.f,
+              "the wander actually moved the pinned pluck well off its target note");
 
         c.reset();
-        const float idle_note = 69.f + 12.f * std::log2(idle_hz / 440.f);
-        const float octaves = std::round((idle_note - c.config().root) / 12.f);
-        const float want_root = idle_note - octaves * 12.f;
+        const float octaves = std::round((pluck_note - c.config().root) / 12.f);
+        const float want_root = pluck_note - octaves * 12.f;
         check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
-              "with the flag on, reset()'s root voice continues the idle pluck's "
-              "note, octave-shifted into the pad's register");
+              "with the flag on, reset()'s root voice continues the pluck's target "
+              "note (not the wandered Hz), octave-shifted into the pad's register");
 
         // With the flag off, the old behaviour: reset() always lands on the
         // configured root, no matter what the pluck was doing beforehand.
@@ -369,6 +373,41 @@ int main() {
         c2.reset();
         check(std::fabs(c2.voicing().note[0] - (c2.config().root + c2.config().octave)) < 1e-3f,
               "with the flag off, reset() still uses the configured root");
+    }
+
+    // --- root follows idle tuning: the per-visitor offset IS carried --------
+    //
+    // Unlike wander (above), the per-visitor pluck offset is a real pitch --
+    // "this visitor's tuning" -- not ear noise around the pinned note (see
+    // its comment in chord.h), so reset() should fold it into the continued
+    // root exactly, on top of `pluck_note`. Redraw Chords until the RNG lands
+    // a nonzero offset (bounded -- the +/-3 semitone range makes this settle
+    // in a handful of tries) so the assertion below can't pass by accident on
+    // a 0 draw.
+    {
+        mirror::Chord c;
+        c.config().pluck_offset_enabled = true;
+        c.config().pluck_offset_max_semitones = 3;
+        c.config().pluck_wander_enabled = false;
+        float offset = 0.f;
+        float pluck_note = 0.f;
+        for (int tries = 0; tries < 50 && offset == 0.f; ++tries) {
+            c.reset();
+            hold(c, 0.f, 0.f, 0.05f);
+            pluck_note = c.voicing().pluck_note;
+            offset = 12.f * std::log2(c.voicing().comb_hz / NoteToHz(pluck_note));
+        }
+        check(offset != 0.f, "the per-visitor offset draw landed nonzero within a few tries");
+
+        // `offset` and `pluck_note` above are exactly the idle state this
+        // reset() call is about to read -- nothing has run update() since.
+        c.reset();
+        const float idle_note = pluck_note + offset;
+        const float octaves = std::round((idle_note - c.config().root) / 12.f);
+        const float want_root = idle_note - octaves * 12.f;
+        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
+              "the per-visitor offset -- possibly fractional -- is carried into the "
+              "continued root exactly, unlike wander/override");
     }
 
     if (failures == 0) std::printf("chord_test: OK\n");

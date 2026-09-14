@@ -207,12 +207,15 @@ public:
         // --- root continuity ------------------------------------------------
         //
         // The visitor who just left stood through the whole idle wait hearing
-        // the pinned pluck -- wander, per-visitor offset and center override
-        // all folded in, whatever mix of them was on. If true, the next
-        // visitor's chord does not start over on the plain configured
-        // `root`: reset() reads whatever the pluck was actually sounding the
-        // instant Fitting took over and carries that note's pitch class into
-        // the pad's own register (see reset()'s comment). Off is the old
+        // the pinned pluck -- wander and center override folded into the Hz
+        // the comb actually rang, per-visitor offset folded into the note
+        // itself. If true, the next visitor's chord does not start over on
+        // the plain configured `root`: reset() reads the pluck's target note
+        // (the snapped chord tone, plus the per-visitor offset if that was
+        // on -- not the wander/override Hz-shading, which is ear noise
+        // around the note rather than the note itself) as of the instant
+        // Fitting took over, and carries that note's pitch class into the
+        // pad's own register (see reset()'s comment). Off is the old
         // behaviour -- every visitor's chord starts on `root`, full stop.
         bool root_follows_idle_tuning = true;
     };
@@ -304,7 +307,7 @@ private:
 
     // True iff the most recent update() call was itself an idle-style one --
     // fit <= 0, the pinned-pluck branch (see update()). reset()'s
-    // root-continuation only trusts `v_.comb_hz` as "the idle tuning note"
+    // root-continuation only trusts `v_.pluck_note` as "the idle tuning note"
     // when this is true: a reset() with no idle update() behind it at all
     // (the very first Chord ever constructed) or one that follows a fit that
     // was still actively climbing (an abandoned/timed-out sitting -- fit

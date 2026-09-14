@@ -1125,12 +1125,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::Checkbox("root follows idle tuning", &cc.root_follows_idle_tuning);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "The next visitor's chord starts on the note the\n"
-                            "pinned pluck was actually sounding at the end of\n"
-                            "Idle -- wander/offset/override all included --\n"
-                            "carried into the pad's own register, instead of\n"
-                            "always starting over on the key above. Off is the\n"
-                            "old behaviour: every visitor starts on the key.");
+                            "The next visitor's chord starts on the pinned\n"
+                            "pluck's target note at the end of Idle -- the\n"
+                            "snapped chord tone plus the per-visitor offset if\n"
+                            "that was on -- carried into the pad's own\n"
+                            "register. Wander and the center-Hz override are\n"
+                            "left out: they only shade the Hz the comb rang,\n"
+                            "not the note itself. Off is the old behaviour:\n"
+                            "every visitor starts on the key.");
                     }
                 }
                 ui::EndHeader();

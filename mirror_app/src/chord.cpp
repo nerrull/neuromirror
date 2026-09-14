@@ -80,33 +80,38 @@ void Chord::reset() {
 
     // --- root continuity: pick up the note idle was just sounding ----------
     //
-    // `v_.comb_hz` still holds whatever the pluck actually rang on the frame
-    // just before this call -- Idle runs update() every frame the same as
-    // Fitting does (see main.mm's per-frame audio block, which calls
-    // Chord::update() unconditionally and only then reads comb_hz into the
-    // RTPC), so by the time this visitor's Fitting entry calls reset(), that
-    // value is the exact Hz the room just heard: the snapped chord tone, plus
-    // whatever center override / per-visitor offset / wander was shading it
-    // (see update()'s pluck section below). Read before anything here
-    // overwrites it.
+    // `v_.pluck_note` still holds the pluck's actual *target* note (MIDI) as
+    // of the frame just before this call -- the snapped chord tone update()
+    // computed, before any of the pinned-pluck exploration below it shaded
+    // `comb_hz` for the ear. That shading (wander's continuous two-sine
+    // drift, the center-frequency override) is a Hz-only detune the comb
+    // rings with; it was never a note this visitor's chord should continue,
+    // only noise around the note that already was. What the room actually
+    // *tuned to* is the target note plus this visitor's own per-visitor
+    // offset (`pluck_offset_semitones_`, semitones, only if
+    // `pluck_offset_enabled` -- that one *is* a real pitch, not noise; see
+    // its comment in chord.h). Composed directly in semitones, never by
+    // round-tripping through Hz and back (NoteToHz then log2), so a
+    // fractional offset survives exactly instead of picking up floating-point
+    // drift. Read before anything here overwrites it.
     //
     // Only trusted when `last_update_was_idle_` -- i.e. the frame that left
-    // this comb_hz behind was itself an idle-style one (fit <= 0). Two cases
-    // where that is false and the fallback below is the right call instead:
-    // the very first reset() a Chord ever runs (nothing has sounded yet), and
-    // a reset() that follows an abandoned or timed-out sitting (fit was still
-    // actively above 0 -- climbing or stalled -- right up to the handoff, so
-    // there was no genuine idle pin to continue).
-    const float idle_hz = v_.comb_hz;
+    // this pluck_note behind was itself an idle-style one (fit <= 0). Two
+    // cases where that is false and the fallback below is the right call
+    // instead: the very first reset() a Chord ever runs (nothing has sounded
+    // yet), and a reset() that follows an abandoned or timed-out sitting (fit
+    // was still actively above 0 -- climbing or stalled -- right up to the
+    // handoff, so there was no genuine idle pin to continue).
     if (cfg_.root_follows_idle_tuning && last_update_was_idle_) {
-        const float idle_note = 69.f + 12.f * std::log2(std::max(1.f, idle_hz) / 440.f);
+        const float idle_note = v_.pluck_note +
+            (cfg_.pluck_offset_enabled ? pluck_offset_semitones_ : 0.f);
         // Whole octaves only -- the note class continues, the register
         // stays the pad's designed one (nearest octave to the configured
-        // root). Not rounded to an integer semitone: idle's wander is a
-        // continuous drift, and the root inherits that continuity too. A
-        // *delta* from `cfg_.root`, not the absolute note, so a live key
-        // change afterwards still transposes this visitor's chord along
-        // with it -- see the comment on `visitor_root_delta_` in chord.h.
+        // root). Not rounded to an integer semitone: the per-visitor offset
+        // can be fractional, and the root inherits that exactly. A *delta*
+        // from `cfg_.root`, not the absolute note, so a live key change
+        // afterwards still transposes this visitor's chord along with it --
+        // see the comment on `visitor_root_delta_` in chord.h.
         const float octaves = std::round((idle_note - cfg_.root) / 12.f);
         visitor_root_delta_ = (idle_note - octaves * 12.f) - cfg_.root;
     } else {
