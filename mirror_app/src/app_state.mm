@@ -206,14 +206,6 @@ float g_screen_fade = 0.f;
 float g_idle_intro_seconds = 1.5f;
 double g_idle_intro_t0 = -1.0;   // glfwGetTime() Idle was entered at, -1 = not fading
 
-// How long the face has been continuously absent while in Phase::Roots, timed
-// by the host rather than read from show::Timeline (which does not expose its
-// own debounce accumulator). Kept in lockstep with Timeline's own FaceAbsent
-// edge -- same signal, same dt -- so the outro, timed off it below, finishes
-// exactly as Timeline's absent_hold fires and the phase change lands on a
-// fully black screen. Reset whenever a face is present or the phase is not
-// Roots.
-double g_roots_absent_t = 0.0;
 
 // The diagnostic views (fit view, camera mask) are not phases -- nothing in the
 // piece ever cuts to them. They are a lens held over whatever the timeline is

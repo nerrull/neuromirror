@@ -1400,9 +1400,7 @@ int main(int argc, char** argv) {
     // seconds between the two.
     std::string thisSittingCaptureId;
     // Seconds the tracker has continuously reported nobody present, spanning
-    // both Transition and Roots (unlike g_roots_absent_t, which is Roots-only
-    // and resets at the Roots edge) -- what faceTrackRecActive's finish()
-    // waits on.
+    // both Transition and Roots -- what faceTrackRecActive's finish() waits on.
     double g_track_absent_t = 0.0;
 
     // RootScene now renders continuously from Transition entry onward -- the
@@ -1881,8 +1879,21 @@ int main(int argc, char** argv) {
             // picker sitting beside a running timeline always turned into.
             {
                 show::Signals sig;
-                sig.face_present = ShowFacePresent();
+                const bool facePresent = ShowFacePresent();
+                sig.face_present = facePresent;
                 sig.fit_converged = ShowFitConverged();
+                // Roots runs its whole arc regardless of the visitor: the
+                // structure growing, turning, the others lighting up, the
+                // orbit and the datamosh out are the piece, and a tracker
+                // that loses the person -- or nobody standing there at all
+                // -- must not cut it short. So Roots' FaceAbsent edge never
+                // sees an absence while the sequence is running; the
+                // sequence's own Done is what moves the show on (see the
+                // Roots render branch). The sitting-wide timer below
+                // (g_track_absent_t) reads the real signal: the face-track
+                // recording still has to know when the person actually left.
+                if (g_show.phase() == show::Phase::Roots && rootSeqActive && !rootSeq.done())
+                    sig.face_present = true;
                 g_show.setSignals(sig);
                 // The transition owns its own duration, so it reports its end
                 // rather than being timed from outside -- now additionally
@@ -1894,22 +1905,13 @@ int main(int argc, char** argv) {
                     clothClearHoldElapsed)
                     g_show.sceneDone();
 
-                // Kept in lockstep with Timeline's own FaceAbsent debounce
-                // (same phase check, same signal, same dt, computed before
-                // advance() below can move the phase off Roots this frame) --
-                // see the outro trigger in the Roots render branch.
-                if (g_show_on && !g_show_paused && g_show.phase() == show::Phase::Roots)
-                    g_roots_absent_t = sig.face_present ? 0.0 : g_roots_absent_t + dt;
-
-                // Same idea, but spanning both Transition and Roots (unlike
-                // g_roots_absent_t, which is Roots-only and resets at the
-                // Roots edge) -- what faceTrackRecActive's finish() below
-                // waits on, since the recording window now runs across that
-                // same cut.
+                // Seconds the visitor has been gone, spanning both Transition
+                // and Roots -- what faceTrackRecActive's finish() below waits
+                // on, since the recording window runs across that cut.
                 if (g_show_on && !g_show_paused &&
                     (g_show.phase() == show::Phase::Transition ||
                      g_show.phase() == show::Phase::Roots))
-                    g_track_absent_t = sig.face_present ? 0.0 : g_track_absent_t + dt;
+                    g_track_absent_t = facePresent ? 0.0 : g_track_absent_t + dt;
 
                 // finish() the recording once the visitor has been
                 // continuously absent as long as show::Timeline itself
@@ -2217,10 +2219,6 @@ int main(int argc, char** argv) {
                         rootFaceSeq.begin(ownTrack ? pendingFaceTrack : mirror::FaceTrack{},
                                           g_fitter.basis());
                     }
-                    // The absence timer that times the outro (see the Roots
-                    // render branch below) starts fresh on every entry too.
-                    g_roots_absent_t = 0.0;
-
                     // The sound follows the same edge as the scene, from the
                     // same place, so there is no second notion of "which phase
                     // is up" that could drift from this one.
@@ -2938,20 +2936,10 @@ int main(int argc, char** argv) {
                 // faceTrackRec.record() use below.
                 rootsClock += dt;
                 if (rootSeqActive) {
-                    // Timed to land the outro's fade-to-black exactly when
-                    // Timeline's own FaceAbsent+absent_hold edge would fire
-                    // (g_roots_absent_t is kept in lockstep with it above),
-                    // clamped so an outro authored longer than the hold
-                    // itself cannot outrun the phase change it is supposed
-                    // to hide. The outro is the datamosh and then the fade,
-                    // so it is the two together that have to fit.
-                    const float absentHold = g_show.hold(show::Phase::Roots, 0);
-                    const float outroLen = std::max(0.f, g_root_seq.datamosh_seconds) +
-                                           std::max(0.f, g_root_seq.fade_seconds);
-                    const float effOutro = std::min(outroLen, std::max(0.f, absentHold));
-                    const float outroStart = std::max(0.f, absentHold - effOutro);
+                    // No wantOutro: the visitor leaving does not shorten the
+                    // piece (see the Signals block above). The outro comes
+                    // when the orbit has run its authored seconds.
                     RootSequence::Inputs in;
-                    in.wantOutro = (float)g_roots_absent_t >= outroStart;
                     // clothCleared is definitionally true by the time Roots
                     // is literally entered (sceneDone() itself waited on
                     // clothClearHoldElapsed), but passed live rather than

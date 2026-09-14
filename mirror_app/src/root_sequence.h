@@ -18,8 +18,8 @@
 //           the next (or on a timer where no marker comes); the camera keeps
 //           the Turn's angles and backs off to keep what has come in framed.
 //           Ends when the last of them is lit.
-//   Orbit   a slow orbit of everything, until it has run its time or the
-//           visitor has left.
+//   Orbit   a slow orbit of everything, for its authored seconds. The
+//           visitor leaving changes nothing: the piece runs to the end.
 //   Outro   the datamosh, then the screen fade. Done when the fade lands.
 //
 // This replaces RootCameraSequence (Face -> Deal -> Growth -> Meander), which
@@ -183,8 +183,12 @@ public:
     enum class Stage { Face = 0, Grow, Turn, Reveal, Orbit, Outro, Done };
 
     // Per-frame inputs from the host, all levels for this one frame:
-    //   wantOutro     the host's own call on when the outro should start (the
-    //                 visitor-absence signal; see main.mm's Roots branch).
+    //   wantOutro     skip the rest of the orbit and go out now. Only
+    //                 honoured in Orbit -- the arc up to there is the piece
+    //                 and runs whether or not the visitor stays. The live
+    //                 show never sets it (Roots runs to Done regardless of
+    //                 absence; see main.mm's Signals block); --seqshot does,
+    //                 to get to the outro without waiting out the orbit.
     //   clothCleared  RootScene::clothCleared() -- the first clock it is seen
     //                 true is when Face's clear-tail timer starts.
     //   markerHit     a "fire reverb drop" cue (a FirePlucker marker) came in
@@ -312,11 +316,8 @@ public:
         const double tIn = clock - stageT0_;   // seconds into the current stage
         roots.autoFrame = false;
 
-        // The host's outro request wins over whatever stage is running: the
-        // visitor has gone, and every stage after Face is a thing shown to
-        // someone. (In Face the sequence is still inside Transition, whose
-        // own timeline handles absence.)
-        if (in.wantOutro && stage_ != Stage::Face && stage_ != Stage::Outro)
+        // wantOutro only ever shortens the Orbit -- see Inputs.
+        if (in.wantOutro && stage_ == Stage::Orbit)
             enter(Stage::Outro, clock);
 
         // Ease constants, shared by the stages below.

@@ -146,7 +146,6 @@ extern float g_phase_fog_intensity[(int)show::Phase::Count];
 extern float g_screen_fade;
 extern float g_idle_intro_seconds;
 extern double g_idle_intro_t0;
-extern double g_roots_absent_t;
 extern int g_view_override;
 extern bool g_show_paused;
 extern float g_show_fit_px;
