@@ -65,7 +65,12 @@ struct RootGeomU {
     RS_INT  paletteCount;
     RS_INT  pulseEnabled;
     float   cullPx;       // drop capsules projecting smaller than this (0 = off)
-    RS_INT  _pad1;
+    // Floor on a capsule's projected radius, in (internal, SSAA-scaled)
+    // pixels; 0 = off. A capsule thinner than this is drawn this thick and
+    // its radiance scaled by the ratio, so a hairline root at orbit distance
+    // is a steady faint line rather than one that flashes as the samples
+    // slide across it. See root_geom.metal's radius floor.
+    float   minRadiusPx;
     // --- environment / organic shading --------------------------------------
     // A two-colour hemisphere standing in for an environment probe, plus the
     // terms that make a tube read as tissue rather than as painted plastic.
@@ -84,6 +89,12 @@ struct RootGeomU {
     float   detailStretch;   // how far features elongate along the root axis
     float   detailRough;     // specular/roughness break-up from the same field
     float   detailTint;      // per-segment albedo jitter
+    float   detailFadePx;    // internal px one noise cell must span for full
+                             // detail; strength and rough fade to 0 below half
+                             // of it. 0 = never fade.
+    float   _padD0;
+    float   _padD1;
+    float   _padD2;
     RS_F4   keyColor;        // xyz, directional key colour x intensity
     RS_F4   palette[ROOT_MAX_GROUPS];
     RS_F4   paletteTip[ROOT_MAX_GROUPS];
@@ -226,6 +237,9 @@ struct RootFogU {
                           // energy comes back into the ray rather than being
                           // absorbed. 0 = smoke, 1 = cloud.
     float   fogAnisotropy;// Henyey-Greenstein g: >0 forward, <0 back scattering
+    float   fogNoiseLod;  // mip level the march reads the noise volume at
+    float   _padF0;
+    float   _padF1;
     RS_F4   lightDir;     // xyz, the key's direction (surface -> light)
     RS_F4   keyColor;     // xyz, key colour x intensity
 };

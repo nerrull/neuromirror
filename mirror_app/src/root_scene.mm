@@ -470,6 +470,8 @@ void RootScene::regrow() {
     simAvailable_ = simAvailable_ || useSim_;
     growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
     variations_.clear();        // ...and so may the plants they were grown from
+    seededVariations_.clear();
+    variationsDirty_ = true;
     ++growGeneration_;
     debugLastLoggedHop_ = -2;
 }
@@ -528,6 +530,10 @@ void RootScene::replant() {
     bankFaces_.clear();
     chainFaces_.clear();
     structureFaces_.clear();
+    // ...and the previous sittings' plants dealt with those faces (the
+    // seeded growths stay, see the header): the next deal brings its own.
+    bankPlants_.clear();
+    variationsDirty_ = true;
     // ...and the framing bounds it left behind, which are a min/max over that
     // same vanished geometry.
     idleCentre_[0] = idleCentre_[1] = idleCentre_[2] = 0.f;
@@ -552,6 +558,11 @@ int RootScene::growthStepEstimate() const {
 }
 
 bool RootScene::simDone() const { return sim_ && sim_->done(); }
+
+const std::vector<rootsim::HopReport>& RootScene::hopReports() const {
+    static const std::vector<rootsim::HopReport> kNone;
+    return sim_ ? sim_->hops() : kNone;
+}
 
 void RootScene::finishGrowth() {
     if (!useSim_ || !sim_) return;
@@ -626,39 +637,92 @@ void RootScene::buildField(int gridN, float spacing) {
     useSim_ = false;
 }
 
+bool RootScene::makeVariation(const std::vector<float>& nodes, const std::vector<int>& segs,
+                              const std::vector<float>& radii,
+                              const std::vector<rootsim::SimMask>& masks, Variation& v) {
+    if (nodes.empty() || segs.empty() || masks.empty()) return false;
+    v.nodes = nodes;
+    v.segs  = segs;
+    v.radii = radii;
+    v.masks = masks;
+    // Its bound, by the rule RootSequence::begin() frames this structure
+    // with: the masks' centroid, and a sphere covering each mask plus
+    // its own size. Roots trail past the masks, but the masks are what
+    // the shot is about.
+    v.centre[0] = v.centre[1] = v.centre[2] = 0.f;
+    for (const auto& m : v.masks)
+        for (int c = 0; c < 3; ++c) v.centre[c] += m.pos[c] / float(v.masks.size());
+    v.radius = 0.f;
+    for (const auto& m : v.masks) {
+        const float dx = m.pos[0] - v.centre[0], dy = m.pos[1] - v.centre[1],
+                    dz = m.pos[2] - v.centre[2];
+        v.radius = std::max(v.radius, std::sqrt(dx * dx + dy * dy + dz * dz)
+                                      + std::max(m.rWidth, m.rHeight));
+    }
+    return true;
+}
+
 void RootScene::ensureVariations(int K) {
     K = std::max(0, K);
-    if ((int)variations_.size() == K) return;
+    if (!variationsDirty_ && (int)variations_.size() == K) return;
     variations_.clear();
-    // The same throwaway-growth pattern as growthStepEstimate(): the sim's own
+    variationsDirty_ = false;
+    // Slot k is the k-th bank plant when there is one (a previous sitting's
+    // own growth, see setBankPlants), else the k-th seeded growth -- the
+    // same throwaway-growth pattern as growthStepEstimate(): the sim's own
     // parameters, one seed on from the live plant per variation, run until
-    // done. Nothing here touches sim_ or the renderer.
+    // done, and cached across deals since they are the parameters' plants
+    // and not any visitor's. Nothing here touches sim_ or the renderer.
     rootsim::SimParams probe = simParams_;
     probe.paramDir = ROOTSIM_PARAM_DIR;
+    int fromBank = 0;
     for (int k = 0; k < K; ++k) {
-        probe.seed = simParams_.seed + 1u + unsigned(k);
-        rootsim::RootSim sim;
-        if (!sim.reset(probe)) break;
-        for (int steps = 0; !sim.done() && steps < 200000; ++steps) sim.step();
         Variation v;
-        sim.geometry(v.nodes, v.segs, v.radii);
-        v.masks = sim.plannedMasks();
-        if (v.nodes.empty() || v.segs.empty() || v.masks.empty()) continue;
-        // Its bound, by the rule RootSequence::begin() frames this structure
-        // with: the masks' centroid, and a sphere covering each mask plus
-        // its own size. Roots trail past the masks, but the masks are what
-        // the shot is about.
-        for (const auto& m : v.masks)
-            for (int c = 0; c < 3; ++c) v.centre[c] += m.pos[c] / float(v.masks.size());
-        v.radius = 0.f;
-        for (const auto& m : v.masks) {
-            const float dx = m.pos[0] - v.centre[0], dy = m.pos[1] - v.centre[1],
-                        dz = m.pos[2] - v.centre[2];
-            v.radius = std::max(v.radius, std::sqrt(dx * dx + dy * dy + dz * dz)
-                                          + std::max(m.rWidth, m.rHeight));
+        if (k < (int)bankPlants_.size() && bankPlants_[size_t(k)].valid()) {
+            const mirror::RootStructure& p = bankPlants_[size_t(k)];
+            if (makeVariation(p.nodes, p.segs, p.radii, p.masks, v)) {
+                variations_.push_back(std::move(v));
+                ++fromBank;
+                continue;
+            }
         }
-        variations_.push_back(std::move(v));
+        while ((int)seededVariations_.size() <= k) {
+            const int j = (int)seededVariations_.size();
+            probe.seed = simParams_.seed + 1u + unsigned(j);
+            rootsim::RootSim sim;
+            if (!sim.reset(probe)) break;
+            for (int steps = 0; !sim.done() && steps < 200000; ++steps) sim.step();
+            std::vector<float> nodes, radii; std::vector<int> segs;
+            sim.geometry(nodes, segs, radii);
+            Variation sv;
+            // An empty growth still takes its slot (so index j stays k),
+            // and is skipped below the way it always was.
+            makeVariation(nodes, segs, radii, sim.plannedMasks(), sv);
+            seededVariations_.push_back(std::move(sv));
+        }
+        if (k >= (int)seededVariations_.size()) break;
+        const Variation& sv = seededVariations_[size_t(k)];
+        if (sv.nodes.empty() || sv.segs.empty() || sv.masks.empty()) continue;
+        variations_.push_back(sv);
     }
+    if (K > 0)
+        printf("root: hood variations: %d from the bank, %d seeded\n",
+               fromBank, (int)variations_.size() - fromBank);
+}
+
+void RootScene::setBankPlants(std::vector<mirror::RootStructure> plants) {
+    bankPlants_ = std::move(plants);
+    variationsDirty_ = true;
+}
+
+bool RootScene::livePlant(mirror::RootStructure& out) const {
+    if (!useSim_ || !sim_) return false;
+    mirror::RootStructure p;
+    sim_->geometry(p.nodes, p.segs, p.radii);
+    p.masks = sim_->plannedMasks();
+    if (!p.valid()) return false;
+    out = std::move(p);
+    return true;
 }
 
 void RootScene::addNeighbours(int count, int variations, float ringRadius, float tiltDeg) {
@@ -883,9 +947,28 @@ bool RootScene::maskVisible(int i) const {
 
 void RootScene::uploadFaceFromMasks() {
     if (!rr_ || !sim_) return;
+    faceBlocks_.clear();
+    std::fill(bankFaceDirty_.begin(), bankFaceDirty_.end(), 0);
     if (!showFace || faceVerts_.empty() || faceTris_.empty()) { rr_->uploadFaceMesh({}); return; }
     const float maskColor[3] = {0.86f, 0.83f, 0.78f};
     std::vector<float> data;
+    // One record per emitted mask, for patchBankFaces().
+    auto record = [&](int bankIdx, const Mask& m, float lit, size_t offset) {
+        FaceBlock fb;
+        fb.bankIdx = bankIdx;
+        for (int c = 0; c < 3; ++c) {
+            fb.mask.pos[c] = (&m.pos.x)[c];
+            fb.mask.normal[c] = (&m.normal.x)[c];
+            fb.mask.tangent[c] = (&m.tangent.x)[c];
+            fb.mask.bitangent[c] = (&m.bitangent.x)[c];
+        }
+        fb.mask.rDepth = m.rDepth; fb.mask.rWidth = m.rWidth; fb.mask.rHeight = m.rHeight;
+        fb.mask.faceUnit = m.faceUnit;
+        fb.lit = lit;
+        fb.offset = offset;
+        fb.count = data.size() - offset;
+        faceBlocks_.push_back(fb);
+    };
     int mi = -1;
     for (const auto& sm : sim_->plannedMasks()) {
         ++mi;
@@ -909,8 +992,10 @@ void RootScene::uploadFaceFromMasks() {
             m.pos = sub(m.pos, mul(m.normal, clothPressOffset_));
         m.rDepth = sm.rDepth; m.rWidth = sm.rWidth; m.rHeight = sm.rHeight;
         m.faceUnit = sm.faceUnit;
+        const size_t off = data.size();
         appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                              maskColor, *face.colors, rr_->face.smoothNormals);
+        record(bankIndexFor(-1, mi), m, 1.f, off);
     }
 
     // Each placed structure's own masks -- its variation's planned layout,
@@ -952,9 +1037,11 @@ void RootScene::uploadFaceFromMasks() {
             // Per mask: the Reveal lights the faces one at a time, ahead of
             // the structure's roots (pl.lit, the instance's own flag).
             const bool litMask = ni < (int)pl.maskLit.size() ? pl.maskLit[size_t(ni)] != 0 : pl.lit;
+            const size_t off = data.size();
             appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                                  maskColor, *face.colors, rr_->face.smoothNormals,
                                  litMask ? 1.f : 0.f);
+            record(bankIndexFor(k, ni), m, litMask ? 1.f : 0.f, off);
         }
     }
     rr_->uploadFaceMesh(data);
@@ -1646,7 +1733,7 @@ void RootScene::faceNormalisation(const std::vector<float>& verts, float centre[
     scale = 1.0f / m;
 }
 
-RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
+int RootScene::bankIndexFor(int structure, int slot) const {
     int idx = -1;
     if (structure < 0) {
         if (slot > 0 && slot < (int)chainFaces_.size()) idx = chainFaces_[size_t(slot)];
@@ -1656,9 +1743,46 @@ RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
     }
     if (idx >= 0 && idx < (int)bankFaces_.size()) {
         const BankFace& b = bankFaces_[size_t(idx)];
-        if (!b.verts.empty() && !b.tris.empty()) return {&b.verts, &b.tris, &b.colors};
+        if (!b.verts.empty() && !b.tris.empty()) return idx;
+    }
+    return -1;
+}
+
+RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
+    const int idx = bankIndexFor(structure, slot);
+    if (idx >= 0) {
+        const BankFace& b = bankFaces_[size_t(idx)];
+        return {&b.verts, &b.tris, &b.colors};
     }
     return {&faceVerts_, &faceTris_, &faceColors_};
+}
+
+// Re-emit only the masks wearing a bank face that moved since the last
+// full emit, into the runs uploadFaceFromMasks() recorded for them. Same
+// triangles, same face, so a run's size never changes -- if one somehow
+// did, that block is left as it was rather than written past its end.
+void RootScene::patchBankFaces() {
+    if (!rr_ || faceBlocks_.empty()) return;
+    const float maskColor[3] = {0.86f, 0.83f, 0.78f};
+    std::vector<float> data;
+    for (const FaceBlock& fb : faceBlocks_) {
+        if (fb.bankIdx < 0 || fb.bankIdx >= (int)bankFaceDirty_.size() ||
+            !bankFaceDirty_[size_t(fb.bankIdx)])
+            continue;
+        const BankFace& b = bankFaces_[size_t(fb.bankIdx)];
+        Mask m;
+        m.pos = {fb.mask.pos[0], fb.mask.pos[1], fb.mask.pos[2]};
+        m.normal = {fb.mask.normal[0], fb.mask.normal[1], fb.mask.normal[2]};
+        m.tangent = {fb.mask.tangent[0], fb.mask.tangent[1], fb.mask.tangent[2]};
+        m.bitangent = {fb.mask.bitangent[0], fb.mask.bitangent[1], fb.mask.bitangent[2]};
+        m.rDepth = fb.mask.rDepth; m.rWidth = fb.mask.rWidth; m.rHeight = fb.mask.rHeight;
+        m.faceUnit = fb.mask.faceUnit;
+        data.clear();
+        appendFaceVertexData(data, m, b.verts, b.tris, faceScale, faceRecess, 3.0f,
+                             maskColor, b.colors, rr_->face.smoothNormals, fb.lit);
+        if (data.size() == fb.count) rr_->patchFaceMesh(fb.offset, data);
+    }
+    std::fill(bankFaceDirty_.begin(), bankFaceDirty_.end(), 0);
 }
 
 void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
@@ -1678,6 +1802,10 @@ void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
             for (size_t i = 0; i < b.verts.size() / 3; ++i)
                 for (int k = 0; k < 3; ++k)
                     b.verts[i * 3 + k] = (b.verts[i * 3 + k] - centre[k]) * scale;
+            // ...and kept, for the frames a replayed track lays over this
+            // mesh (setBankFaceVerts).
+            for (int k = 0; k < 3; ++k) b.centre[k] = centre[k];
+            b.scale = scale;
             if (c.colors.size() == c.verts.size()) b.colors = c.colors;
         }
         bankFaces_.push_back(std::move(b));   // an invalid one keeps its index
@@ -1723,6 +1851,40 @@ void RootScene::clearBankFaces() {
     chainFaces_.clear();
     structureFaces_.clear();
     rebuildFace();
+}
+
+void RootScene::setBankFaceVerts(int idx, const std::vector<float>& verts) {
+    if (idx < 0 || idx >= (int)bankFaces_.size()) return;
+    BankFace& b = bankFaces_[size_t(idx)];
+    if (b.scale <= 0.f || verts.size() != b.verts.size()) return;
+    for (size_t i = 0; i < verts.size() / 3; ++i)
+        for (int k = 0; k < 3; ++k)
+            b.verts[i * 3 + k] = (verts[i * 3 + k] - b.centre[k]) * b.scale;
+    if (bankFaceDirty_.size() != bankFaces_.size()) bankFaceDirty_.assign(bankFaces_.size(), 0);
+    bankFaceDirty_[size_t(idx)] = 1;
+}
+
+void RootScene::drawnBankFaces(std::vector<char>& out) const {
+    out.assign(bankFaces_.size(), 0);
+    if (!sim_ || out.empty()) return;
+    auto mark = [&](int idx) {
+        if (idx >= 0 && idx < (int)out.size()) out[size_t(idx)] = 1;
+    };
+    // The chain: every planned mask past the anchor that is drawn.
+    const int planned = (int)sim_->plannedMasks().size();
+    for (int i = 1; i < planned && i < (int)chainFaces_.size(); ++i)
+        if (maskVisible(i)) mark(chainFaces_[size_t(i)]);
+    // The hood: a visible structure's lit masks (the dark ones show nothing
+    // of the face; they take the update when they light).
+    for (size_t k = 0; k < neighbours.size() && k < structureFaces_.size(); ++k) {
+        const NeighbourPlacement& pl = neighbours[k];
+        if (!pl.visible) continue;
+        const auto& idxs = structureFaces_[k].captureIdx;
+        for (size_t j = 0; j < idxs.size(); ++j) {
+            const bool litMask = j < pl.maskLit.size() ? pl.maskLit[j] != 0 : pl.lit;
+            if (litMask) mark(idxs[j]);
+        }
+    }
 }
 
 std::vector<std::vector<float>> RootScene::setTestIdentities(int n, unsigned seed,
@@ -2090,6 +2252,7 @@ void RootScene::advance(double dt) {
     // sheet that was still visibly falling off it. Relying on the caller's
     // sequence to have paused the sim is a weaker guarantee than saying so
     // here, since auto-framing runs no sequence at all.
+    bool faceEmitted = false;
     if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothActive_) {
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
             sim_->step();
@@ -2098,6 +2261,7 @@ void RootScene::advance(double dt) {
         rr_->uploadSegments(nodes, segs, radii);
         updateBounds(nodes);
         uploadFaceFromMasks();
+        faceEmitted = true;
     }
     // The masks have to reach the renderer even while the growth is held --
     // otherwise the opening stage is an empty frame, and the cloth press
@@ -2105,7 +2269,12 @@ void RootScene::advance(double dt) {
     // Rebuilt every frame rather than once: it is a handful of masks, and the
     // alternative is a one-shot flag that has to know about every reason a
     // mask might move.
-    if (useSim_ && sim_ && (simPaused || clothActive_)) uploadFaceFromMasks();
+    if (useSim_ && sim_ && (simPaused || clothActive_))
+        uploadFaceFromMasks();
+    // ...and where nothing above re-emitted the mesh, the replayed bank faces
+    // that moved this frame (setBankFaceVerts) are patched into place alone.
+    else if (useSim_ && sim_ && !faceEmitted)
+        patchBankFaces();
     if (useSim_ && sim_) rebuildDebugMarkers();
     applyFraming(dt);
     // The fog's near clearing and its height gradient both follow the camera,

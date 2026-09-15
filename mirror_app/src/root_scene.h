@@ -13,6 +13,7 @@
 #include "root_sim.h"
 #include "cloth.h"
 #include "face_capture.h"
+#include "root_structure.h"
 
 #include <algorithm>
 #include <cmath>
@@ -127,6 +128,21 @@ public:
     // The chain's slots, same indexing: mask i -> chainFaces()[i] (-1 = mask
     // 0's face; slot 0 is always -1, it is the live face).
     const std::vector<int>& chainFaces() const { return chainFaces_; }
+    // A bank face moving: replace bank face `idx`'s mesh (fitter model
+    // units, same topology as the capture's) with this frame's -- a replayed
+    // face track (BankFacePlayback, root_face_sequence.h). Normalised by the
+    // centre/scale captured from the capture's own mesh in assignBankFaces,
+    // not re-derived per frame, so the mask holds still and the face moves
+    // inside it -- the same rule setFittedFace applies to the live face.
+    // The face mesh is re-emitted once, on the next advance(), however many
+    // faces changed. Ignored for an index the bank does not have, or a mesh
+    // of the wrong size.
+    void setBankFaceVerts(int idx, const std::vector<float>& verts);
+    // Which bank faces are on a mask that is drawn and lit this frame --
+    // a visible chain mask, or a lit mask of a visible structure -- indexed
+    // like the `bank` passed to assignBankFaces. What a per-frame replay
+    // should bother sampling: a dark or unrevealed mask shows nothing of it.
+    void drawnBankFaces(std::vector<char>& out) const;
 
     // A different face on every mask, sampled from the morphable basis.
     //
@@ -224,6 +240,9 @@ public:
     // frames on, so the shot does not step every time one lands.
     const std::vector<rootsim::SimMask>& plannedMasks() const;
     bool simDone()   const;
+    // What each finished hop did (RootSim::hops) -- the headless tools read
+    // the dwell each root type actually got off this.
+    const std::vector<rootsim::HopReport>& hopReports() const;
     // Run the growth to completion now, synchronously, and upload the result
     // -- the whole chain in one call, for RootSequence::jumpTo (an operator
     // wanting the Turn or a later stage without waiting out Grow). Nothing
@@ -261,6 +280,21 @@ public:
     // drops them, replant() keeps them.
     void ensureVariations(int K);
     int  variationCount() const { return (int)variations_.size(); }
+    // Previous sittings' own plants (root_structure.h) for the hood, one per
+    // structure: variation k is plants[k] when that is valid, a seeded
+    // throwaway growth otherwise (a capture from before plants were saved,
+    // or a sitting that never finished Grow). Dealt alongside
+    // assignBankFaces -- main.mm pairs structure k's plant with the capture
+    // on its mask 0 -- and dropped with the bank faces by replant(), so
+    // the next sitting deals its own. The seeded growths stay cached
+    // across deals the way they always did.
+    void setBankPlants(std::vector<mirror::RootStructure> plants);
+    int  bankPlantCount() const { return (int)bankPlants_.size(); }
+    // The live plant as it stands -- the sim's current geometry and its
+    // planned layout, in the anchor-at-origin render space every variation
+    // uses -- for saving under the sitting's id. False (out untouched) when
+    // there is no sim or nothing has grown.
+    bool livePlant(mirror::RootStructure& out) const;
     // One placed structure. The instance path carries capsules only, so its
     // masks are emitted into the shared face mesh, transformed the same way
     // its geometry was (scale, yaw about Y, translate -- addInstance's order).
@@ -706,6 +740,15 @@ private:
         float radius = 1.f;
     };
     std::vector<Variation> variations_;
+    // The seeded throwaway growths, cached by k (seed+1+k); what a
+    // variation falls back to when no bank plant fills its slot. Emptied by
+    // regrow() with variations_ -- they are the parameters' plants.
+    std::vector<Variation> seededVariations_;
+    std::vector<mirror::RootStructure> bankPlants_;   // see setBankPlants
+    bool variationsDirty_ = true;           // variations_ must be recomposed
+    static bool makeVariation(const std::vector<float>& nodes, const std::vector<int>& segs,
+                              const std::vector<float>& radii,
+                              const std::vector<rootsim::SimMask>& masks, Variation& out);
     int growGeneration_ = 0;                // see growGeneration()
     bool useSim_ = false;
     // Whether CPlantBox is usable at all. Distinct from useSim_, which also
@@ -726,8 +769,27 @@ private:
         std::vector<float> verts;
         std::vector<int>   tris;
         std::vector<float> colors;   // 3/vertex, empty = flat material
+        // The normalisation the capture's mesh was given, kept so a
+        // replayed frame (setBankFaceVerts) gets the same one.
+        float centre[3] = {0.f, 0.f, 0.f};
+        float scale = 0.f;           // 0 = none captured (test identities)
     };
     std::vector<BankFace> bankFaces_;
+    std::vector<char> bankFaceDirty_;   // per bank face: a setBankFaceVerts since the last emit
+    // Where each mask's triangles sit in the last uploadFaceFromMasks(), so
+    // a replayed bank face can be re-emitted into its own run alone
+    // (patchBankFaces) -- the full rebuild walks some fifty masks and was
+    // most of a frame at 60. The mask is kept as placed (world space, the
+    // hood's transform applied), with the lit flag it was emitted with.
+    struct FaceBlock {
+        int bankIdx;                  // -1 = the live face (never patched)
+        rootsim::SimMask mask;
+        float lit;
+        size_t offset, count;         // floats into the mesh
+    };
+    std::vector<FaceBlock> faceBlocks_;
+    void patchBankFaces();
+    int bankIndexFor(int structure, int slot) const;
     // Which bank face each planned mask draws; see chainFaces().
     std::vector<int> chainFaces_;
     std::vector<StructureFaces> structureFaces_;

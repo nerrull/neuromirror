@@ -34,7 +34,15 @@
 // to the visitor now on the masks (empty/invalid tracks are fine -- valid()
 // then reads false and step() is a no-op, leaving the masks exactly as
 // whatever else drove them). step() once per rendered frame after that,
-// alongside RootSequence::step() -- same phaseTime()/dt convention.
+// alongside RootSequence::step() -- same phaseTime()/dt convention. reset()
+// at every Transition entry: a sequence left valid from the last sitting
+// would otherwise keep stepping the previous visitor's recording onto mask
+// 0 through the next visitor's whole Face stage, over the live fit.
+//
+// The bank's masks get the same treatment through BankFacePlayback (below):
+// one FaceTrackPlayer per bank capture that has a track.bin, sampled and
+// handed to RootScene::setBankFaceVerts, so every face in the hood moves the
+// way its own sitter did rather than holding one frozen instant.
 #pragma once
 #ifndef __OBJC__
 #error "root_face_sequence.h is ObjC++ only"
@@ -49,32 +57,41 @@
 #include <cmath>
 #include <vector>
 
-class RootFaceSequence {
+// One track, sampled: the ping-pong loop, the nearest-frame pick, the
+// delta-from-mean rotation and the jaw override, producing a mesh in the
+// fitter's model units. RootFaceSequence and BankFacePlayback are the two
+// sinks (mask 0's setFittedFace, the bank's setBankFaceVerts).
+class FaceTrackPlayer {
 public:
     void begin(const mirror::FaceTrack& track, const mirror::FaceBasis& basis) {
         track_ = track;
         basis_ = &basis;
-        uploadedTris_ = false;
         valid_ = track_.valid() && basis_->valid();
-        if (valid_) computeMeanRot();
+        if (valid_) {
+            computeMeanRot();
+            // neutral + identity once; each frame only lays its expression
+            // over this (FaceBasis::addExpression) -- see reconstructIdentity.
+            basis_->reconstructIdentity(track_.alpha, identityBase_);
+        }
         // Which mode the forced jaw-open (mouthOpenTarget below) drives --
         // see face_basis.h's jawOpenModeIndex. Looked up once per sitting
         // rather than logged here: main.mm logs the choice once at startup,
         // against the same basis.
         jawIdx_ = valid_ ? mirror::jawOpenModeIndex(*basis_) : -1;
     }
+    void reset() { valid_ = false; track_ = mirror::FaceTrack{}; }
 
     // `mouthOpenTarget` is RootSequence::mouthOpenRamp(...) * mouth_open_amount
     // for this frame, precomputed by the caller (main.mm) -- this class does
     // not know about RootSequenceParams. Applied as
     // expr[jawOpen] = max(recorded, mouthOpenTarget): raises the jaw, never
     // clamps it, so a visitor caught mid-word on the recording still reads.
-    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f) {
-        (void)dt;
-        if (!valid_) return;
+    // False (verts untouched) when there is nothing to play.
+    bool sample(double phaseTime, float mouthOpenTarget, std::vector<float>& verts) {
+        if (!valid_) return false;
 
         const double dur = double(track_.duration());
-        if (dur <= 0.0) return;
+        if (dur <= 0.0) return false;
         const double period = 2.0 * dur;
         double m = std::fmod(phaseTime, period);
         if (m < 0.0) m += period;
@@ -98,24 +115,23 @@ public:
             exprScratch_ = frame.expr;
             if ((int)exprScratch_.size() <= jawIdx_) exprScratch_.resize(size_t(jawIdx_) + 1, 0.f);
             exprScratch_[size_t(jawIdx_)] = std::max(exprScratch_[size_t(jawIdx_)], mouthOpenTarget);
-            basis_->reconstruct(track_.alpha, exprScratch_, verts_);
+            basis_->addExpression(identityBase_, exprScratch_, verts);
         } else {
-            basis_->reconstruct(track_.alpha, frame.expr, verts_);
+            basis_->addExpression(identityBase_, frame.expr, verts);
         }
         // Delta from the recording's own mean pose, not the frame's raw
-        // (absolute) rotation -- see the class comment. rot' = frame.rot *
+        // (absolute) rotation -- see the file comment. rot' = frame.rot *
         // meanRot^T: identity when frame.rot == meanRot_, so a frame at
         // exactly the mean pose reconstructs unrotated, aligned with the
         // squared neutral the mask's nest was grown against.
         float delta[9];
         MatMulTranspose(frame.rot, meanRot_, delta);
-        mirror::RotateAboutCentroid(verts_, delta);
-
-        roots.setFittedFace(verts_, uploadedTris_ ? std::vector<int>() : basis_->triangles());
-        uploadedTris_ = true;
+        mirror::RotateAboutCentroid(verts, delta);
+        return true;
     }
 
     bool valid() const { return valid_; }
+    float duration() const { return track_.duration(); }
 
 private:
     // out = a * transpose(b), row-major 3x3 rotations.
@@ -169,9 +185,84 @@ private:
     mirror::FaceTrack track_;
     const mirror::FaceBasis* basis_ = nullptr;
     bool valid_ = false;
-    bool uploadedTris_ = false;
-    std::vector<float> verts_;
+    std::vector<float> identityBase_;   // neutral + identity, once per begin()
     float meanRot_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     int jawIdx_ = -1;                 // see begin()/jawOpenModeIndex
-    std::vector<float> exprScratch_;   // scratch for the forced-open copy, see step()
+    std::vector<float> exprScratch_;   // scratch for the forced-open copy, see sample()
+};
+
+// Mask 0: the sitting that just came through Transition, replayed on the
+// anchor through setFittedFace (which only ever touches mask 0).
+class RootFaceSequence {
+public:
+    void begin(const mirror::FaceTrack& track, const mirror::FaceBasis& basis) {
+        player_.begin(track, basis);
+        basis_ = &basis;
+        uploadedTris_ = false;
+    }
+    // Back to "nothing to play", so the live tracker drives mask 0 again.
+    void reset() { player_.reset(); }
+
+    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f) {
+        (void)dt;
+        if (!player_.sample(phaseTime, mouthOpenTarget, verts_)) return;
+        roots.setFittedFace(verts_, uploadedTris_ ? std::vector<int>() : basis_->triangles());
+        uploadedTris_ = true;
+    }
+
+    bool valid() const { return player_.valid(); }
+
+private:
+    FaceTrackPlayer player_;
+    const mirror::FaceBasis* basis_ = nullptr;
+    bool uploadedTris_ = false;
+    std::vector<float> verts_;
+};
+
+// The bank's masks: one player per bank capture (index-parallel to the
+// `bank` main.mm handed RootScene::assignBankFaces, so tracks[i] belongs to
+// bankFaces_[i]), each sampled and handed to setBankFaceVerts. Only the
+// faces RootScene reports as drawn *and lit* this frame are sampled
+// (drawnBankFaces): a hood of a dozen structures wears getting on for
+// eighty faces, and an expression pass over 2056 verts each, every frame,
+// is real CPU -- so on top of that each face is refreshed every kStride
+// frames, staggered, which at 60 fps is 20 Hz sample-and-hold on a head
+// that turns over seconds. A face's own phase is offset by its index so a
+// wall of them does not nod in unison.
+class BankFacePlayback {
+public:
+    static constexpr int kStride = 3;
+
+    void begin(const std::vector<mirror::FaceTrack>& tracks, const mirror::FaceBasis& basis) {
+        players_.clear();
+        players_.resize(tracks.size());
+        for (size_t i = 0; i < tracks.size(); ++i) players_[i].begin(tracks[i], basis);
+        frame_ = 0;
+    }
+    void reset() { players_.clear(); }
+
+    void step(RootScene& roots, double phaseTime, double dt) {
+        (void)dt;
+        if (players_.empty()) return;
+        roots.drawnBankFaces(drawn_);
+        ++frame_;
+        for (size_t i = 0; i < players_.size() && i < drawn_.size(); ++i) {
+            if (!drawn_[i] || !players_[i].valid()) continue;
+            if ((frame_ + int(i)) % kStride != 0) continue;
+            if (!players_[i].sample(phaseTime + double(i) * 1.7, 0.f, verts_)) continue;
+            roots.setBankFaceVerts(int(i), verts_);
+        }
+    }
+
+    int playing() const {
+        int n = 0;
+        for (const auto& p : players_) n += p.valid() ? 1 : 0;
+        return n;
+    }
+
+private:
+    std::vector<FaceTrackPlayer> players_;
+    std::vector<char> drawn_;
+    std::vector<float> verts_;
+    int frame_ = 0;
 };

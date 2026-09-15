@@ -29,7 +29,7 @@ struct GeomVOut {
 
 struct GeomFOut {
     float4 color [[color(0)]];
-    float  depth [[depth(any)]];
+    float  depth [[depth(greater)]];
 };
 
 // ---------------------------------------------------------------------------
@@ -78,8 +78,10 @@ vertex GeomVOut root_geom_vs(uint vid       [[vertex_id]],
     float aspect = U.res.x / U.res.y;
     float f      = 1.0 / tan(U.fov);
     float minW   = max(min(ca.w, cb.w), 0.001);
-    float sry    = r * f / minW;
-    float srx    = sry / aspect;
+    // The nearest point of the capsule is a radius nearer than its axis, so
+    // that is the depth its projected radius is bounded by (it matters for
+    // a root close to the lens, where r is a good part of w).
+    float sry    = r * f / max(minW - r, 0.001);
 
     // Sub-pixel cull: if the capsule's projected radius is smaller than cullPx
     // pixels, it can't contribute a visible fragment — degenerate the quad so no
@@ -89,21 +91,58 @@ vertex GeomVOut root_geom_vs(uint vid       [[vertex_id]],
         o.ndc = float2(0.0);
         return o;
     }
+    // The radius floor (RootGeomU::minRadiusPx): the quad has to cover the
+    // thickened capsule the fragment shader will trace (same rule there).
+    float rBound = r;   // the widest the fragment shader will trace this as
+    if (U.minRadiusPx > 0.0 && primT[i] == 0) {
+        const float floorSry = U.minRadiusPx / (U.res.y * 0.5);
+        if (sry < floorSry) { sry = floorSry; rBound = sry * minW / f; }
+    }
 
-    float2 lo = min(ndcA, ndcB) - float2(srx, sry);
-    float2 hi = max(ndcA, ndcB) + float2(srx, sry);
-
-    float2 corners[6];
-    corners[0] = float2(lo.x, lo.y);
-    corners[1] = float2(hi.x, lo.y);
-    corners[2] = float2(lo.x, hi.y);
-    corners[3] = float2(hi.x, lo.y);
-    corners[4] = float2(hi.x, hi.y);
-    corners[5] = float2(lo.x, hi.y);
-
-    float2 p = corners[vid];
+    // The quad is a rectangle *along* the segment, not its screen-space
+    // bounding box: a diagonal segment's box is mostly corners that the
+    // ray-capsule test in the fragment shader rejects after paying for them,
+    // and at 28k segments over a supersampled frame those misses were most
+    // of the geometry pass. Built in aspect-corrected NDC so the radius is
+    // the same in both axes, then squeezed back. A segment that projects to
+    // a point (end-on) degenerates to the square around it.
+    const float2 sq = float2(aspect, 1.0);
+    const float2 A = ndcA * sq, B = ndcB * sq;
+    float2 d = B - A;
+    const float L = length(d);
+    d = (L > 1e-5) ? d / L : float2(1.0, 0.0);
+    const float2 nrm = float2(-d.y, d.x);
+    // Corners: the near end pushed back along -d, the far end along +d, each
+    // by the radius, and both sides out along the normal.
+    // r x f / w is a sphere's projected radius on axis; off axis the
+    // silhouette stretches radially by 1 / cos^2 of the angle to the axis
+    // (a third wider at the corners of a portrait frame). The old box had
+    // slack for that in its corners; this one has none, so it is explicit.
+    const float tf = tan(U.fov);
+    const float q2 = max(dot(A, A), dot(B, B)) * tf * tf;
+    const float m = sry * (1.0 + q2) * 1.02 + 1.0 / U.res.y;
+    float2 c[4];
+    c[0] = A - d * m + nrm * m;
+    c[1] = A - d * m - nrm * m;
+    c[2] = B + d * m + nrm * m;
+    c[3] = B + d * m - nrm * m;
+    const int idx[6] = {0, 1, 2, 1, 3, 2};
+    float2 p = c[idx[vid]] / sq;
     o.ndc = p;
-    o.pos = float4(p, 0.0, 1.0);
+
+    // The quad sits at the nearest depth any part of the capsule can have
+    // -- the nearer endpoint pulled towards the lens by the radius -- and
+    // the fragment shader declares its depth [[depth(greater)]]: every hit
+    // it finds is at or behind this, so the hardware can test this depth
+    // against the buffer first and skip fragments that a nearer root has
+    // already covered. With the previous z = 0 (the near plane) nothing was
+    // ever skipped, and a dense nest was shading its hidden layers in full.
+    const float3 fwd = U.cam[2];
+    const float3 nearEnd = (ca.w <= cb.w) ? a : b;
+    const float4 cn = U.viewProj * float4(nearEnd - fwd * (rBound * 1.02 + 1e-3), 1.0);
+    float zq = 0.0;
+    if (cn.w > 0.001) zq = clamp((cn.z / cn.w) * 0.5 + 0.5, 0.0, 1.0);
+    o.pos = float4(p, zq, 1.0);
     return o;
 }
 
@@ -337,7 +376,9 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     constexpr sampler noiseSmp(mag_filter::linear, min_filter::linear,
                                address::repeat, mip_filter::linear);
 
-    float2 ndc = in.ndc;
+    // From the pixel, not the interpolated corner value: the same ray for
+    // a pixel whatever quad it came in on, to the last bit.
+    float2 ndc = float2(in.pos.x / U.res.x * 2.0 - 1.0, 1.0 - in.pos.y / U.res.y * 2.0);
     ndc.x *= U.res.x / U.res.y;
     float3 rd = normalize(U.cam * float3(ndc * tan(U.fov), 1.0));
     float3 ro = U.eye.xyz;
@@ -352,6 +393,25 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
 
     const float MAX_DIST = 200.0;
     int   prim = primT[si];
+    // The radius floor, capsules only: a root projecting thinner than
+    // U.minRadiusPx is traced at that thickness and its radiance scaled by
+    // the true/floored ratio -- the energy of the hairline spread over one
+    // steady pixel rather than landing on it some frames and missing it on
+    // others. Measured at the nearer endpoint, the way the vertex shader
+    // sizes the quad. (Against the dark fog this reads as coverage; there
+    // is no blending on this pass to do it exactly.)
+    float coverage = 1.0;
+    if (U.minRadiusPx > 0.0 && prim == 0) {
+        const float wa = (U.viewProj * float4(a, 1.0)).w;
+        const float wb = (U.viewProj * float4(b, 1.0)).w;
+        const float minW = max(min(wa, wb), 0.001);
+        const float f = 1.0 / tan(U.fov);
+        const float rpx = r * f / minW * U.res.y * 0.5;
+        if (rpx < U.minRadiusPx) {
+            coverage = max(rpx / U.minRadiusPx, 0.02);
+            r = U.minRadiusPx * minW / (f * U.res.y * 0.5);
+        }
+    }
     float4 aux = primA[si];
 
     float3 p, n;
@@ -432,19 +492,33 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     if (U.detailTint > 0.0) albedo *= segmentTint(si, U.detailTint);
 
     // Fibre detail: tilt the normal and record the field for the break-up below.
+    // Faded with distance (U.detailFadePx): once a noise cell projects to
+    // about a pixel the tilted normals no longer describe fibres, only
+    // which side of a texel the sample happened to land on this frame, and
+    // that lands differently every frame the camera moves. Smooth is what a
+    // far root looks like anyway.
     float detail = 0.5;
-    if (U.detailStrength > 0.0 || U.detailRough > 0.0)
+    float detailK = 1.0;
+    if (U.detailFadePx > 0.0) {
+        const float w = max((U.viewProj * float4(p, 1.0)).w, 0.001);
+        const float f = 1.0 / tan(U.fov);
+        const float cellPx = (1.0 / max(U.detailScale, 1e-3)) * f / w * U.res.y * 0.5;
+        detailK = smoothstep(U.detailFadePx, U.detailFadePx * 2.0, cellPx);
+    }
+    const float detStr   = U.detailStrength * detailK;
+    const float detRough = U.detailRough * detailK;
+    if (detStr > 0.0 || detRough > 0.0)
         n = detailNormal(p, n, axis, U.detailScale, U.detailStretch,
-                         U.detailStrength, noiseTex, noiseSmp, detail);
+                         detStr, noiseTex, noiseSmp, detail);
 
     // Fibres also catch the light unevenly along their length. Modulating the
     // specular response by the same field is what turns one continuous highlight
     // running the length of a root into a broken, strand-wise one -- and an
     // unbroken specular band down a cylinder is most of what "plastic" means.
-    const float detailSpec = 1.0 + (detail - 0.5) * 2.0 * U.detailRough;
+    const float detailSpec = 1.0 + (detail - 0.5) * 2.0 * detRough;
     // Darken where the fibres dip. A crevice is shaded by its own walls, which
     // nothing else in this shader accounts for at this scale.
-    albedo *= 1.0 - U.detailRough * 0.35 * (1.0 - detail);
+    albedo *= 1.0 - detRough * 0.35 * (1.0 - detail);
 
     // The indirect (environment) contribution, kept separate from the direct
     // light so the fog pass can attenuate it by the screen-space AO without
@@ -540,8 +614,8 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     // unchanged and the fog treats it as it would any surface. A started
     // set is lit only behind its front.
     const float litScale = mix(D.unlitLevel, 1.0, saturate(D.lit) * front);
-    color    *= litScale;
-    indirect *= litScale;
+    color    *= litScale * coverage;
+    indirect *= litScale * coverage;
 
     // Alpha carries the fraction of this pixel's radiance that came from the
     // environment rather than from a light. The fog pass multiplies exactly

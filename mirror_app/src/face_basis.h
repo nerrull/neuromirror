@@ -60,6 +60,16 @@ public:
     // so a caller fitting 80 of 100 identity modes can pass either length.
     void reconstruct(const std::vector<float>& alpha, const std::vector<float>& expr,
                      std::vector<float>& out) const;
+    // The same, split in two for a caller that holds one identity and
+    // evaluates many expressions against it (a replayed face track, one
+    // frame after another): reconstructIdentity() is neutral + identity,
+    // done once, and addExpression() lays a frame's expression over that
+    // -- the identity modes are twice the expression modes and never
+    // change through a sitting, so this is ~3x less than reconstruct() per
+    // frame. `base` must be what reconstructIdentity() produced.
+    void reconstructIdentity(const std::vector<float>& alpha, std::vector<float>& out) const;
+    void addExpression(const std::vector<float>& base, const std::vector<float>& expr,
+                       std::vector<float>& out) const;
 
     // The same evaluation restricted to the 68 landmark points (68*3). This is
     // what the fitter iterates on -- reconstructing 2056 verts to compare 68

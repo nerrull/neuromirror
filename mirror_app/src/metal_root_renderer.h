@@ -91,6 +91,13 @@ public:
         // the march from 17 ms to 4.5. The march is by far the most expensive
         // thing in the fog, so this is the knob that pays for all of it.
         int   downscale     = 2;
+        // Mip level of the noise volume the march samples. A march step at
+        // this scale spans many texels, so level 0 is not more detail, it
+        // is more cache misses: the fetches are what the march costs, and
+        // level 2 (32^3, 32 KB) reads the same field a quarter of the
+        // texels at a time. The finest octave has a period of 16 texels at
+        // level 0, so it survives to level 2 and is gone by 3.
+        float noiseLod      = 2.0f;
         float anisotropy    = 0.55f;
         int   noiseType     = 0;
     };
@@ -222,6 +229,13 @@ public:
         float stretch  = 7.0f;    // elongation along the root axis
         float rough    = 0.45f;   // specular / roughness break-up
         float tint     = 0.14f;   // per-segment albedo jitter
+        // Distance fade, in *output* pixels (scaled by post.ssaa internally):
+        // one noise cell (1/scale world units) projecting smaller than this
+        // gets no detail, full detail from twice this up. Without it the
+        // fibres of a far root are sampled finer than the pixel grid and
+        // their normals crawl every frame the camera moves -- the largest
+        // single source of orbit shimmer measured by --seqshot. 0 = off.
+        float fadePx   = 1.0f;
     };
     // Screen-space ambient occlusion over the geometry pass's depth buffer.
     struct AOParams {
@@ -397,6 +411,10 @@ public:
     // the face pass.
     static constexpr int kFaceFloats = 13;
     void uploadFaceMesh(const std::vector<float>& interleaved);
+    // Overwrite one run of the face mesh (floats, offset into the last
+    // uploadFaceMesh) -- a replayed bank face moving on its masks, without
+    // rebuilding every other mask's triangles. Ignored if it does not fit.
+    void patchFaceMesh(size_t offsetFloats, const std::vector<float>& interleaved);
 
     // Debug spawn-point markers (RootScene::debugSpawnMarkers): same
     // kFaceFloats layout and pipeline as the face mesh, uploaded to its own
@@ -466,11 +484,25 @@ public:
     float instanceCullPx = 2.0f;   // skip systems whose bound projects smaller than this
     bool  subpixelCull   = true;   // drop sub-pixel capsules in the vertex shader
     float lodBias        = 1.0f;   // >1 favours coarser LODs sooner (cheaper)
+    // Anti-shimmer for thin roots: the smallest projected radius a capsule
+    // is drawn at, in *output* pixels (scaled by post.ssaa internally), its
+    // shading dimmed by true/floored radius so a sub-pixel root reads as a
+    // steady faint line instead of flickering in and out between samples
+    // as the camera orbits. 0 = off (the old behaviour). RootGeomU::
+    // minRadiusPx.
+    float minRadiusPx    = 0.0f;
 
     // Stats from the most recent render() (for UI / benchmarking).
     int  lastVisibleInstances = 0;
     int  lastCulledInstances  = 0;
     long lastDrawnSegments    = 0;
+    // GPU time per render pass (dev tooling: --seqshot's frame-cost line).
+    // On, each render() stamps a timestamp at every pass boundary; call
+    // resolvePassTimes() once the command buffer has completed to read them.
+    // Not free; leave off in the show.
+    bool profilePasses = false;
+    struct PassTime { std::string name; double ms; };
+    std::vector<PassTime> resolvePassTimes();
 
     // Encode both passes into cb; returns the final fogged colour texture.
     id<MTLTexture> render(id<MTLCommandBuffer> cb,

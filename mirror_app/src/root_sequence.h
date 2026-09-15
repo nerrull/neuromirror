@@ -174,6 +174,16 @@ struct RootSequenceParams {
     int   reveal_structures       = 0;
     int   reveal_min_structures   = 3;
     int   reveal_max_structures   = 12;
+    // What the other structures are made of, and whether their faces move.
+    // bank_plants: structure k is the saved plant of the sitting on its mask
+    // 0 (captures/<id>/roots.bin, RootScene::setBankPlants) rather than a
+    // seeded throwaway growth; a capture with no plant falls back to the
+    // seed either way. bank_replay: every bank face on a drawn mask plays
+    // its own sitter's recorded head movement (track.bin, BankFacePlayback)
+    // instead of holding the capture's one instant. Both read at the deal
+    // (Transition entry), not per frame.
+    bool  bank_plants             = true;
+    bool  bank_replay             = true;
 
     // --- Orbit -------------------------------------------------------------
     float orbit_rate          = 0.08f;   // rad/s

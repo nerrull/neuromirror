@@ -278,4 +278,13 @@ extern bool g_have_mask;
 extern mirror::DstRect g_mask_bbox;
 
 extern bool  g_face_size_on;
-extern float g_face_size;
+// The size follows the person's distance: between `near` and `far` (the
+// tracked head's half-height in the camera frame, the proxy the sound's
+// proximity uses too -- the depth stream is off) the on-screen half-height
+// runs from g_face_size_near to g_face_size_far, linearly in distance,
+// held at the ends beyond them.
+extern float g_face_size_near, g_face_size_far;
+extern float g_face_near_hy, g_face_far_hy;
+// The on-screen half-height the placement is asking for at the current
+// distance (core_frame.h's PlaceScale() is the resample that gets there).
+float FaceSizeTarget();

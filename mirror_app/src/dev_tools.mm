@@ -14,6 +14,9 @@
 #include "face_fit.h"
 #include "root_scene.h"
 #include "root_sequence.h"
+#include "root_face_sequence.h"
+#include "root_structure.h"
+#include "face_track.h"
 #include "transition_scene.h"
 #include "fit_view_scene.h"
 #include "screen_layout.h"
@@ -25,6 +28,8 @@
 #include "LeafMesh.h"
 #include "dev_tools.h"
 #include "core_frame.h"
+
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <chrono>
@@ -300,6 +305,26 @@ static void applyGrowthFields(RootScene& roots,
 // RGBA16F texture -> binary PPM. `encoded` when the composite pass has already
 // made the texture display-referred, in which case applying gamma again would
 // wash it out.
+// The rendered frame as per-pixel luminance in [0,1] (linear), for the
+// frame-to-frame comparisons that want numbers rather than a file.
+static bool readTextureLuma(id<MTLTexture> tex, int W, int H, std::vector<float>& out) {
+    std::vector<uint16_t> px((size_t)W * H * 4);
+    [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
+       fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    auto h2f = [](uint16_t h) {
+        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, bits;
+        if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
+        float f; __builtin_memcpy(&f, &bits, 4); return f;
+    };
+    out.resize((size_t)W * H);
+    for (size_t i = 0; i < out.size(); ++i) {
+        const uint16_t* p = &px[i * 4];
+        float r = h2f(p[0]), g = h2f(p[1]), b = h2f(p[2]);
+        out[i] = std::min(1.f, std::max(0.f, 0.2126f * r + 0.7152f * g + 0.0722f * b));
+    }
+    return true;
+}
+
 static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
                             bool encoded) {
     std::vector<uint16_t> px((size_t)W * H * 4);
@@ -361,6 +386,7 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "vignette")   P.vignette = v;
         else if (k == "exposure")   P.exposure = v;
         else if (k == "ssaa")       P.ssaa = (int)v;
+        else if (k == "minPx")      roots.renderer().minRadiusPx = v;
         else if (k == "ao")         A.enabled = v != 0.f;
         else if (k == "aoInt")      A.intensity = v;
         else if (k == "aoRad")      A.radius = v;
@@ -378,6 +404,7 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "detStr")     D.strength = v;
         else if (k == "detScale")   D.scale = v;
         else if (k == "detStretch") D.stretch = v;
+        else if (k == "detFade")    D.fadePx = v;
         else if (k == "detRough")   D.rough = v;
         else if (k == "detTint")    D.tint = v;
         else if (k == "mode")       roots.renderer().shaderMode =
@@ -391,6 +418,10 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "pulse")      roots.renderer().pulse.enabled = v != 0.f;
         else if (k == "vis")        roots.renderer().fog.visibility = v;
         else if (k == "fogH")       roots.renderer().fog.heightScale = v;
+        else if (k == "dof")        P.dof = v != 0.f;
+        else if (k == "fogLod")     roots.renderer().fog.noiseLod = v;
+        else if (k == "fogDs")      roots.renderer().fog.downscale = (int)v;
+        else if (k == "fogSteps")   roots.renderer().fog.steps = (int)v;
         else if (k == "fogStart")   { roots.renderer().fog.startAuto = false;
                                       roots.renderer().fog.startDist = v; }
         else if (k == "fogFrac")    roots.renderer().fog.startFrac = v;
@@ -450,6 +481,8 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "targetY")    roots.target[1] = v;
         else if (k == "focusMask")  roots.focusMask = (int)v;
         else if (k == "fogDither")  P.fogDither = v;
+        else if (k == "fogDrift")   roots.renderer().fog.driftSpeed = v;
+        else if (k == "dither")     P.dither = v != 0.f;
         else if (k == "lightMode")  roots.lightMode = (RootScene::LightMode)(int)v;
         else if (k == "lightFocus") roots.lightFocus = (RootScene::LightFocus)(int)v;
         else if (k == "lightX")     roots.lightDir[0] = v;
@@ -2140,11 +2173,23 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 // SEQSHOT_POST takes the same keys as GROWSHOT_POST, SEQSHOT_FACES=<amount>
 // deals test identities out so the structures wear different faces,
 // SEQSHOT_STRUCTURES=<n> is how many stand around (reveal_structures, the
-// operator's count -- there is no bank here), SEQSHOT_SEQ overrides the
-// sequence's framing knobs (see below), and SEQSHOT_REALTIME=1 runs Face ->
-// Turn at the show's own timings and 60 fps to measure Grow's real length
-// against what the params promise. Also reports how long the variations took
-// to bake, which is the one-off stall the plan accepts on the first Orbit.
+// operator's count -- there is no bank here unless SEQSHOT_BANK=1, which
+// deals captures/ onto the masks exactly as the show does: faces, each
+// sitting's saved plant for its structure and each sitting's head-movement
+// track replayed on its face), SEQSHOT_SAVE_PLANT=<id> writes the plant this
+// run grew to captures/<id>/roots.bin at the Grow -> Turn cut (what the show
+// does under the sitting's own capture id -- so a bank can be seeded from
+// here), SEQSHOT_SEQ overrides the sequence's framing knobs (see below), and
+// SEQSHOT_REALTIME=1 runs Face -> Turn at the show's own timings and 60 fps
+// to measure Grow's real length against what the params promise. Once the
+// whole hood is lit it also prints the frame's cost with everything standing
+// -- GPU ms per render pass (MetalRootRenderer::profilePasses), CPU ms of the
+// scene step -- which is the number to run at the installation's own size
+// (1080 1920) with SEQSHOT_BANK=1 and SEQSHOT_POST="bloom=0,dof=0" (the
+// show preset) before touching anything in the renderer for speed; and the
+// orbit's shimmer figure (below). Also
+// reports how long the variations took to bake, which is the one-off stall
+// the plan accepts on the first Orbit.
 int seqshot(const char* prefix, int W, int H,
             const std::vector<std::pair<std::string, std::string>>& fields) {
     MetalContext ctx;
@@ -2209,6 +2254,7 @@ int seqshot(const char* prefix, int W, int H,
                 else if (k == "orbitMax")   sp.orbit_max_radius = v;
                 else if (k == "orbitZoom")  sp.orbit_zoom = v;
                 else if (k == "orbitLift")  sp.orbit_target_lift = v;
+                else if (k == "orbitRate")  sp.orbit_rate = v;
                 else if (k == "pulseLag")   sp.reveal_pulse_lag = v;
                 else fprintf(stderr, "seqshot: unknown SEQSHOT_SEQ key '%s'\n", k.c_str());
             }
@@ -2247,6 +2293,53 @@ int seqshot(const char* prefix, int W, int H,
     if (mouthJawIdx < 0)
         fprintf(stderr, "seqshot: mouth-open: no mode found in face_basis.bin; the mouth-open "
                         "checks below are skipped\n");
+    // SEQSHOT_BANK=1: the real bank, dealt the way main.mm's dealBankFaces
+    // does it (newest first, as many as the chain and the hood can wear),
+    // with each capture's plant and track alongside -- the headless check
+    // that a saved plant stands up as a structure and a saved track moves
+    // its face.
+    BankFacePlayback bankSeq;
+    if (getenv("SEQSHOT_BANK") && atoi(getenv("SEQSHOT_BANK")) != 0) {
+        const int N = std::max(1, roots.simParams().N);
+        const int hood = std::max(sp.reveal_max_structures, sp.reveal_structures);
+        const int want = (N - 1) + std::max(0, hood) * N;
+        const std::vector<std::string> ids = mirror::ListCaptures();
+        std::vector<mirror::FaceCapture> bank;
+        std::vector<mirror::FaceTrack> tracks;
+        std::vector<mirror::RootStructure> plants;
+        for (auto it = ids.rbegin(); it != ids.rend() && (int)bank.size() < want; ++it) {
+            mirror::FaceCapture cap;
+            std::string err;
+            if (!mirror::LoadCapture(*it, cap, err)) { fprintf(stderr, "seqshot: bank: %s\n", err.c_str()); continue; }
+            cap.film.clear();
+            if (mouthBasis.valid()) mirror::SquareCaptureToNeutral(cap, mouthBasis.neutral());
+            mirror::FaceTrack track;
+            mirror::RootStructure plant;
+            if (!mirror::LoadFaceTrack(*it, track, err) && !err.empty())
+                fprintf(stderr, "seqshot: bank: %s\n", err.c_str());
+            if (!mirror::LoadRootStructure(*it, plant, err) && !err.empty())
+                fprintf(stderr, "seqshot: bank: %s\n", err.c_str());
+            bank.push_back(std::move(cap));
+            tracks.push_back(std::move(track));
+            plants.push_back(std::move(plant));
+        }
+        roots.assignBankFaces(bank, sp.reveal_max_structures, sp.reveal_min_structures,
+                              sp.reveal_structures);
+        std::vector<mirror::RootStructure> dealt(roots.structureFaces().size());
+        int withPlant = 0, withTrack = 0;
+        for (size_t k = 0; k < dealt.size(); ++k) {
+            const auto& idxs = roots.structureFaces()[k].captureIdx;
+            if (idxs.empty() || idxs[0] < 0 || idxs[0] >= (int)plants.size()) continue;
+            if (plants[size_t(idxs[0])].valid()) { dealt[k] = plants[size_t(idxs[0])]; ++withPlant; }
+        }
+        for (const auto& t : tracks) withTrack += t.valid() ? 1 : 0;
+        roots.setBankPlants(std::move(dealt));
+        if (mouthBasis.valid()) bankSeq.begin(tracks, mouthBasis);
+        printf("seqshot: bank: %zu captures dealt, %zu structures (%d with their own plant), "
+               "%d faces with a track\n",
+               bank.size(), roots.structureFaces().size(), withPlant, withTrack);
+    }
+    const char* savePlantId = getenv("SEQSHOT_SAVE_PLANT");
     // The pacing the sequence derived, and the pose it will grow from --
     // the numbers behind the Grow stills.
     {
@@ -2278,6 +2371,11 @@ int seqshot(const char* prefix, int W, int H,
     RootSequence::Stage last = seq.stage();
     double bakeSeconds = 0.0, orbitT0 = -1.0, growT0 = -1.0, growStartedT = -1.0;
     bool topShot = false, fullShot = false, allShot = false, wantOutro = false;
+    int shimmerFrames = 0, shimmerPairs = 0;
+    double orbitGpuMs = 0, orbitEncMs = 0, orbitAdvMs = 0, lastAdvanceMs = 0;
+    std::vector<std::pair<std::string, double>> orbitPass;
+    double shimmerDiff = 0.0, shimmerLuma = 0.0;
+    std::vector<float> shimmerPrev, shimmerPrev2;
     bool turnLitBad = false;   // any structure lit while Turn is running (should never be)
     int  firstLit = -1;         // the structure the first marker lit
     double firstLitT = -1.0;    // ...and when
@@ -2344,10 +2442,37 @@ int seqshot(const char* prefix, int W, int H,
         const double stepSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (stepSecs > bakeSeconds) bakeSeconds = stepSecs;   // the hood's bake stall lands wherever placeHood() runs (Turn's entry)
         driveMouth(clock);
-        roots.advance(dt);
+        bankSeq.step(roots, clock, dt);
+        {
+            const auto a0 = std::chrono::steady_clock::now();
+            roots.advance(dt);
+            lastAdvanceMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a0).count();
+        }
         if (seq.stage() != last) {
             printf("seqshot: frame %d  %s -> %s\n", frame, RootSequence::stageName(last),
                    RootSequence::stageName(seq.stage()));
+            // SEQSHOT_SAVE_PLANT: the plant as grown, at the same edge the
+            // show saves a sitting's (main.mm's saveSittingPlant).
+            if (last == RootSequence::Stage::Grow && savePlantId && *savePlantId) {
+                mirror::RootStructure plant;
+                std::string perr;
+                mkdir(mirror::CaptureDir().c_str(), 0755);
+                mkdir((mirror::CaptureDir() + "/" + savePlantId).c_str(), 0755);
+                if (!roots.simDone())
+                    printf("seqshot: plant not saved (growth did not finish)\n");
+                else if (!roots.livePlant(plant))
+                    printf("seqshot: plant not saved (nothing grown)\n");
+                else if (plant.id = savePlantId, !mirror::SaveRootStructure(plant, perr))
+                    fprintf(stderr, "seqshot: plant save failed: %s\n", perr.c_str());
+                else {
+                    struct stat st;
+                    const std::string path = mirror::CaptureDir() + "/" + savePlantId + "/roots.bin";
+                    const long bytes = stat(path.c_str(), &st) == 0 ? (long)st.st_size : -1;
+                    printf("seqshot: saved plant %s (%zu nodes, %zu segs, %zu masks, %ld bytes)\n",
+                           plant.id.c_str(), plant.nodeCount(), plant.segs.size() / 2,
+                           plant.masks.size(), bytes);
+                }
+            }
             // The Face pose as Grow takes over, and the Grow pose as the
             // Turn takes over (the whole chain grown, the camera as far back
             // as the tip pushed it).
@@ -2451,6 +2576,14 @@ int seqshot(const char* prefix, int W, int H,
                 if (lastMask >= 0) {
                     printf("seqshot: hop to mask %d ended at %.1f s (%.1f s in the hop): cam %.0f deg off its normal, r=%.1f\n",
                            lastMask, clock - growT0, clock - hopT0, camOffNormalDeg(lastMask), roots.radius);
+                    // The hop as the sim reports it: the root type it was
+                    // dealt and the dwell that type actually got.
+                    for (const auto& hr : roots.hopReports())
+                        if (hr.mask == lastMask)
+                            printf("seqshot: hop %d: type %d, travel %.1f d, dwell %.1f d (asked %.1f), %d nodes%s\n",
+                                   hr.mask, roots.simParams().typeOf(hr.mask) + 1, hr.travelDays,
+                                   hr.dwellDays, roots.simParams().dwellDaysFor(hr.mask), hr.nodes,
+                                   hr.forced ? " (forced)" : "");
                     char tag[32];
                     snprintf(tag, sizeof(tag), "hop%d_end", lastMask);
                     if (!snap(tag)) return 1;
@@ -2567,8 +2700,77 @@ int seqshot(const char* prefix, int W, int H,
                 printf("seqshot: all %d structures lit, %.1f s into the orbit\n", vis, clock - orbitT0);
                 if (!snap("orbit_all_lit")) return 1;
             }
-            // A few seconds on from that, then done.
-            if (allShot && clock - orbitT0 > 4.0) {
+            // Shimmer: with everything lit and the orbit moving, the mean
+            // per-pixel luminance change between consecutive rendered
+            // frames over the next kShimmerFrames, against the mean
+            // luminance. The orbit's own step is tiny, so a steady picture
+            // changes very little frame to frame; thin roots flashing in and
+            // out between samples show up here as change out of proportion
+            // to the camera move. Compare SEQSHOT_POST=minPx=0 against the
+            // default (the capsule radius floor, MetalRootRenderer::minRadiusPx).
+            constexpr int kShimmerFrames = 30;
+            if (allShot && shimmerFrames < kShimmerFrames) {
+                @autoreleasepool {
+                    id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                    const auto c0 = std::chrono::steady_clock::now();
+                    roots.renderer().profilePasses = true;
+                    id<MTLTexture> tex = roots.render(cb);
+                    const auto c1 = std::chrono::steady_clock::now();
+                    [cb commit]; [cb waitUntilCompleted];
+                    roots.renderer().profilePasses = false;
+                    for (const auto& pt : roots.renderer().resolvePassTimes()) {
+                        auto it = std::find_if(orbitPass.begin(), orbitPass.end(),
+                                               [&](const auto& q) { return q.first == pt.name; });
+                        if (it == orbitPass.end()) orbitPass.push_back({pt.name, pt.ms});
+                        else it->second += pt.ms;
+                    }
+                    // The frame's cost with the whole hood standing: GPU time
+                    // of the render, CPU time of encoding it, CPU time of the
+                    // sim/scene step. Sums to a frame budget; 16.7 ms is 60.
+                    orbitGpuMs += (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
+                    orbitEncMs += std::chrono::duration<double, std::milli>(c1 - c0).count();
+                    orbitAdvMs += lastAdvanceMs;
+                    std::vector<float> luma;
+                    if (tex && readTextureLuma(tex, W, H, luma)) {
+                        // Second temporal difference, not first: a picture
+                        // sliding steadily under the orbit changes every
+                        // pixel smoothly (first difference ~ constant), and
+                        // that cancels here; a pixel that lands on a thin
+                        // root one frame and misses it the next does not.
+                        if (!shimmerPrev.empty() && !shimmerPrev2.empty()) {
+                            double d = 0.0, l = 0.0;
+                            for (size_t i = 0; i < luma.size(); ++i) {
+                                d += std::fabs(luma[i] - 2.f * shimmerPrev[i] + shimmerPrev2[i]);
+                                l += luma[i];
+                            }
+                            shimmerDiff += d / double(luma.size());
+                            shimmerLuma += l / double(luma.size());
+                            ++shimmerPairs;
+                        }
+                        shimmerPrev2.swap(shimmerPrev);
+                        shimmerPrev.swap(luma);
+                    }
+                }
+                if (++shimmerFrames == kShimmerFrames) {
+                    const MetalRootRenderer& R = roots.renderer();
+                    printf("seqshot: orbit frame cost over %d frames: gpu %.2f ms, encode %.2f ms, "
+                           "advance %.2f ms  [%dx%d ssaa %d, visible %d, drawnSegs %ld]\n",
+                           kShimmerFrames, orbitGpuMs / kShimmerFrames, orbitEncMs / kShimmerFrames,
+                           orbitAdvMs / kShimmerFrames, W, H, R.post.ssaa, R.lastVisibleInstances,
+                           R.lastDrawnSegments);
+                    printf("seqshot: orbit passes:");
+                    for (const auto& q : orbitPass) printf("  %s %.2f", q.first.c_str(), q.second / kShimmerFrames);
+                    printf("  (ms)\n");
+                }
+                if (shimmerFrames == kShimmerFrames && shimmerPairs > 0)
+                    printf("seqshot: orbit shimmer over %d frames: mean |d2L| %.5f per frame, mean L %.4f "
+                           "(ratio %.4f)  [minRadiusPx %.2f, ssaa %d]\n",
+                           shimmerPairs, shimmerDiff / shimmerPairs, shimmerLuma / shimmerPairs,
+                           shimmerDiff / std::max(1e-9, shimmerLuma),
+                           roots.renderer().minRadiusPx, roots.renderer().post.ssaa);
+            }
+            // A few seconds on from that (and the shimmer frames in), then done.
+            if (allShot && clock - orbitT0 > 4.0 && shimmerFrames >= kShimmerFrames) {
                 // Where the lens is against the hood, for judging the framing
                 // numbers rather than the picture alone.
                 const float ce = std::cos(roots.elevation), se = std::sin(roots.elevation);

@@ -78,6 +78,45 @@ struct SimParams {
     float lateralWeight = 0.20f;
     float dwellWeight        = 0.92f;
     float dwellLateralWeight = 0.92f;
+    // Root types: up to three dwell settings, dealt to the hops in turn
+    // (hop 1 gets type 1, hop 2 type 2, ... round again), so the nests down
+    // the chain are not all the same wrap. Type 1 is dwellDays/dwellWeight/
+    // dwellLateralWeight above; types 2 and 3 have their own here, and
+    // rootTypes says how many are in play (1 = every hop the same, as it
+    // always was). Only the dwell differs: one species, one travel law, so
+    // the pacing (commonAge, growthStepEstimate) is unchanged apart from
+    // the longest dwell being the one the even-nest age is padded to.
+    int   rootTypes          = 1;
+    float dwell2Days         = 18.0f;
+    float dwell2Weight       = 0.92f;
+    float dwell2Lateral      = 0.92f;
+    float dwell3Days         = 18.0f;
+    float dwell3Weight       = 0.92f;
+    float dwell3Lateral      = 0.92f;
+    // The dwell hop h (1-based, mask h) gets; hop 0 and below is type 1.
+    int   typeOf(int h) const {
+        const int n = rootTypes < 1 ? 1 : (rootTypes > 3 ? 3 : rootTypes);
+        return h <= 0 ? 0 : (h - 1) % n;
+    }
+    float dwellDaysFor(int h) const {
+        const int t = typeOf(h);
+        return t == 1 ? dwell2Days : t == 2 ? dwell3Days : dwellDays;
+    }
+    float dwellWeightFor(int h) const {
+        const int t = typeOf(h);
+        return t == 1 ? dwell2Weight : t == 2 ? dwell3Weight : dwellWeight;
+    }
+    float dwellLateralFor(int h) const {
+        const int t = typeOf(h);
+        return t == 1 ? dwell2Lateral : t == 2 ? dwell3Lateral : dwellLateralWeight;
+    }
+    // The longest dwell any hop gets -- what the even-nest age pads to.
+    float maxDwellDays() const {
+        float m = dwellDays;
+        if (rootTypes >= 2) m = m > dwell2Days ? m : dwell2Days;
+        if (rootTypes >= 3) m = m > dwell3Days ? m : dwell3Days;
+        return m;
+    }
     float sigma        = 0.35f;    // angular jitter
     float viewCylLen   = 8.0f;
     // Ceiling on the travel half of a hop. The budget itself is derived from
@@ -192,6 +231,9 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("lateralWeight", p.lateralWeight);
     f("dwellWeight", p.dwellWeight);
     f("dwellLateralWeight", p.dwellLateralWeight);
+    f("rootTypes", p.rootTypes);
+    f("dwell2Days", p.dwell2Days); f("dwell2Weight", p.dwell2Weight); f("dwell2Lateral", p.dwell2Lateral);
+    f("dwell3Days", p.dwell3Days); f("dwell3Weight", p.dwell3Weight); f("dwell3Lateral", p.dwell3Lateral);
     f("sigma", p.sigma);        f("viewCylLen", p.viewCylLen);
     f("maxHopDays", p.maxHopDays); f("travelSlack", p.travelSlack);
     f("evenNests", p.evenNests);

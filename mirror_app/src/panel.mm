@@ -855,6 +855,25 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 }
                                 ui::SliderInt("reveal min structures", &S.reveal_min_structures, 0, 32);
                                 ui::SliderInt("reveal max structures", &S.reveal_max_structures, 1, 32);
+                                ui::Checkbox("bank plants", &S.bank_plants);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Each other structure is the plant its own\n"
+                                        "mask-0 sitter grew (captures/<id>/roots.bin),\n"
+                                        "saved when their Grow finished. Off, or for a\n"
+                                        "capture with no saved plant: a seeded throwaway\n"
+                                        "growth of the current parameters. Read at the\n"
+                                        "deal (Transition entry).");
+                                }
+                                ui::Checkbox("bank faces replay", &S.bank_replay);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Every bank face on a drawn, lit mask plays back\n"
+                                        "its own sitter's recorded head movement\n"
+                                        "(captures/<id>/track.bin), looped, instead of\n"
+                                        "holding the capture's one instant. Off: still\n"
+                                        "faces. Read at the deal (Transition entry).");
+                                }
                             }
                             ui::EndHeader();
                             ui::BeginHeader("orbit", false);
@@ -1665,19 +1684,35 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "is deliberate -- refiltering the face every frame is\n"
                         "the noise that mode exists to remove.");
                 }
-                ImGui::SameLine();
                 ImGui::BeginDisabled(!g_face_size_on);
-                ImGui::SetNextItemWidth(110);
-                ui::SliderFloat("size", &g_face_size, 0.05f, 0.5f, "%.2f");
+                ui::SliderFloat("size when near", &g_face_size_near, 0.05f, 0.5f, "%.2f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Half the head's height as a fraction of the frame,\n"
-                        "so 0.25 fills half the screen top to bottom.");
+                        "Half the head's height on screen as a fraction of\n"
+                        "the frame (0.25 fills half of it top to bottom) when\n"
+                        "the person is at 'near' or closer. The size follows\n"
+                        "their distance from here to 'size when far'.");
+                }
+                ui::SliderFloat("size when far", &g_face_size_far, 0.05f, 0.5f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("The same, at 'far' or beyond.");
+                }
+                ui::SliderFloat("near (head height)", &g_face_near_hy, 0.05f, 0.5f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How big the head looks to the camera (half-height,\n"
+                        "fraction of the frame) when the person counts as\n"
+                        "near. The readout below shows the live value; stand\n"
+                        "where 'near' should be and copy it in.");
+                }
+                ui::SliderFloat("far (head height)", &g_face_far_hy, 0.02f, 0.4f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("The same, where the person counts as far.");
                 }
                 ImGui::EndDisabled();
                 if (g_face_size_on && HaveCrop()) {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("x%.2f", PlaceScale());
+                    ImGui::TextDisabled("head %.2f -> size %.2f  x%.2f", g_head_hy,
+                                        FaceSizeTarget(), PlaceScale());
                     if (g_head_mode != (int)HeadMode::Centred) {
                         ImGui::SameLine();
                         ImGui::TextDisabled("(in place)");
@@ -3166,6 +3201,30 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("dwell days", &SP.dwellDays, 2.f, 60.f);
                     ImGui::SameLine();
                     ui::SliderFloat("hop days", &SP.maxHopDays, 10.f, 160.f);
+                    ui::SliderInt("root types", &SP.rootTypes, 1, 3);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Up to three dwell settings dealt to the hops in\n"
+                            "turn (hop 1 type 1, hop 2 type 2, ... round again).\n"
+                            "Type 1 is dwell / dwell days / dwell lateral above\n"
+                            "and in advanced; types 2 and 3 are below. 1 = every\n"
+                            "hop the same. Applies on regrow.");
+                    }
+                    // Gated, not if'd: declared every frame (PANEL.md).
+                    ui::BeginGate(SP.rootTypes >= 2);
+                    ui::SliderFloat("type 2 dwell days", &SP.dwell2Days, 2.f, 60.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("type 2 dwell", &SP.dwell2Weight, 0.f, 1.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("type 2 dwell lateral", &SP.dwell2Lateral, 0.f, 1.f);
+                    ui::EndGate();
+                    ui::BeginGate(SP.rootTypes >= 3);
+                    ui::SliderFloat("type 3 dwell days", &SP.dwell3Days, 2.f, 60.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("type 3 dwell", &SP.dwell3Weight, 0.f, 1.f);
+                    ImGui::SameLine();
+                    ui::SliderFloat("type 3 dwell lateral", &SP.dwell3Lateral, 0.f, 1.f);
+                    ui::EndGate();
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "Ceiling, not the budget. How long a hop's travel\n"
@@ -3408,6 +3467,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         8.0f / std::max(R.fog.noiseScale, 1e-3f));
                     ui::SliderFloat("drift speed", &R.fog.driftSpeed, 0.0f, 6.0f);
                     ui::SliderInt("march steps", &R.fog.steps, 4, 32);
+                    ui::SliderFloat("noise mip level", &R.fog.noiseLod, 0.0f, 4.0f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Which mip of the noise volume the march reads.\n"
+                            "Coarser is cheaper (the march is bound by these\n"
+                            "fetches) and loses nothing until about 3, where\n"
+                            "the finest octave goes.");
+                    }
+                    ui::SliderInt("volume downscale", &R.fog.downscale, 1, 4);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The volumetric integral runs at 1/this of the\n"
+                            "output. Depth-aware upsampling keeps it tight to\n"
+                            "silhouettes at 3 and 4.");
+                    }
                     ImGui::Separator();
                     ui::SliderFloat("scatter (medium albedo)", &R.fog.scatter, 0.0f, 1.5f);
                     ui::SliderFloat("anisotropy (fwd <-> back)", &R.fog.anisotropy, -0.9f, 0.9f);
@@ -3564,6 +3638,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("fibre stretch", &R.detail.stretch, 1.0f, 20.0f);
                     ui::SliderFloat("fibre break-up", &R.detail.rough, 0.0f, 1.0f);
                     ui::SliderFloat("per-root tint", &R.detail.tint, 0.0f, 0.5f);
+                    ui::SliderFloat("fibre fade px", &R.detail.fadePx, 0.0f, 6.0f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Anti-shimmer. Fibre detail is faded out on roots\n"
+                            "far enough that one fibre cell projects smaller\n"
+                            "than this many screen pixels (full detail from\n"
+                            "twice this up). Far roots go smooth instead of\n"
+                            "crawling as the camera orbits. 0 = never fade.");
+                    }
                     ImGui::Separator();
                     ui::Checkbox("ambient occlusion", &R.ao.enabled);
                     ui::SliderFloat("AO radius", &R.ao.radius, 0.2f, 6.0f);
@@ -3750,6 +3833,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::Checkbox("sub-pixel cull", &R.subpixelCull);
                     ui::SliderFloat("cull below px", &R.instanceCullPx, 0.5f, 20.0f);
                     ui::SliderFloat("LOD bias (>1 coarser)", &R.lodBias, 0.1f, 4.0f);
+                    ui::SliderFloat("min radius px", &R.minRadiusPx, 0.f, 3.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Anti-shimmer for thin roots. A capsule projecting\n"
+                            "thinner than this many screen pixels is drawn this\n"
+                            "thick and dimmed by the ratio, so a hairline root\n"
+                            "at orbit distance is a steady faint line rather\n"
+                            "than one flashing in and out as the camera moves.\n"
+                            "0 = off. Also relaxes the sub-pixel cull below it.");
+                    }
                     ImGui::Text("instances %d   visible %d   culled %d",
                                 R.instanceCount(), R.lastVisibleInstances, R.lastCulledInstances);
                     ImGui::Text("capsules drawn: %ld", R.lastDrawnSegments);

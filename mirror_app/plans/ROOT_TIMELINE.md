@@ -278,9 +278,32 @@ is the bank. Ordered by id (timestamped) = chronological.
 
 ## Baked structures
 
-"Variations": `K = reveal_max_structures` (12) throwaway `RootSim` runs with the
-current `simParams_` and seeds `seed+1..seed+K`, grown to completion, with
-their geometry (nodes/segs/radii) and planned masks cached in `RootScene`.
+**Previous sittings' own plants, first.** A sitting's finished growth is
+written to `captures/<id>/roots.bin` (`root_structure.h`: nodes/segs/radii
++ the planned masks, ~85 KB for the show's 6-mask plant) at the Grow ->
+Turn edge (`saveSittingPlant` in main.mm, only when the sim actually
+finished, keyed to the same capture id as the face and the track). The deal
+(`dealBankFaces`) loads each bank capture's plant alongside its face and
+track and hands `RootScene::setBankPlants` one per structure: structure k's
+plant is the one saved with the capture on its mask 0
+(`structureFaces()[k].captureIdx[0]`), so the hood really is earlier
+visitors' structures wearing their own faces. Behind `show/roots/bank
+plants`. A capture with no plant (pre-feature, or a Grow that timed out)
+falls back to the seeded variation for its slot; `ensureVariations` prints
+how many came from each. `--seqshot` exercises both with `SEQSHOT_BANK=1`
+and `SEQSHOT_SAVE_PLANT=<id>`.
+
+The bank's faces move too: `BankFacePlayback` (root_face_sequence.h) plays
+each bank capture's `track.bin` on its face -- delta-from-mean rotation
+over the squared capture, the same rule mask 0 gets -- for every face on a
+drawn, lit mask, each refreshed every third frame, staggered. Behind
+`show/roots/bank faces replay`. `FaceBasis::reconstructIdentity` /
+`addExpression` split the identity out so a frame is one expression pass.
+
+**The seeded fallback.** "Variations": `K = reveal_max_structures` (12)
+throwaway `RootSim` runs with the current `simParams_` and seeds
+`seed+1..seed+K`, grown to completion, with their geometry
+(nodes/segs/radii) and planned masks cached in `RootScene`.
 Cache keyed on `growGeneration()` (the existing pattern), so they are built
 once per parameter change, not per visitor. Build them lazily on the first
 Reveal, synchronously. The stall is a one-time cost per parameter change

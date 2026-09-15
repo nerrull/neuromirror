@@ -527,4 +527,19 @@ mirror::DstRect g_mask_bbox;
 // resampled to, as a fraction of the frame. Off by default, where the size is
 // simply whatever distance the person is standing at.
 bool  g_face_size_on = false;
-float g_face_size    = 0.25f;
+float g_face_size_near = 0.28f, g_face_size_far = 0.16f;
+float g_face_near_hy = 0.30f, g_face_far_hy = 0.10f;
+
+float FaceSizeTarget() {
+    // In distance, not in apparent height: apparent height goes as 1/d, so
+    // a linear ramp in it would spend most of its travel on the last step
+    // towards the lens and hardly move while someone walks up from the far
+    // end of the room. Distance is 1/hy up to the camera's constant, which
+    // cancels in the ratio.
+    const float hy = std::max(g_head_hy, 1e-3f);
+    const float nearHy = std::max(g_face_near_hy, 1e-3f), farHy = std::max(g_face_far_hy, 1e-3f);
+    const float dNear = 1.f / nearHy, dFar = 1.f / farHy, d = 1.f / hy;
+    const float t = (std::fabs(dFar - dNear) < 1e-6f) ? 0.f
+                  : std::min(1.f, std::max(0.f, (d - dNear) / (dFar - dNear)));
+    return g_face_size_near + (g_face_size_far - g_face_size_near) * t;
+}

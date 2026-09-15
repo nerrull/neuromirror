@@ -1,4 +1,6 @@
 #include "metal_root_renderer.h"
+
+#include <unistd.h>
 #include "metal_context.h"
 
 #import <Foundation/Foundation.h>
@@ -342,6 +344,11 @@ void MetalRootRenderer::buildNoiseTexture() {
     td.width = N; td.height = N; td.depth = N;
     td.usage = MTLTextureUsageShaderRead;
     td.storageMode = MTLStorageModeShared;
+    // Mipmapped, for the geometry pass (its sampler filters between levels;
+    // the fog's pins level 0). A far root's fibre lookups then average the
+    // cells under a pixel instead of picking one of them, which is where
+    // most of the orbit's normal crawl came from.
+    td.mipmapLevelCount = 1 + (NSUInteger)std::floor(std::log2((double)N));
     noiseTex_ = [device_ newTextureWithDescriptor:td];
     [noiseTex_ replaceRegion:MTLRegionMake3D(0, 0, 0, N, N, N)
                  mipmapLevel:0
@@ -349,6 +356,13 @@ void MetalRootRenderer::buildNoiseTexture() {
                    withBytes:vox.data()
                  bytesPerRow:N
                bytesPerImage:(NSUInteger)N * N];
+    id<MTLCommandQueue> q = [device_ newCommandQueue];   // once, at construction
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit generateMipmapsForTexture:noiseTex_];
+    [blit endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
 }
 
 void MetalRootRenderer::resize(int w, int h) {
@@ -362,6 +376,30 @@ void MetalRootRenderer::resize(int w, int h) {
 // colour attachment -- and writing that out five times was five chances to bind
 // a texture to the wrong index.
 namespace {
+// Pass timing (MetalRootRenderer::profilePasses): a timestamp counter
+// sample at the start and end of each render pass this frame.
+struct PassProfiler {
+    id<MTLCounterSampleBuffer> sb = nil;
+    int next = 0;
+    std::vector<std::string> names;
+    void attach(MTLRenderPassDescriptor* rp, const char* name) {
+        if (!sb || next + 2 > (int)sb.sampleCount) return;
+        MTLRenderPassSampleBufferAttachmentDescriptor* a = rp.sampleBufferAttachments[0];
+        a.sampleBuffer = sb;
+        // Fragment stage only: on a tile-based GPU the vertex stage of a
+        // later pass runs ahead, under an earlier pass's fragments, so a
+        // vertex-start stamp says when the queue got to it, not its cost.
+        a.startOfVertexSampleIndex = MTLCounterDontSample;
+        a.endOfVertexSampleIndex = MTLCounterDontSample;
+        a.startOfFragmentSampleIndex = NSUInteger(next);
+        a.endOfFragmentSampleIndex = NSUInteger(next + 1);
+        names.push_back(name);
+        next += 2;
+    }
+};
+PassProfiler* g_passProf = nullptr;
+PassProfiler& passProfiler() { static PassProfiler p; return p; }
+
 struct FSPass {
     id<MTLCommandBuffer> cb;
     id<MTLRenderPipelineState> pipe;
@@ -370,12 +408,13 @@ struct FSPass {
     id<MTLTexture> tex0 = nil, tex1 = nil, tex2 = nil, tex3 = nil;
     bool load = false;   // keep the destination's contents (the bloom up-chain)
 };
-void encodeFS(const FSPass& p) {
+void encodeFS(const FSPass& p, const char* name = "fs") {
     MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = p.dst;
     rp.colorAttachments[0].loadAction = p.load ? MTLLoadActionLoad : MTLLoadActionClear;
     rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    if (g_passProf) g_passProf->attach(rp, name);
     id<MTLRenderCommandEncoder> e = [p.cb renderCommandEncoderWithDescriptor:rp];
     [e setRenderPipelineState:p.pipe];
     [e setFragmentBytes:p.uniforms length:p.uniformBytes atIndex:0];
@@ -387,6 +426,31 @@ void encodeFS(const FSPass& p) {
     [e endEncoding];
 }
 }  // namespace
+
+std::vector<MetalRootRenderer::PassTime> MetalRootRenderer::resolvePassTimes() {
+    std::vector<PassTime> out;
+    PassProfiler& P = passProfiler();
+    if (!P.sb || P.next == 0) return out;
+    NSData* d = [P.sb resolveCounterRange:NSMakeRange(0, NSUInteger(P.next))];
+    if (!d) return out;
+    const MTLCounterResultTimestamp* ts = (const MTLCounterResultTimestamp*)d.bytes;
+    // GPU ticks to ms, from two CPU/GPU timestamp pairs taken around a
+    // short wait -- the tick rate is not documented.
+    static double nsPerTick = 0.0;
+    if (nsPerTick <= 0.0) {
+        MTLTimestamp c0 = 0, g0 = 0, c1 = 0, g1 = 0;
+        [device_ sampleTimestamps:&c0 gpuTimestamp:&g0];
+        usleep(20000);
+        [device_ sampleTimestamps:&c1 gpuTimestamp:&g1];
+        nsPerTick = (g1 > g0) ? double(c1 - c0) / double(g1 - g0) : 1.0;
+    }
+    for (size_t i = 0; i < P.names.size(); ++i) {
+        const uint64_t a = ts[2 * i].timestamp, b = ts[2 * i + 1].timestamp;
+        // An unresolved sample reads as 0.
+        out.push_back({P.names[i], (a && b && b > a) ? double(b - a) * nsPerTick * 1e-6 : 0.0});
+    }
+    return out;
+}
 
 id<MTLBuffer> MetalRootRenderer::makeBuffer(const void* data, size_t bytes) {
     if (bytes == 0) bytes = 4;   // Metal rejects zero-length buffers
@@ -476,6 +540,14 @@ void MetalRootRenderer::uploadFaceMesh(const std::vector<float>& interleaved) {
     if (faceVertCount_ > 0)
         uploadBuffer(faceBuf_, faceCap_, interleaved.data(),
                      interleaved.size() * sizeof(float));
+}
+
+void MetalRootRenderer::patchFaceMesh(size_t offsetFloats, const std::vector<float>& interleaved) {
+    if (!faceBuf_ || interleaved.empty()) return;
+    const size_t end = (offsetFloats + interleaved.size()) * sizeof(float);
+    if (end > size_t(faceVertCount_) * kFaceFloats * sizeof(float) || end > faceCap_) return;
+    memcpy((char*)faceBuf_.contents + offsetFloats * sizeof(float), interleaved.data(),
+           interleaved.size() * sizeof(float));
 }
 
 void MetalRootRenderer::uploadDebugMarkers(const std::vector<float>& interleaved) {
@@ -694,6 +766,26 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     if (!valid()) return nil;
     ensureTargets();
 
+    g_passProf = nullptr;
+    if (profilePasses) {
+        PassProfiler& P = passProfiler();
+        if (!P.sb) {
+            for (id<MTLCounterSet> cs in device_.counterSets) {
+                if (![cs.name isEqualToString:MTLCommonCounterSetTimestamp]) continue;
+                MTLCounterSampleBufferDescriptor* sd = [[MTLCounterSampleBufferDescriptor alloc] init];
+                sd.counterSet = cs;
+                sd.storageMode = MTLStorageModeShared;
+                sd.sampleCount = 64;
+                NSError* err = nil;
+                P.sb = [device_ newCounterSampleBufferWithDescriptor:sd error:&err];
+                break;
+            }
+        }
+        P.next = 0;
+        P.names.clear();
+        if (P.sb) g_passProf = &P;
+    }
+
     // --- Camera (verbatim port of RootRenderer::render) ---
     float cosEl = cosf(elevation), sinEl = sinf(elevation);
     float cosAz = cosf(azimuth),   sinAz = sinf(azimuth);
@@ -764,6 +856,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gu.detailStretch  = detail.stretch;
     gu.detailRough    = detail.rough;
     gu.detailTint     = detail.tint;
+    gu.detailFadePx   = std::max(0.f, detail.fadePx) * float(std::max(1, builtSsaa_));
     gu.keyColor = (simd_float4){env.keyColor[0] * env.keyIntensity,
                                 env.keyColor[1] * env.keyIntensity,
                                 env.keyColor[2] * env.keyIntensity, 0};
@@ -776,6 +869,12 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gu.shaderMode = (int)shaderMode;
     gu.pulseEnabled = pulse.enabled ? 1 : 0;
     gu.cullPx = subpixelCull ? 0.75f : 0.0f;
+    // In internal pixels: the floor is meant in output pixels, and the
+    // scene passes render at builtSsaa_ x that before the box resolve.
+    gu.minRadiusPx = std::max(0.f, minRadiusPx) * float(std::max(1, builtSsaa_));
+    // The floor draws what the sub-pixel cull would have dropped, so the
+    // cull only keeps its point below the floor's own threshold.
+    if (gu.minRadiusPx > 0.f) gu.cullPx = std::min(gu.cullPx, 0.2f * gu.minRadiusPx);
     int pc = paletteCount < 0 ? 0 : (paletteCount > MAX_GROUPS ? MAX_GROUPS : paletteCount);
     gu.paletteCount = pc;
     for (int i = 0; i < pc; i++) {
@@ -803,6 +902,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gp.depthAttachment.clearDepth = 1.0;
     gp.depthAttachment.storeAction = MTLStoreActionStore;
 
+    if (g_passProf) g_passProf->attach(gp, "geometry");
     id<MTLRenderCommandEncoder> ge = [cb renderCommandEncoderWithDescriptor:gp];
     [ge setRenderPipelineState:geomPipe_];
     [ge setDepthStencilState:depthState_];
@@ -1023,12 +1123,12 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         au.radius = ao.radius; au.intensity = ao.intensity; au.bias = ao.bias;
         au.samples = std::max(1, ao.samples);
         au.blurDir = 0;
-        encodeFS({cb, aoPipe_, aoTex_, &au, sizeof(au), rootDepthTex_});
+        encodeFS({cb, aoPipe_, aoTex_, &au, sizeof(au), rootDepthTex_}, "ao");
         // Separable bilateral blur, ping-ponging so neither pass reads the
         // texture it is writing.
-        encodeFS({cb, aoBlurPipe_, aoBlurTex_, &au, sizeof(au), aoTex_, rootDepthTex_});
+        encodeFS({cb, aoBlurPipe_, aoBlurTex_, &au, sizeof(au), aoTex_, rootDepthTex_}, "ao blur");
         au.blurDir = 1;
-        encodeFS({cb, aoBlurPipe_, aoTex_, &au, sizeof(au), aoBlurTex_, rootDepthTex_});
+        encodeFS({cb, aoBlurPipe_, aoTex_, &au, sizeof(au), aoBlurTex_, rootDepthTex_}, "ao blur");
     }
 
     // --- Pass 3: fog ---
@@ -1050,6 +1150,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     fu.fogSteps = fog.steps;
     fu.fogScatter = fog.scatter;
     fu.fogAnisotropy = fog.anisotropy;
+    fu.fogNoiseLod = std::max(0.f, std::min(fog.noiseLod, 6.f));
     fu.lightDir = gu.lightDir;
     fu.keyColor = gu.keyColor;
     // Two advection vectors that are deliberately not parallel and not
@@ -1071,7 +1172,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     {
         RootFogU vu = fu;
         vu.res = (simd_float2){(float)(w_ / builtFogDs_), (float)(h_ / builtFogDs_)};
-        encodeFS({cb, fogVolPipe_, fogVolTex_, &vu, sizeof(vu), rootDepthTex_, noiseTex_});
+        encodeFS({cb, fogVolPipe_, fogVolTex_, &vu, sizeof(vu), rootDepthTex_, noiseTex_}, "fog volume");
     }
 
     // --- Pass 3b: composite ---
@@ -1081,6 +1182,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     fp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
     fp.colorAttachments[0].storeAction = MTLStoreActionStore;
 
+    if (g_passProf) g_passProf->attach(fp, "fog composite");
     id<MTLRenderCommandEncoder> fe = [cb renderCommandEncoderWithDescriptor:fp];
     [fe setRenderPipelineState:fogPipe_];
     [fe setFragmentBytes:&fu length:sizeof(fu) atIndex:0];
@@ -1114,7 +1216,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
             bu.threshold = post.bloomThreshold;
             bu.radius = post.bloomRadius;
             bu.prefilter = (i == 0) ? 1 : 0;
-            encodeFS({cb, bloomDownPipe_, bloomMips_[i], &bu, sizeof(bu), src});
+            encodeFS({cb, bloomDownPipe_, bloomMips_[i], &bu, sizeof(bu), src}, "bloom down");
         }
         // Up: each level is tent-filtered and *added* into the level above it
         // (loadAction Load + additive blend), so mip0 ends up holding the sum of
@@ -1125,7 +1227,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
             bu.srcTexel = (simd_float2){1.0f / (float)src.width, 1.0f / (float)src.height};
             bu.radius = post.bloomRadius;
             encodeFS({cb, bloomUpPipe_, bloomMips_[i - 1], &bu, sizeof(bu), src,
-                      nil, nil, nil, /*load=*/true});
+                      nil, nil, nil, /*load=*/true}, "bloom up");
         }
     }
 
@@ -1181,7 +1283,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     }
     encodeFS({cb, postPipe_, postTex_, &pu, sizeof(pu),
               fogColorTex_, bloomOn ? bloomMips_[0] : fogColorTex_, rootDepthTex_,
-              haloTex});
+              haloTex}, "post");
 
     // --- Pass 6: pixel sort, datamosh, bitcrush ------------------------------
     // Codec and display artefacts on the finished picture; see
@@ -1222,7 +1324,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
             // On the very first frame there is no previous camera; the current
             // one gives a zero field, which is the honest answer.
             mu.prevViewProj = prevViewProjValid_ ? prevViewProj_ : vp;
-            encodeFS({cb, motionPipe_, motionTex_, &mu, sizeof(mu), rootDepthTex_});
+            encodeFS({cb, motionPipe_, motionTex_, &mu, sizeof(mu), rootDepthTex_}, "motion");
         }
 
         // The pixel sort's own state, stepped once (or a few times) per frame.
@@ -1242,7 +1344,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                 su.seed = sortValid_ ? 0 : 1;
                 const int dst = sortIdx_ ^ 1;
                 encodeFS({cb, sortPipe_, sortTex_[dst], &su, sizeof(su),
-                          sortTex_[sortIdx_], postTex_});
+                          sortTex_[sortIdx_], postTex_}, "pixel sort");
                 sortIdx_ = dst;
                 sortValid_ = true;
             }
@@ -1271,7 +1373,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         const int dst = glitchIdx_ ^ 1;
         encodeFS({cb, glitchPipe_, glitchTex_[dst], &glu, sizeof(glu),
                   postTex_, moshHistValid_ ? glitchTex_[glitchIdx_] : postTex_,
-                  motionTex_, sortOn ? sortTex_[sortIdx_] : postTex_});
+                  motionTex_, sortOn ? sortTex_[sortIdx_] : postTex_}, "glitch");
         glitchIdx_ = dst;
         moshHistValid_ = true;
         result = glitchTex_[glitchIdx_];

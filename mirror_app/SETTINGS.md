@@ -44,7 +44,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (35 parameters)
+## fit (38 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -59,6 +59,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/dilate` | int | 0 .. 24 | 6 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0.02 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 1.5 |
+| `fit/far (head height)` | float | 0.02 .. 0.4 | 0.1 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
 | `fit/feed/lr` | float | 0.0001 .. 0.02 | 0.003 |
 | `fit/feed/steps` | int | 1 .. 32 | 1 |
@@ -76,15 +77,17 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/identity/secs` | float | 1 .. 15 | 5 |
 | `fit/kinect stall s` | float | 0.5 .. 15 | 3 |
 | `fit/max colour` | float | 0 .. 1 | 1 |
+| `fit/near (head height)` | float | 0.05 .. 0.5 | 0.3 |
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
 | `fit/set face size` | bool | -- | 1 |
-| `fit/size` | float | 0.05 .. 0.5 | 0.2 |
+| `fit/size when far` | float | 0.05 .. 0.5 | 0.16 |
+| `fit/size when near` | float | 0.05 .. 0.5 | 0.2 |
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (101 parameters)
+## show (103 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -110,29 +113,31 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/readout (F2)` | bool | -- | 0 |
 | `show/roots` | int | 0 .. 4 | 1 |
 | `show/roots/absent_hold` | float | 0 .. 30 | 8 |
+| `show/roots/bank faces replay` | bool | -- | 1 |
+| `show/roots/bank plants` | bool | -- | 1 |
 | `show/roots/cam ease seconds` | float | 0.05 .. 5 | 1.2 |
 | `show/roots/cam max angular speed (rad-s)` | float | 0.05 .. 4 | 1.2 |
 | `show/roots/datamosh seconds` | float | 0 .. 10 | 3 |
 | `show/roots/debug spawn markers` | bool | -- | 0 |
-| `show/roots/face hold after cloth s` | float | 0 .. 30 | 10 |
+| `show/roots/face hold after cloth s` | float | 0 .. 30 | 20.1 |
 | `show/roots/face seconds` | float | 0.2 .. 20 | 2.3 |
 | `show/roots/fade seconds` | float | 0.2 .. 10 | 2 |
 | `show/roots/fog fade seconds` | float | 0 .. 20 | 2 |
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/roots/frame margin` | float | 0 .. 1.5 | 0 |
-| `show/roots/grow face seconds` | float | 0.5 .. 60 | 3.3 |
+| `show/roots/grow face seconds` | float | 0.5 .. 60 | 4.9 |
 | `show/roots/grow hop lead` | float | 0 .. 1 | 0.3 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
 | `show/roots/grow rate max (steps-s)` | float | 1 .. 2000 | 1200 |
 | `show/roots/grow rate min (steps-s)` | float | 1 .. 2000 | 1 |
-| `show/roots/grow timeout mult` | float | 1 .. 4 | 1.5 |
+| `show/roots/grow timeout mult` | float | 1 .. 4 | 1.97 |
 | `show/roots/head pan` | bool | -- | 1 |
 | `show/roots/head pan (deg)` | float | -30 .. 30 | 5 |
 | `show/roots/head pan tau (s)` | float | 0.05 .. 3 | 0.6 |
 | `show/roots/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
 | `show/roots/min` | float | 0 .. 120 | 40 |
 | `show/roots/mouth open amount` | float | 0 .. 1.5 | 0.8 |
-| `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.5 |
+| `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.72 |
 | `show/roots/mouth open seconds` | float | 0.1 .. 5 | 1.2 |
 | `show/roots/orbit bound frac` | float | 0.1 .. 1 | 0.53 |
 | `show/roots/orbit elevation (deg)` | float | -60 .. 80 | 25 |
@@ -152,7 +157,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/turn seconds` | float | 0.5 .. 20 | 6 |
 | `show/run the show` | bool | -- | 1 |
 | `show/transition` | int | 0 .. 4 | 2 |
-| `show/transition/done_hold` | float | 0 .. 30 | 10.8 |
+| `show/transition/done_hold` | float | 0 .. 30 | 0 |
 | `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
 | `show/transition/min` | float | 0 .. 120 | 0 |
@@ -218,7 +223,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `cloth/relief shading` | float | 0 .. 1 | 0.55 |
 | `cloth/save a capture on lock` | bool | -- | 1 |
 | `cloth/set (plasticity)` | float | 0 .. 8 | 2 |
-| `cloth/settle` | float | 0 .. 20 | 9.787 |
+| `cloth/settle` | float | 0 .. 20 | 0 |
 | `cloth/shading span` | float | 1 .. 10 | 4 |
 | `cloth/sheet oversize` | float | 1 .. 1.3 | 1.08 |
 | `cloth/sheet res` | int | 16 .. 128 | 72 |
@@ -268,14 +273,14 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/mask emergence (transition)/transition (0 pond -> 1 mask)` | float | 0 .. 1 | 0 |
 | `mirror/mask emergence (transition)/wet sheen (spec)` | float | 0 .. 1.5 | 0.5 |
 | `mirror/moving ripple` | bool | -- | 0 |
-| `mirror/pluck onsets (idle/fitting)/pluck onset gain` | float | 0.1 .. 4 | 1 |
-| `mirror/pluck onsets (idle/fitting)/pluck onsets spawn drops` | bool | -- | 1 |
 | `mirror/network/contrast (w out)` | float | 1 .. 12 | 4.717 |
 | `mirror/network/detail (w hidden)` | float | 0.5 .. 10 | 6.449 |
 | `mirror/network/gain tilt (front<->back)` | float | -3 .. 3 | 0.557 |
 | `mirror/network/sine layers (0 - tanh only)` | int | 0 .. 5 | 1 |
 | `mirror/network/sine w0 (composition)` | float | 1 .. 60 | 7.2 |
 | `mirror/network/w shape (gauss<->uniform)` | float | 0 .. 1 | 0 |
+| `mirror/pluck onsets (idle/fitting)/pluck onset gain` | float | 0.1 .. 4 | 1 |
+| `mirror/pluck onsets (idle/fitting)/pluck onsets spawn drops` | bool | -- | 1 |
 | `mirror/radius` | float | 0.02 .. 0.5 | 0.12 |
 | `mirror/rain from audio/hit -> position` | float | 0 .. 1 | 0 |
 | `mirror/rain from audio/hit -> size` | float | 0 .. 1 | 0.5 |
@@ -308,7 +313,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
-## roots (187 parameters)
+## roots (203 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -316,6 +321,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/cached field: LOD & culling/cull below px` | float | 0.5 .. 20 | 0.5 |
 | `roots/cached field: LOD & culling/frustum cull` | bool | -- | 1 |
 | `roots/cached field: LOD & culling/grid NxN` | int | 2 .. 20 | 6 |
+| `roots/cached field: LOD & culling/min radius px` | float | 0 .. 3 | 0 |
 | `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 0 |
 | `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | -2.34092 |
 | `roots/camera/elevation` | float | -1.5 .. 1.5 | -0.248807 |
@@ -334,6 +340,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/base intensity (silence)` | float | 0 .. 4 | 0.16 |
 | `roots/environment & material/env specular` | float | 0 .. 2 | 0.6 |
 | `roots/environment & material/fibre break-up` | float | 0 .. 1 | 0.45 |
+| `roots/environment & material/fibre fade px` | float | 0 .. 6 | 1 |
 | `roots/environment & material/fibre scale` | float | 2 .. 40 | 20 |
 | `roots/environment & material/fibre strength` | float | 0 .. 1.5 | 0.55 |
 | `roots/environment & material/fibre stretch` | float | 1 .. 20 | 7 |
@@ -345,7 +352,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/key direction Y` | float | -1 .. 1 | 0.8 |
 | `roots/environment & material/key direction Z` | float | -1 .. 1 | 0.35 |
 | `roots/environment & material/key intensity` | float | 0 .. 4 | 0.16 |
+| `roots/environment & material/lamp X` | float | -60 .. 60 | 6 |
+| `roots/environment & material/lamp Y` | float | -60 .. 60 | 14 |
+| `roots/environment & material/lamp Z` | float | -60 .. 60 | -10 |
 | `roots/environment & material/mic gain` | float | 0 .. 4 | 1.782 |
+| `roots/environment & material/offset azimuth (rad)` | float | -3.14 .. 3.14 | 1.05 |
+| `roots/environment & material/offset elevation (rad)` | float | -1.5 .. 1.5 | 0.55 |
 | `roots/environment & material/per-root tint` | float | 0 .. 0.5 | 0.14 |
 | `roots/environment & material/rim` | float | 0 .. 1 | 0.1 |
 | `roots/environment & material/sky color` | rgb | -- | 0.16 0.19 0.24 |
@@ -381,8 +393,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/fog & atmosphere/height scale` | float | 2 .. 120 | 108.2 |
 | `roots/fog & atmosphere/march steps` | int | 4 .. 32 | 12 |
 | `roots/fog & atmosphere/noise contrast` | float | 0 .. 3 | 3 |
+| `roots/fog & atmosphere/noise mip level` | float | 0 .. 4 | 2 |
 | `roots/fog & atmosphere/noise scale` | float | 0.02 .. 2.5 | 0.207 |
 | `roots/fog & atmosphere/scatter (medium albedo)` | float | 0 .. 1.5 | 0 |
+| `roots/fog & atmosphere/volume downscale` | int | 1 .. 4 | 2 |
 | `roots/glitch/background depth` | float | 5 .. 400 | 59.713 |
 | `roots/glitch/band high` | float | 0 .. 1 | 1 |
 | `roots/glitch/band low` | float | 0 .. 1 | 0.084 |
@@ -426,6 +440,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/pattern` | string | -- | phyllotaxis |
 | `roots/growth/pull reach` | float | 0.4 .. 3 | 1.2 |
 | `roots/growth/reach x` | float | 0.4 .. 4 | 1.6 |
+| `roots/growth/root types` | int | 1 .. 3 | 1 |
 | `roots/growth/seed` | int | 0 .. 1.07374e+09 | 2 |
 | `roots/growth/shell` | float | 1 .. 20 | 9 |
 | `roots/growth/spawn behind` | float | -10 .. 10 | -1.06 |
@@ -440,6 +455,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/travel trials` | float | 1 .. 60 | 14 |
 | `roots/growth/tree relay` | bool | -- | 0 |
 | `roots/growth/tube radius` | float | 2 .. 20 | 7 |
+| `roots/growth/type 2 dwell` | float | 0 .. 1 | 0.92 |
+| `roots/growth/type 2 dwell days` | float | 2 .. 60 | 18 |
+| `roots/growth/type 2 dwell lateral` | float | 0 .. 1 | 0.92 |
+| `roots/growth/type 3 dwell` | float | 0 .. 1 | 0.92 |
+| `roots/growth/type 3 dwell days` | float | 2 .. 60 | 18 |
+| `roots/growth/type 3 dwell lateral` | float | 0 .. 1 | 0.92 |
 | `roots/growth/view cylinder` | float | 1 .. 30 | 8 |
 | `roots/lens & film/anamorphic streak` | float | 0 .. 1 | 0 |
 | `roots/lens & film/barrel <-> pincushion` | float | -0.4 .. 0.4 | 0 |

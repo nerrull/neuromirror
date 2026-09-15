@@ -21,8 +21,11 @@ vertex FogVOut root_fog_vs(uint vid [[vertex_id]]) {
     return o;
 }
 
-static float fogFbm(float3 p, texture3d<float> noiseTex, sampler smp) {
-    return noiseTex.sample(smp, p * (1.0 / ROOT_NOISE_TILE_PERIOD)).r;
+// Explicit level (U.fogNoiseLod): inside the march loop the screen
+// derivatives an automatic LOD needs are undefined, and a fixed coarse
+// level is the point anyway -- see FogParams::noiseLod.
+static float fogFbm(float3 p, float lod, texture3d<float> noiseTex, sampler smp) {
+    return noiseTex.sample(smp, p * (1.0 / ROOT_NOISE_TILE_PERIOD), level(lod)).r;
 }
 
 // Extinction at a point, in "per world unit".
@@ -50,7 +53,8 @@ static float fogDensity(float3 pos, constant RootFogU& U,
 
     const float3 p0 = pos * U.fogNoiseScale + U.fogDrift0.xyz;
     const float3 p1 = pos * (U.fogNoiseScale * 2.17) + U.fogDrift1.xyz;
-    const float n = fogFbm(p0, noiseTex, smp) * 0.65 + fogFbm(p1, noiseTex, smp) * 0.35;
+    const float n = fogFbm(p0, U.fogNoiseLod, noiseTex, smp) * 0.65 +
+                    fogFbm(p1, U.fogNoiseLod, noiseTex, smp) * 0.35;
 
     // Centred on the field's own mean, so strength changes the *contrast* of the
     // fog and not its average density. The old form multiplied by mix(1, n*2, s),

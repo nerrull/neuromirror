@@ -127,6 +127,12 @@ fragment float4 root_post_fs(PostVOut in [[stage_in]],
     // output, and the capsule pass's coverage is binary (it comes from a
     // discard), so this box *is* the anti-aliasing -- there is no hardware
     // coverage to resolve and nothing cleverer to reconstruct.
+    // The film the cloth carries, and how much of this pixel is it. Negative
+    // alpha out of the fog pass means "already a finished picture" -- see
+    // root_cloth.metal. Resolved once here and reused as the scene below
+    // when no aberration is asked for (the box is 4 fetches at ssaa 2, and
+    // this pass used to run it twice for the same pixel).
+    const float4 srcSample = resolveScene4(sceneTex, linSmp, uv, U);
     float3 scene;
     if (U.caStrength > 0.0) {
         // Chromatic aberration: a real lens focuses the three wavelengths at
@@ -142,14 +148,11 @@ fragment float4 root_post_fs(PostVOut in [[stage_in]],
                        resolveScene(sceneTex, linSmp, uv, U).g,
                        resolveScene(sceneTex, linSmp, 0.5 + c * (1.0 - k), U).b);
     } else {
-        scene = resolveScene(sceneTex, linSmp, uv, U);
+        scene = srcSample.rgb;
     }
-    // The film the cloth carries, and how much of this pixel is it. Negative
-    // alpha out of the fog pass means "already a finished picture" -- see
-    // root_cloth.metal. Kept here, before depth of field and the grade, because
-    // what has to survive is the image as the mirror made it: this is the frame
-    // the piece cuts from, and any difference between the two is a visible cut.
-    const float4 srcSample = resolveScene4(sceneTex, linSmp, uv, U);
+    // Kept here, before depth of field and the grade, because what has to
+    // survive is the image as the mirror made it: this is the frame the
+    // piece cuts from, and any difference between the two is a visible cut.
     const float  filmWeight = clamp(-srcSample.a, 0.0, 1.0);
     const float3 filmColor  = srcSample.rgb;
 

@@ -126,6 +126,22 @@ void FaceBasis::reconstruct(const std::vector<float>& alpha,
     accumulate(ex_, expr, size_t(n_ex_), nv3, out);
 }
 
+void FaceBasis::reconstructIdentity(const std::vector<float>& alpha,
+                                    std::vector<float>& out) const {
+    const size_t nv3 = size_t(n_verts_) * 3;
+    out.assign(neutral_.begin(), neutral_.end());
+    if (out.size() != nv3) return;
+    accumulate(id_, alpha, size_t(n_id_), nv3, out);
+}
+
+void FaceBasis::addExpression(const std::vector<float>& base, const std::vector<float>& expr,
+                              std::vector<float>& out) const {
+    const size_t nv3 = size_t(n_verts_) * 3;
+    out.assign(base.begin(), base.end());
+    if (out.size() != nv3) return;
+    accumulate(ex_, expr, size_t(n_ex_), nv3, out);
+}
+
 int FaceBasis::expressionIndex(const std::string& name) const {
     for (size_t i = 0; i < ex_names_.size(); ++i)
         if (ex_names_[i] == name) return (int)i;

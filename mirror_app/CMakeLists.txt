@@ -103,6 +103,7 @@ add_library(mirror_core STATIC
     src/face_fit.cpp
     src/face_capture.cpp
     src/face_track.cpp
+    src/root_structure.cpp
     src/mirror_render.cpp
     src/screen_layout.cpp
     src/show_timeline.cpp
@@ -370,6 +371,10 @@ target_include_directories(cloth_test PRIVATE src)
 # Landmark outline -> training mask. Pure geometry; no MediaPipe needed.
 add_executable(face_mask_test tests/face_mask_test.cpp)
 target_link_libraries(face_mask_test PRIVATE mirror_core)
+
+# A sitting's plant to disk and back (root_structure.h). Pure I/O.
+add_executable(root_structure_test tests/root_structure_test.cpp)
+target_link_libraries(root_structure_test PRIVATE mirror_core)
 
 # Morphable-model fit against synthetic landmarks with a known ground-truth
 # identity. Needs external/face_basis.bin; skips cleanly without it.

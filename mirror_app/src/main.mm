@@ -24,6 +24,7 @@
 #include "face_tracker.h"
 #include "face_capture.h"
 #include "face_track.h"
+#include "root_structure.h"
 #include "face_fit.h"
 #if MIRROR_HAVE_KINECT
 #include "kinect_target.h"
@@ -469,7 +470,7 @@ static bool HeadPlacement(float& s, float& dcx, float& dcy) {
     if (!centred && !resize) return false;
 
     if (resize)
-        s = std::min(6.f, std::max(0.1f, g_face_size / std::max(g_head_hy, 1e-3f)));
+        s = std::min(6.f, std::max(0.1f, FaceSizeTarget() / std::max(g_head_hy, 1e-3f)));
 
     if (!centred) {
         // Stay where they are -- but a scaled crop can run off the edge, and a
@@ -1430,6 +1431,15 @@ int main(int argc, char** argv) {
     // that same visitor's sitting is up on the masks.
     mirror::FaceTrackRecorder faceTrackRec;
     RootFaceSequence rootFaceSeq;
+    // The bank's own recordings, on the other masks -- begun at each deal
+    // (dealBankFaces, below) with one track per bank capture, stepped next
+    // to rootFaceSeq in both root branches. See root_face_sequence.h.
+    BankFacePlayback bankFaceSeq;
+    // Set once this sitting's finished plant has been written to
+    // captures/<id>/roots.bin (saveSittingPlant, below); reset with the rest
+    // of the sitting's state at Transition entry and the navigator's Roots
+    // entry.
+    bool plantSavedForSitting = false;
     // What faceTrackRec.finish() produced for the last sitting, held here
     // until Roots is (re-)entered and rootFaceSeq.begin() can pick it up.
     mirror::FaceTrack pendingFaceTrack;
@@ -1501,48 +1511,94 @@ int main(int argc, char** argv) {
     // PPMs to re-read on every visitor. The film is dropped once read -- the
     // masks wear the baked colours, and the film only serves the panel's
     // "load into the transition", which loads its own.
-    std::unordered_map<std::string, mirror::FaceCapture> bankCache;
+    // ...and with each capture, under the same id, the two things a sitting
+    // leaves behind besides its face: the head-movement track (track.bin,
+    // face_track.h) the bank's masks replay, and the plant it grew
+    // (roots.bin, root_structure.h) the hood is built from. Either may be
+    // absent (a capture from before they were saved, a sitting cut short) --
+    // the entry is then just the face, and the mask holds still / the
+    // structure is a seeded growth, as before.
+    struct BankEntry {
+        mirror::FaceCapture   cap;
+        mirror::FaceTrack     track;   // valid() false when there is none
+        mirror::RootStructure plant;   // valid() false when there is none
+    };
+    std::unordered_map<std::string, BankEntry> bankCache;
     // Deal the bank onto the masks: the most recent captures, newest first,
     // as many as the chain and the capped hood can wear, minus `excludeId`
     // (the sitting now on mask 0, once it has been saved). RootScene does
-    // the dealing; this only decides which files to open.
+    // the dealing; this only decides which files to open. The same deal
+    // hands RootScene the plants (structure k's is the plant of the capture
+    // on its mask 0, per RootScene::structureFaces) and starts the bank's
+    // face playback, both behind their show/roots toggles.
     auto dealBankFaces = [&](const std::string& excludeId) {
         if (!roots.valid()) return;
         const int N = std::max(1, roots.simParams().N);
         const int hood = std::max(g_root_seq.reveal_max_structures, g_root_seq.reveal_structures);
         const int want = (N - 1) + std::max(0, hood) * N;
         std::vector<mirror::FaceCapture> bank;
+        std::vector<mirror::FaceTrack> tracks;
+        std::vector<const mirror::RootStructure*> plants;   // parallel to bank
         // g_capture_ids is oldest first (ListCaptures); the bank is newest first.
         for (auto it = g_capture_ids.rbegin();
              it != g_capture_ids.rend() && (int)bank.size() < want; ++it) {
             if (*it == excludeId) continue;
             auto c = bankCache.find(*it);
             if (c == bankCache.end()) {
-                mirror::FaceCapture cap;
+                BankEntry e;
                 std::string err;
-                if (!mirror::LoadCapture(*it, cap, err)) {
+                if (!mirror::LoadCapture(*it, e.cap, err)) {
                     // An unreadable capture is skipped, not fatal: the bank is
                     // a directory anyone can leave a half-written entry in.
                     fprintf(stderr, "face bank: %s\n", err.c_str());
                     continue;
                 }
-                cap.film.clear();
-                cap.film.shrink_to_fit();
-                cap.filmW = cap.filmH = 0;
+                e.cap.film.clear();
+                e.cap.film.shrink_to_fit();
+                e.cap.filmW = e.cap.filmH = 0;
                 // Square of its sitter's head pose (see autoCaptureAtCut):
                 // captures from before that was saved out carry 10-40
                 // degrees of it, and a face that tilted on its mask read as
                 // askew from the nest. A no-op on one already square.
                 if (g_fitter.valid()) {
-                    const float deg = mirror::SquareCaptureToNeutral(cap, g_fitter.basis().neutral());
+                    const float deg = mirror::SquareCaptureToNeutral(e.cap, g_fitter.basis().neutral());
                     if (deg > 2.f) printf("face bank: %s squared by %.0f deg\n", it->c_str(), deg);
                 }
-                c = bankCache.emplace(*it, std::move(cap)).first;
+                // Absent is the ordinary case for both (err left empty);
+                // only a file that is there and unreadable is worth a line.
+                if (!mirror::LoadFaceTrack(*it, e.track, err) && !err.empty())
+                    fprintf(stderr, "face bank: %s\n", err.c_str());
+                if (!mirror::LoadRootStructure(*it, e.plant, err) && !err.empty())
+                    fprintf(stderr, "face bank: %s\n", err.c_str());
+                c = bankCache.emplace(*it, std::move(e)).first;
             }
-            bank.push_back(c->second);
+            bank.push_back(c->second.cap);
+            tracks.push_back(g_root_seq.bank_replay ? c->second.track : mirror::FaceTrack{});
+            plants.push_back(&c->second.plant);
         }
         roots.assignBankFaces(bank, g_root_seq.reveal_max_structures,
                               g_root_seq.reveal_min_structures, g_root_seq.reveal_structures);
+        // Structure k's plant: the one saved with the capture its mask 0
+        // wears (structureFaces()[k].captureIdx[0]); an empty slot leaves
+        // RootScene to its seeded growth for that structure.
+        std::vector<mirror::RootStructure> dealt;
+        if (g_root_seq.bank_plants) {
+            const auto& sf = roots.structureFaces();
+            dealt.resize(sf.size());
+            for (size_t k = 0; k < sf.size(); ++k) {
+                const auto& idxs = sf[k].captureIdx;
+                if (idxs.empty() || idxs[0] < 0 || idxs[0] >= (int)plants.size()) continue;
+                if (plants[size_t(idxs[0])]->valid()) dealt[k] = *plants[size_t(idxs[0])];
+            }
+        }
+        roots.setBankPlants(std::move(dealt));
+        if (g_fitter.valid()) bankFaceSeq.begin(tracks, g_fitter.basis());
+        else bankFaceSeq.reset();
+        int withTrack = 0, withPlant = 0;
+        for (const auto& t : tracks) withTrack += t.valid() ? 1 : 0;
+        for (const auto* pl : plants) withPlant += pl->valid() ? 1 : 0;
+        printf("face bank: dealt %zu captures (%d with a track, %d with a plant)\n",
+               bank.size(), withTrack, withPlant);
     };
     // The auto-capture, at the Transition -> Roots cut: the live fit, its
     // colours as sampled off the mirror (what mask 0 has been wearing through
@@ -1600,10 +1656,12 @@ int main(int argc, char** argv) {
                    cap.id.c_str(), cap.vertexCount(), cap.filmW, cap.filmH);
             // Into the cache too, film-less, so the next visitor's deal does
             // not go back to disk for the one capture this process just wrote.
+            // Its track and plant do not exist yet; the saves that write them
+            // later in this sitting fill the entry in themselves.
             cap.film.clear();
             cap.film.shrink_to_fit();
             cap.filmW = cap.filmH = 0;
-            bankCache[cap.id] = std::move(cap);
+            bankCache[cap.id].cap = std::move(cap);
         } else {
             g_capture_msg = "save failed: " + cerr;
             fprintf(stderr, "capture: %s\n", g_capture_msg.c_str());
@@ -2100,10 +2158,12 @@ int main(int argc, char** argv) {
                         if (faceTrackRec.finish(g_fitter, track) && !thisSittingCaptureId.empty()) {
                             track.id = thisSittingCaptureId;
                             std::string terr;
-                            if (mirror::SaveFaceTrack(track, terr))
+                            if (mirror::SaveFaceTrack(track, terr)) {
+                                bankCache[track.id].track = track;
                                 pendingFaceTrack = std::move(track);
-                            else
+                            } else {
                                 fprintf(stderr, "face track: save failed: %s\n", terr.c_str());
+                            }
                         }
                     }
                 }
@@ -2335,6 +2395,17 @@ int main(int argc, char** argv) {
                             rootSeq.begin(roots, g_root_seq);
                             rootSeqBegunForSitting = true;
                             rootFaceSeqBegunForSitting = false;
+                            // The previous sitting's replay must not carry
+                            // over: left valid, it kept stepping the last
+                            // visitor's recording onto mask 0 through this
+                            // visitor's whole Face stage, over the live fit
+                            // (both root branches step it whenever it is
+                            // valid, and squareAnchorMaskOnLeavingFace
+                            // bails on it too). Mask 0 is the live tracker's
+                            // again until onLeaveFace hands over this
+                            // sitting's own track.
+                            rootFaceSeq.reset();
+                            plantSavedForSitting = false;
                             faceTrackRec.begin();
                             faceTrackRecActive = true;
                             thisSittingCaptureId.clear();
@@ -2375,6 +2446,7 @@ int main(int argc, char** argv) {
                             // rootFaceSeq a fresh recording for this jump --
                             // the handler below must run its own begin().
                             rootFaceSeqBegunForSitting = false;
+                            plantSavedForSitting = false;
                             // The bank on the other masks, as at Transition
                             // entry; minus this sitting's capture if the
                             // jump came *back* to Roots after one was saved.
@@ -3013,9 +3085,44 @@ int main(int argc, char** argv) {
                     fprintf(stderr, "face track: save failed: %s\n", terr.c_str());
                     return;
                 }
+                // The cache entry autoCaptureAtCut made for this sitting
+                // gets its track, so the next deal replays it without a
+                // trip to disk.
+                bankCache[track.id].track = track;
                 pendingFaceTrack = std::move(track);
                 rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis());
                 rootFaceSeqBegunForSitting = true;
+            };
+            // The plant, at the Grow -> Turn edge (by the sequence's clock or
+            // a jump, either way the sim has run to done): written under the
+            // sitting's capture id so a later hood can stand this visitor's
+            // own structure around a later visitor's (dealBankFaces,
+            // RootScene::setBankPlants). Only a finished growth -- a Grow
+            // that timed out leaves masks no root reached, and that is not a
+            // structure worth repeating -- and only once per sitting.
+            auto saveSittingPlant = [&](RootSequence::Stage before) {
+                if (!rootSeqActive || !rootSeq.valid()) return;
+                if (before != RootSequence::Stage::Grow || rootSeq.stage() == RootSequence::Stage::Grow)
+                    return;
+                if (plantSavedForSitting || thisSittingCaptureId.empty()) return;
+                plantSavedForSitting = true;
+                if (!roots.simDone()) {
+                    printf("root: plant not saved for %s (growth did not finish)\n",
+                           thisSittingCaptureId.c_str());
+                    return;
+                }
+                mirror::RootStructure plant;
+                if (!roots.livePlant(plant)) return;
+                plant.id = thisSittingCaptureId;
+                std::string perr;
+                if (!mirror::SaveRootStructure(plant, perr)) {
+                    fprintf(stderr, "root: plant save failed: %s\n", perr.c_str());
+                    return;
+                }
+                printf("root: saved plant %s (%zu nodes, %zu segs, %zu masks)\n",
+                       plant.id.c_str(), plant.nodeCount(), plant.segs.size() / 2,
+                       plant.masks.size());
+                bankCache[plant.id].plant = std::move(plant);   // as for the track
             };
             g_root_stage = -1;   // set below by whichever root branch renders
 
@@ -3211,6 +3318,7 @@ int main(int argc, char** argv) {
                 }
                 onLeaveFace(stageBefore);
                 squareAnchorMaskOnLeavingFace(stageBefore);
+                saveSittingPlant(stageBefore);
                 // rootFaceSeq may have just begun (onLeaveFace, above) while
                 // this frame is still rendering Transition -- the literal
                 // Roots phase entry lands a frame later at most. Step it here
@@ -3218,6 +3326,7 @@ int main(int argc, char** argv) {
                 // frame for that gap.
                 if (rootFaceSeq.valid() && !rootHold)
                     rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
+                if (!rootHold) bankFaceSeq.step(roots, rootsClock, dt);
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
                 roots.ensureSize(compW / std::max(1, rootDownscale),
@@ -3327,9 +3436,14 @@ int main(int argc, char** argv) {
                 // a harmless no-op, the show is already in Roots.
                 onLeaveFace(stageBefore);
                 squareAnchorMaskOnLeavingFace(stageBefore);
+                saveSittingPlant(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
                 if (rootFaceSeq.valid() && !rootHold)
                     rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
+                // The bank's masks, on rootsClock rather than phaseTime():
+                // continuous across the Transition -> Roots cut, so a face
+                // that was already moving in the chain does not jump.
+                if (!rootHold) bankFaceSeq.step(roots, rootsClock, dt);
                 // The live tracker keeps recording, for as long as the same
                 // visitor is still actually present -- see the phase-agnostic
                 // finish() trigger above, which ends this once they're gone.

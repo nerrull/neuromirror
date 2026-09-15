@@ -317,7 +317,7 @@ struct RootSim::Impl {
             worst = std::max(worst, std::min((double)p.maxHopDays,
                                              travelDaysFor(b.minus(a).length())));
         }
-        return worst + std::max(0.0, (double)p.dwellDays);
+        return worst + std::max(0.0, (double)p.maxDwellDays());
     }
 
     void rebuildTropism(double mainW, double latW, bool travel, double dwellThreshold) {
@@ -467,7 +467,7 @@ struct RootSim::Impl {
         const double reachLen = hopPath * std::max(1.0, (double)p.travelSlack);
         const double need = travelDaysFor(reachLen);
         hopTravelDays = std::min((double)p.maxHopDays, need);
-        hopMaxDays = hopTravelDays + std::max(0.0, (double)p.dwellDays);
+        hopMaxDays = hopTravelDays + std::max(0.0, (double)p.dwellDaysFor(h));
         if (p.evenNests) hopMaxDays = std::max(hopMaxDays, evenAgeDays);
 
         day = 0.0; reachedDay = -1.0; reached = false;
@@ -535,13 +535,13 @@ struct RootSim::Impl {
                 localRevealed.push_back(localTargetNode);
                 revealed.push_back(masks[hop]);
                 pushRevealedRender(masks[hop]);
-                rebuildTropism(p.dwellWeight, p.dwellLateralWeight, false, reachedDay);
+                rebuildTropism(p.dwellWeightFor(hop), p.dwellLateralFor(hop), false, reachedDay);
             }
         }
         snapshotLive();
         // The dwell in full, and then -- with even nests on -- however much
         // longer it takes to reach the age the other hops will reach.
-        double dwellEnd = reachedDay + p.dwellDays;
+        double dwellEnd = reachedDay + p.dwellDaysFor(hop);
         if (p.evenNests) dwellEnd = std::max(dwellEnd, evenAgeDays);
         if ((reached && day > dwellEnd) || day >= hopMaxDays)
             finalizeHop();
