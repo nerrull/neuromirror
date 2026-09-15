@@ -357,7 +357,38 @@ static void ScanMaskBBox(const std::vector<unsigned char>& mask, int fw, int fh,
     out = mirror::DstRect{x0, y0, x1 - x0 + 1, y1 - y0 + 1};
 }
 
-static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh) {
+// Whether the crop currently in force is a *held* one: the tracker lost the
+// face for longer than its own hold, but a fit is live, so ApplyHeadMode kept
+// last frame's mask and region rather than dropping to the whole feed. While
+// this is set nothing may train -- the mask no longer says where the face is.
+static bool g_mask_held = false;
+
+// `fit_live`: a fit is in progress or finished (the trainer is ready). It
+// decides what a lost face means. Without a fit, no crop simply means no
+// crop. With one, losing the crop used to do three things at once, all of
+// them wrong and all of them undone the moment the face came back: the
+// region switched off, so the trained face was drawn at the live, drifting z
+// instead of the one it was learned at and `grey outside` stopped applying
+// (the whole frame in full colour, at a latent the weights were never
+// trained for -- garbage, and saturated garbage at that); the fit grid
+// swapped to the whole-feed one; and the trainer was handed the entire
+// camera frame as its target at the feed lr, so the network started learning
+// the room. The tracker's own hold is 0.6s and the show's fitting phase
+// waits 9.9s before it gives up on an absent face, and in between it did
+// this on every dropout -- a turn, a hand over the mouth, leaning in close --
+// which read as the mirror flipping between two sets of weights.
+//
+// So: while a fit is live and the crop was there last frame, a lost face
+// holds the last mask and region as they are, and g_mask_held tells the
+// training path to sit out until the face is back. Idle's clearFit() (or the
+// panel's) ends the hold, because there is no longer a fit to protect.
+static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh, bool fit_live) {
+    if (fit_live && g_have_mask && !HaveCrop() && fw > 0 && fh > 0 &&
+        g_fit_mask.size() == size_t(fw) * fh) {
+        g_mask_held = true;
+        return;
+    }
+    g_mask_held = false;
     P.coord_off_x = P.coord_off_y = 0.f;
     P.region.on = false;
     P.region.use_field = false;
@@ -1919,7 +1950,8 @@ int main(int argc, char** argv) {
             // features and the render both read them later in this frame and
             // must read the same values.
             UpdateHeadBox();
-            ApplyHeadMode(mirror.params(), fit_w, fit_h);
+            ApplyHeadMode(mirror.params(), fit_w, fit_h,
+                          mirror.valid() && mirror.pond().fitted());
 
             // --- the fit's target, over the mask only --------------------
             //
@@ -2514,7 +2546,15 @@ int main(int argc, char** argv) {
                     if (t >= 1.f) g_w0_t0 = -1.0;
                 }
 
+                // ...and, when the fit is meant to be a face crop and a
+                // tracker is running, for the crop itself. The phase was
+                // entered because a face was there, but the w0 ramp runs
+                // for seconds and a dropout across the moment it lands
+                // used to start the fit unmasked -- on the whole frame, at
+                // the feed grid -- and the sitting fitted the room.
+                const bool crop_expected = g_mask_fit && g_track_on;
                 if (g_fit_arm && g_fit_live && W0RampT(nowT) >= 1.f &&
+                    (!crop_expected || g_have_mask) &&
                     live_rgb.size() == size_t(fit_w) * fit_h * 3 && fit_w > 0) {
                     mirror::PondParams& FP = mirror.params();
                     if (g_have_mask) {
@@ -2836,7 +2876,10 @@ int main(int argc, char** argv) {
                 // Training runs here, not inside render(): one place, once per
                 // frame, so the cost is attributable and the displayed frame is
                 // always the post-step state.
-                if (mirror.pond().fitting()) {
+                // Not while the crop is only *held* (see ApplyHeadMode): the
+                // mask then marks where the face was, not where it is, and a
+                // step against it would teach the face whatever is there now.
+                if (mirror.pond().fitting() && !g_mask_held) {
                     // Live feed: swap the target, keeping weights and Adam
                     // state. beginFit() here would reset the optimiser every
                     // frame and the fit would never build enough momentum to

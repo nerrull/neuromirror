@@ -2879,11 +2879,19 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ui::EndGroup();
 
                 ui::BeginGroup("pluck onsets (idle/fitting)", true, P.drops_on);
-                if (ui::Visible()) {
+                {
                     // Threshold is tuned offline, in tools/embed_pluck_markers.py
                     // against the FirePlucker source -- these markers are baked
                     // into Racine.bnk, not live-adjustable from here. This is
                     // just whether the mirror reacts to them right now.
+                    //
+                    // Not behind `if (ui::Visible())`: these two were, which
+                    // meant the preset's "spawn drops = 1" only ever reached
+                    // g_pluck_drops on a frame this group was actually drawn
+                    // -- the mirror tab open, in Idle. Until then the code
+                    // default (off) stood and no drop ever landed, and opening
+                    // the tab "fixed" it. See PANEL.md: declaring is not
+                    // drawing.
                     ui::Checkbox("pluck onsets spawn drops", &g_pluck_drops);
                     ui::SliderFloat("pluck onset gain", &g_pluck_drop_gain, 0.1f, 4.0f);
                 }
