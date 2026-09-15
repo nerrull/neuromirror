@@ -3507,11 +3507,17 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 "  camera-relative offset from the view axis, so the\n"
                                 "                  rake stays put as the camera moves");
                         }
-                        if (pf.roots.lightMode == RootScene::LightMode::Position) {
+                        // Both arms declare (PANEL.md): the inactive mode's
+                        // numbers still have to load and save.
+                        ui::BeginGate(pf.roots.lightMode == RootScene::LightMode::Position);
+                        {
                             ui::SliderFloat("lamp X", &pf.roots.lightPos[0], -60.f, 60.f);
                             ui::SliderFloat("lamp Y", &pf.roots.lightPos[1], -60.f, 60.f);
                             ui::SliderFloat("lamp Z", &pf.roots.lightPos[2], -60.f, 60.f);
-                        } else if (pf.roots.lightMode == RootScene::LightMode::CameraRelative) {
+                        }
+                        ui::EndGate();
+                        ui::BeginGate(pf.roots.lightMode == RootScene::LightMode::CameraRelative);
+                        {
                             ui::SliderFloat("offset azimuth (rad)",
                                             &pf.roots.lightOffsetAz, -3.14f, 3.14f);
                             ui::SliderFloat("offset elevation (rad)",
@@ -3523,6 +3529,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     "lives in the off-axis angle.");
                             }
                         }
+                        ui::EndGate();
                         int lf = (int)pf.roots.lightFocus;
                         if (ImGui::Combo("focus", &lf,
                                 "scene centre\0anchor mask\0camera target\0"))
