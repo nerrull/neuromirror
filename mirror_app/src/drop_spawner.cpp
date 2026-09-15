@@ -18,10 +18,9 @@ inline float front_radius(double age, float ring_freq, float speed) {
 }  // namespace
 
 Drop DropSpawner::makeDrop(double t, float asp, const DropSpawnParams& p,
-                           float strength, float pan, bool from_audio) {
+                           float strength, float pan) {
     Drop d;
     d.birth = t;
-    d.from_audio = from_audio;
 
     const float ax = std::max(p.area_x, 0.f) * asp;
     const float ay = std::max(p.area_y, 0.f);
@@ -44,7 +43,7 @@ Drop DropSpawner::makeDrop(double t, float asp, const DropSpawnParams& p,
         const float kw = std::clamp(p.hit_width, 0.f, 1.f);
         d.width *= (1.f - kw) + kw * (0.4f + 1.2f * s);
     }
-    if (from_audio && p.hit_pan > 0.f) {
+    if (p.hit_pan > 0.f) {
         // Pan places the drop across the frame; the blend keeps some scatter so
         // a mono source does not put every drop on the centre line.
         const float k = std::clamp(p.hit_pan, 0.f, 1.f);
@@ -83,17 +82,10 @@ void DropSpawner::retire(double t, float ring_freq, float speed,
 const std::vector<RippleSource>& DropSpawner::update(double t, float asp,
                                                      float ring_freq, float speed,
                                                      const DropSpawnParams& p) {
-    // A clock that moved backwards is a scrub or a reset, not elapsed time:
-    // reschedule from here rather than spawning a burst to "catch up" to a
-    // schedule that belongs to a run that no longer exists.
-    if (t < last_t_ || next_spawn_ < 0.0) next_spawn_ = t;
-    last_t_ = t;
-
     const int budget = std::max(p.max_active, 1);
 
-    // Externally triggered hits first: they are the ones with a deadline.
     for (const Pending& hit : pending_) {
-        Drop d = makeDrop(t, asp, p, hit.strength, hit.pan, true);
+        Drop d = makeDrop(t, asp, p, hit.strength, hit.pan);
         if (d.amp >= p.reject_below_amp) {
             if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
             drops_.push_back(std::move(d));
@@ -101,33 +93,6 @@ const std::vector<RippleSource>& DropSpawner::update(double t, float asp,
         }
     }
     pending_.clear();
-
-    if (p.rain_on && p.rate > 0.f) {
-        const double mean = 1.0 / std::max(p.rate, 1e-3f);
-        // Bounded catch-up: a stall or a long pause must not dump a frame's
-        // worth of arrears onto the surface at once.
-        int guard = budget;
-        while (t >= next_spawn_ && guard-- > 0) {
-            Drop d = makeDrop(next_spawn_, asp, p, -1.f, 0.f, false);
-            if (d.amp >= p.reject_below_amp) {
-                if ((int)drops_.size() >= budget) drops_.erase(drops_.begin());
-                drops_.push_back(std::move(d));
-                ++spawns_;
-            }
-
-            // Regularity: the metronomic gap and an exponential one, blended.
-            // The exponential is what makes rain sound and look like rain --
-            // gaps that cluster -- and the blend is there because pure Poisson
-            // at a low rate leaves stretches with nothing happening at all.
-            const float u = std::clamp(uniform(0.f, 1.f), 1e-4f, 0.9999f);
-            const double expo = -std::log(1.0 - u);
-            const double j = std::clamp(p.rate_jitter, 0.f, 1.f);
-            next_spawn_ += mean * ((1.0 - j) + j * expo);
-        }
-        if (guard <= 0) next_spawn_ = t + mean;   // gave up catching up
-    } else {
-        next_spawn_ = t;   // rain off: don't accrue a backlog while it is off
-    }
 
     retire(t, ring_freq, speed, p);
 

@@ -244,7 +244,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `text/x` | float | -2 .. 2 | 0 |
 | `text/y` | float | -1 .. 1 | 0 |
 
-## mirror (62 parameters)
+## mirror (59 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -268,6 +268,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/mask emergence (transition)/transition (0 pond -> 1 mask)` | float | 0 .. 1 | 0 |
 | `mirror/mask emergence (transition)/wet sheen (spec)` | float | 0 .. 1.5 | 0.5 |
 | `mirror/moving ripple` | bool | -- | 0 |
+| `mirror/pluck onsets (idle/fitting)/pluck onset gain` | float | 0.1 .. 4 | 1 |
+| `mirror/pluck onsets (idle/fitting)/pluck onsets spawn drops` | bool | -- | 1 |
 | `mirror/network/contrast (w out)` | float | 1 .. 12 | 4.717 |
 | `mirror/network/detail (w hidden)` | float | 0.5 .. 10 | 6.449 |
 | `mirror/network/gain tilt (front<->back)` | float | -3 .. 3 | 0.557 |
@@ -278,16 +280,11 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/rain from audio/hit -> position` | float | 0 .. 1 | 0 |
 | `mirror/rain from audio/hit -> size` | float | 0 .. 1 | 0.5 |
 | `mirror/rain from audio/hit -> strength` | float | 0 .. 1 | 0.7 |
-| `mirror/rain from audio/onset gain` | float | 0.1 .. 4 | 1 |
-| `mirror/rain from audio/onsets spawn drops` | bool | -- | 0 |
 | `mirror/rain/area centre x` | float | -1.5 .. 1.5 | 0 |
 | `mirror/rain/area centre y` | float | -1 .. 1 | 0 |
 | `mirror/rain/area x` | float | 0 .. 1.2 | 1 |
 | `mirror/rain/area y` | float | 0 .. 1.2 | 1 |
-| `mirror/rain/falling` | bool | -- | 0 |
 | `mirror/rain/max in flight` | int | 1 .. 24 | 12 |
-| `mirror/rain/rate (drops-s)` | float | 0.02 .. 12 | 0.8 |
-| `mirror/rain/rate jitter` | float | 0 .. 1 | 0.7 |
 | `mirror/rain/reject below (strength)` | float | 0 .. 2 | 0.333 |
 | `mirror/rain/size` | float | 0.02 .. 0.6 | 0.14 |
 | `mirror/rain/size jitter` | float | 0 .. 1 | 0.35 |

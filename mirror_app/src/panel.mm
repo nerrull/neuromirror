@@ -2767,7 +2767,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "frame while the show runs (on in Idle, off everywhere\n"
                         "else, Fitting especially: the ripple field is signal\n"
                         "the network's target does not contain). This checkbox\n"
-                        "is only the last word when the show isn't running.");
+                        "is only the last word when the show isn't running.\n\n"
+                        "Every drop is a hit: a pluck-bed marker from Wwise\n"
+                        "(below), or the 'drop one' button. Nothing falls on\n"
+                        "its own.");
                 }
                 ui::BeginGroup("rain", true, P.drops_on);
                 {
@@ -2778,12 +2781,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     pf.mirror.pond().spawner().spawnCount());
                         if (ImGui::Button("drop one")) pf.mirror.pond().triggerDrop();
                         ImGui::SameLine();
-                        ImGui::TextDisabled("(a hit, same as an audio onset)");
+                        ImGui::TextDisabled("(a hit, same as a marker)");
                     }
 
-                    ui::Checkbox("falling", &S.rain_on);
-                    ui::SliderFloat("rate (drops/s)", &S.rate, 0.02f, 12.0f);
-                    ui::SliderFloat("rate jitter", &S.rate_jitter, 0.0f, 1.0f);
                     ui::SliderFloat("size", &S.width, 0.02f, 0.6f);
                     ui::SliderFloat("size jitter", &S.width_jitter, 0.0f, 1.0f);
                     ui::SliderFloat("strength", &S.amp, 0.0f, 2.0f);
@@ -2813,62 +2813,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 }
                 ui::EndGroup();
 
+                // Section name kept from when the OnsetTap bus tap fed it too:
+                // it is the preset key for the three sliders, and only marker
+                // hits arrive here now.
                 ui::BeginGroup("rain from audio", true, P.drops_on);
-                if (ui::Visible()) {
-                    // The tap list comes from whatever OnsetTap instances are
-                    // live in Wwise right now; picking one is the whole setup.
-                    const auto& taps = g_pulses.taps();
-                    std::string current = g_pulses.connected()
-                        ? (g_pulses.label().empty()
-                               ? ("Tap " + std::to_string(g_pulses.tapId()))
-                               : g_pulses.label())
-                        : std::string("(not connected)");
-                    ImGui::SetNextItemWidth(200);
-                    if (ImGui::BeginCombo("tap", current.c_str())) {
-                        if (ImGui::Selectable("(not connected)", !g_pulses.connected()))
-                            g_pulses.disconnect();
-                        for (const mirror::AudioTap& t : taps) {
-                            const std::string name =
-                                (t.label.empty() ? ("Tap " + std::to_string(t.tapId))
-                                                 : t.label) +
-                                "  #" + std::to_string(t.tapId);
-                            const bool sel = g_pulses.connected() &&
-                                             g_pulses.tapId() == t.tapId;
-                            if (ImGui::Selectable(name.c_str(), sel))
-                                g_pulses.connect(t.tapId);
-                        }
-                        ImGui::EndCombo();
-                    }
-                    if (taps.empty()) {
-                        ImGui::TextDisabled("no OnsetTap instance is publishing");
-                        ImGui::TextDisabled("(add the Onset Tap effect to a bus in Wwise)");
-                    }
-
-                    if (g_pulses.connected()) {
-                        // Level against the bar it has to clear. Without both,
-                        // "nothing is firing" and "the threshold is too high"
-                        // are the same silence -- and the threshold moves with
-                        // the material, so a static number would not tell you.
-                        const float lvl = g_pulses.levelDb();
-                        ImGui::Text("%s   %.1f dB, needs a %.1f dB rise",
-                                    g_pulses.live() ? "LIVE" : "idle",
-                                    lvl, g_pulses.thresholdDb());
-                        const float norm = std::clamp((lvl + 80.f) / 80.f, 0.f, 1.f);
-                        ImGui::ProgressBar(norm, ImVec2(-1, 6), "");
-                        const double since = g_pulses.sinceLast();
-                        ImGui::Text("%.1f onsets/s", g_pulses.rate());
-                        ImGui::SameLine();
-                        if (since < 0.15)
-                            ImGui::TextColored(ImVec4(1, 0.9f, 0.4f, 1), "HIT");
-                        else
-                            ImGui::TextDisabled("last %.1fs ago", since);
-                        if (g_pulses.missed())
-                            ImGui::TextDisabled("%u events missed", g_pulses.missed());
-                    }
-                }
                 {
-                    ui::Checkbox("onsets spawn drops", &g_pulse_drops);
-                    ui::SliderFloat("onset gain", &g_pulse_gain, 0.1f, 4.0f);
                     // How much of the drop the hit gets to decide. At 0 across
                     // the board the audio only chooses *when*, which is a real
                     // setting: a steady shower on the beat.

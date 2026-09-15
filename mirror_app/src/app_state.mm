@@ -95,13 +95,6 @@ mirror::KinectUsbWatch g_kinect_usb_watch;
 // MIDI stays open across the session; the registry holds the bindings.
 midi::Input g_midi;
 std::string g_midi_err;
-// Onsets from the Wwise OnsetTap plug-in, and what they are allowed to do.
-// Kept alive across scene changes: reconnecting on every switch would lose the
-// stream's read position and replay nothing, but it would also make a live show
-// depend on which scene happens to be up.
-mirror::AudioPulses g_pulses;
-bool  g_pulse_drops  = true;    // onsets spawn raindrops
-float g_pulse_gain   = 1.0f;    // scales an onset's strength before it is used
 bool  g_pluck_drops     = false;  // pluck-bed crackle onsets spawn raindrops
 float g_pluck_drop_gain = 1.0f;   // scales a marker hit's strength before it is used
 

@@ -15,7 +15,6 @@
 #endif
 #import <Metal/Metal.h>
 
-#include "audio_pulse.h"
 #include "face_tracker.h"
 #include "face_fit.h"
 #if MIRROR_HAVE_KINECT
@@ -109,18 +108,15 @@ extern mirror::KinectUsbWatch g_kinect_usb_watch;
 extern midi::Input g_midi;
 extern std::string g_midi_err;
 
-extern mirror::AudioPulses g_pulses;
-extern bool  g_pulse_drops;
-extern float g_pulse_gain;
-
-// The room's own ambient level (a real microphone tap, distinct from
-// g_pulses' Wwise bus tap above) -- drives the root scene's key light; see
-// mic_level.h and RootScene::setAmbientLevel.
+// The room's own ambient level (a real microphone tap) -- drives the root
+// scene's key light; see mic_level.h and RootScene::setAmbientLevel.
 extern mirror::MicLevel g_mic;
 extern std::string g_mic_err;
 
 // The pluck bed's own crackle onsets (Wwise cue markers on Play_FirePlucker,
-// see wwise_audio.h), Idle/Fitting only -- the phases where that bed plays.
+// see wwise_audio.h), Idle only -- the one phase with rain. This is the only
+// thing that spawns a drop in the show; the spawner's own scheduler and the
+// OnsetTap bus-tap path (audio_pulse.h) used to as well and were removed.
 extern bool  g_pluck_drops;
 extern float g_pluck_drop_gain;
 

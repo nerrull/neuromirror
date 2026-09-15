@@ -119,62 +119,43 @@ void test_packet_travels() {
 
 // --- the spawner ------------------------------------------------------------
 
-// Runs the spawner over `secs` at 60 fps and returns every source it emitted,
-// frame by frame.
+// Runs the spawner over `secs` at 60 fps, triggering a hit every 1/`rate`
+// seconds (the marker stream, metronomic), and returns every source it
+// emitted, frame by frame. rate 0 triggers nothing.
 std::vector<std::vector<mirror::RippleSource>> run(mirror::DropSpawner& sp,
                                                    const mirror::DropSpawnParams& p,
-                                                   double secs, double t0 = 0.0) {
+                                                   double secs, float rate,
+                                                   double t0 = 0.0) {
     std::vector<std::vector<mirror::RippleSource>> frames;
     const double dt = 1.0 / 60.0;
-    for (int i = 0; i * dt < secs; ++i)
-        frames.push_back(sp.update(t0 + i * dt, 1.6f, kRingFreq, 1.2f, p));
+    double next = t0;
+    for (int i = 0; i * dt < secs; ++i) {
+        const double t = t0 + i * dt;
+        if (rate > 0.f && t >= next) { sp.trigger(); next += 1.0 / rate; }
+        frames.push_back(sp.update(t, 1.6f, kRingFreq, 1.2f, p));
+    }
     return frames;
 }
 
-void test_rate() {
-    std::printf("\nthe schedule spawns at the rate it is asked for\n");
+void test_nothing_on_its_own() {
+    std::printf("\nnothing falls on its own; a trigger lands\n");
     mirror::DropSpawnParams p;
-    p.rate = 4.f;
-    p.rate_jitter = 0.f;      // metronomic, so the count is exactly checkable
     p.max_active = 24;
-
     mirror::DropSpawner sp(7);
-    run(sp, p, 10.0);
-    const int n = sp.spawnCount();
-    char msg[128];
-    std::snprintf(msg, sizeof msg, "4/s for 10s -> %d drops", n);
-    check(n >= 38 && n <= 42, msg);
-
-    // Jitter must change the *timing*, not the average rate: a "randomness"
-    // control that also halves the rainfall is two controls in a trench coat.
-    mirror::DropSpawnParams j = p;
-    j.rate_jitter = 1.f;
-    mirror::DropSpawner sp2(7);
-    run(sp2, j, 10.0);
-    std::snprintf(msg, sizeof msg, "...and %d with full jitter, same mean rate",
-                  sp2.spawnCount());
-    check(sp2.spawnCount() >= 28 && sp2.spawnCount() <= 52, msg);
-
-    // Rain off means nothing falls, but a trigger still lands: that is the
-    // audio-only setting, and it is the whole point of the split.
-    mirror::DropSpawnParams off = p;
-    off.rain_on = false;
-    mirror::DropSpawner sp3(7);
-    run(sp3, off, 5.0);
-    check(sp3.spawnCount() == 0, "rain off spawns nothing on its own");
-    sp3.trigger(1.f, 0.f);
-    sp3.update(5.0, 1.6f, kRingFreq, 1.2f, off);
-    check(sp3.spawnCount() == 1 && sp3.drops().size() == 1,
-          "...but a trigger still lands one");
+    run(sp, p, 5.0, 0.f);
+    check(sp.spawnCount() == 0, "5s of updates spawn nothing");
+    sp.trigger(1.f, 0.f);
+    sp.update(5.0, 1.6f, kRingFreq, 1.2f, p);
+    check(sp.spawnCount() == 1 && sp.drops().size() == 1,
+          "...but a trigger lands one");
 }
 
 void test_each_drop_is_its_own() {
     std::printf("\nevery drop is its own event\n");
     mirror::DropSpawnParams p;
-    p.rate = 3.f;
     p.max_active = 24;
     mirror::DropSpawner sp(11);
-    auto frames = run(sp, p, 6.0);
+    auto frames = run(sp, p, 6.0, 3.f);
 
     // Some frame has several drops live at once, and in it no two share a
     // position or a phase. A shared clock or a shared slot would show up here
@@ -222,7 +203,7 @@ void test_each_drop_is_its_own() {
     mirror::DropSpawnParams flat = p;
     flat.width_jitter = flat.amp_jitter = flat.speed_jitter = 0.f;
     mirror::DropSpawner sp2(11);
-    auto ff = run(sp2, flat, 4.0);
+    auto ff = run(sp2, flat, 4.0, 3.f);
     bool same_width = true;
     for (const auto& f : ff)
         for (const auto& s : f)
@@ -233,11 +214,9 @@ void test_each_drop_is_its_own() {
 void test_budget_and_retirement() {
     std::printf("\ndrops are retired, and the budget holds\n");
     mirror::DropSpawnParams p;
-    p.rate = 30.f;            // far more than can be alive at once
-    p.rate_jitter = 0.f;
     p.max_active = 6;
     mirror::DropSpawner sp(3);
-    auto frames = run(sp, p, 6.0);
+    auto frames = run(sp, p, 6.0, 30.f);   // far more than can be alive at once
 
     size_t worst = 0;
     for (const auto& f : frames) worst = std::max(worst, f.size());
@@ -246,16 +225,14 @@ void test_budget_and_retirement() {
                   (int)worst);
     check(worst <= 6, msg);
 
-    // Retirement: with the schedule off, the drops in flight must drain away on
-    // their own. A drop that is never retired is a source the kernel keeps
+    // Retirement: with the hits stopped, the drops in flight must drain away
+    // on their own. A drop that is never retired is a source the kernel keeps
     // paying for, forever.
-    mirror::DropSpawnParams none = p;
-    none.rain_on = false;
     for (int i = 0; i < 30; ++i)
-        sp.update(6.0 + i / 60.0, 1.6f, kRingFreq, 1.2f, none);
+        sp.update(6.0 + i / 60.0, 1.6f, kRingFreq, 1.2f, p);
     const size_t before = sp.drops().size();
     for (int i = 0; i < 60 * 20; ++i)
-        sp.update(7.0 + i / 60.0, 1.6f, kRingFreq, 1.2f, none);
+        sp.update(7.0 + i / 60.0, 1.6f, kRingFreq, 1.2f, p);
     std::snprintf(msg, sizeof msg, "they drain away once they leave the frame (%d -> %d)",
                   (int)before, (int)sp.drops().size());
     check(sp.drops().empty(), msg);
@@ -273,7 +250,6 @@ mirror::RippleSource hit(mirror::DropSpawner& sp, const mirror::DropSpawnParams&
 void test_triggers() {
     std::printf("\nan outside trigger decides what its drop is like\n");
     mirror::DropSpawnParams p;
-    p.rain_on = false;
     p.amp_jitter = p.width_jitter = 0.f;
     p.hit_amp = 1.f;
     p.hit_width = 1.f;
@@ -317,31 +293,9 @@ void test_triggers() {
     check(left[0] < -1.f && right[0] > 1.f, msg);
 }
 
-void test_clock_moved_back() {
-    std::printf("\na clock that jumps does not dump a shower\n");
-    mirror::DropSpawnParams p;
-    p.rate = 2.f;
-    p.max_active = 12;
-    mirror::DropSpawner sp(9);
-    run(sp, p, 4.0);
-    const int before = sp.spawnCount();
-
-    // A scrub backwards, then a long jump forwards -- a preset load, a pause,
-    // a show cue. Neither may spawn a backlog: the arrears belong to a run that
-    // no longer exists.
-    sp.update(0.0, 1.6f, kRingFreq, 1.2f, p);
-    sp.update(600.0, 1.6f, kRingFreq, 1.2f, p);
-    char msg[128];
-    std::snprintf(msg, sizeof msg, "a 10-minute jump adds %d drops, not hundreds",
-                  sp.spawnCount() - before);
-    check(sp.spawnCount() - before <= p.max_active + 2, msg);
-    check(sp.drops().size() <= size_t(p.max_active), "and the budget still holds");
-}
-
 void test_reject() {
     std::printf("\na quiet enough candidate never spawns at all\n");
     mirror::DropSpawnParams p;
-    p.rain_on = false;
     p.amp_jitter = 0.f;
     p.hit_amp = 1.f;
     p.reject_below_amp = 0.5f;   // p.amp defaults to 1
@@ -433,12 +387,11 @@ void test_z_drop_boost() {
 int main() {
     std::printf("drop_test: a raindrop is one impact spreading outward\n");
     test_packet_travels();
-    test_rate();
+    test_nothing_on_its_own();
     test_each_drop_is_its_own();
     test_budget_and_retirement();
     test_triggers();
     test_reject();
-    test_clock_moved_back();
     test_z_drop_boost();
     std::printf("%s\n", g_fail == 0 ? "PASS" : "FAIL");
     return g_fail == 0 ? 0 : 1;

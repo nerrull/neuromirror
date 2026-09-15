@@ -76,7 +76,6 @@ void test_hits_become_drops() {
     std::printf("\nand land as drops\n");
     mirror::PondParams p;
     p.drops_on = true;
-    p.spawn.rain_on = false;      // audio only: every drop here came from a hit
     p.spawn.amp_jitter = 0.f;
     p.spawn.width_jitter = 0.f;
     p.spawn.hit_amp = 1.f;

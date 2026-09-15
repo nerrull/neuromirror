@@ -1501,7 +1501,6 @@ int taptest(uint32_t tapId, double seconds) {
     mirror::Pond pond(11);
     mirror::PondParams p;
     p.drops_on = true;
-    p.spawn.rain_on = false;      // audio only, so every drop below is a hit
 
     // A plain steady clock, not glfwGetTime(): GLFW is not initialised on this
     // path, and its clock reads a constant 0 until it is -- which is an

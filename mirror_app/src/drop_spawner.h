@@ -2,18 +2,16 @@
 //
 // Split out of the ripple field itself because the two answer different
 // questions. mirror_render decides what one impact *looks* like (a ring train
-// riding its wavefront); this decides *when impacts happen*, and it has to serve
-// two callers that agree on nothing else:
+// riding its wavefront); this decides what a drop *is* once something outside
+// has said one lands: trigger() -- a Wwise marker callback off the pluck bed,
+// or the panel's button.
 //
-//   the internal scheduler   rain falling on its own, at a rate with as much or
-//                            as little regularity as you dial in
-//   trigger()                one hit, now, because something outside said so --
-//                            an audio onset from the Wwise tap, or a button
-//
-// So a drop is an *event with a lifetime*, not a slot in a periodic table: it is
+// A drop is an *event with a lifetime*, not a slot in a periodic table: it is
 // born when it is born, carries the character it was born with, and is retired
-// once its rings have left the frame. That is what lets an onset land the
+// once its rings have left the frame. That is what lets a marker land the
 // instant the transient does, instead of at the next multiple of some period.
+// (There used to be an internal rain scheduler alongside trigger(); the show
+// never used it, and it went with the OnsetTap path.)
 #pragma once
 
 #include <cstdint>
@@ -24,18 +22,9 @@
 
 namespace mirror {
 
-// Every knob on the spawner. Defaults are a quiet, believable rain: a drop or so
-// a second, landing anywhere, with enough spread in size and strength that no
-// two read as the same event.
+// Every knob on the spawner. Defaults are believable rain: landing anywhere,
+// with enough spread in size and strength that no two read as the same event.
 struct DropSpawnParams {
-    // --- the internal scheduler -------------------------------------------
-    bool  rain_on = true;        // off = nothing but trigger() spawns drops
-    float rate = 0.8f;           // drops per second, mean
-    // 0 is a metronome, 1 is a Poisson process (exponential gaps: clusters and
-    // silences, the way real rain arrives). In between blends the two, which is
-    // the useful range -- pure Poisson at a low rate leaves long dead patches.
-    float rate_jitter = 0.7f;
-
     // --- where they land ----------------------------------------------------
     // Fractions of the frame, so a drop lands inside
     // (bias +- area * half-extent) on each axis. area 0 puts every drop on the
@@ -53,8 +42,8 @@ struct DropSpawnParams {
     float width = 0.14f, width_jitter = 0.35f;
     float speed = 1.f,  speed_jitter = 0.15f;   // multiplies the pond's speed
 
-    // Below this amplitude a candidate drop -- rain-scheduled or triggered,
-    // after jitter and any hit scaling -- is discarded outright rather than
+    // Below this amplitude a candidate drop -- after jitter and any hit
+    // scaling -- is discarded outright rather than
     // spawned faint. A rejection, not a floor: quieter than this and it never
     // appears at all, doesn't count toward `max_active`, and doesn't advance
     // `spawnCount()`. 0 disables rejection, the old behaviour.
@@ -90,7 +79,6 @@ struct Drop {
     float  amp = 1.f;
     float  width = 0.14f;
     float  speed = 1.f;          // multiplier on the pond's ripple speed
-    bool   from_audio = false;
     // Multiplier on the pond's ripple decay for this drop's rings alone (see
     // RippleSource in mirror_render.h). Set once at spawn from `amp` and
     // `weak_decay_gain`; fixed for the drop's whole life, same as amp/width.
@@ -113,9 +101,10 @@ public:
         pending_.push_back({strength, pan});
     }
 
-    // Advance to time `t` and rebuild the live source list. `speed` and
-    // `ring_freq` are the pond's, needed to convert a drop's age into the phase
-    // the renderer reads its wavefront radius off.
+    // Advance to time `t`: spawn what trigger() queued, retire what has left
+    // the frame, and rebuild the live source list. `speed` and `ring_freq` are
+    // the pond's, needed to convert a drop's age into the phase the renderer
+    // reads its wavefront radius off.
     const std::vector<RippleSource>& update(double t, float asp, float ring_freq,
                                             float speed, const DropSpawnParams& p);
 
@@ -145,15 +134,13 @@ private:
     }
 
     Drop makeDrop(double t, float asp, const DropSpawnParams& p,
-                  float strength, float pan, bool from_audio);
+                  float strength, float pan);
     void retire(double t, float ring_freq, float speed, const DropSpawnParams& p);
 
     std::mt19937 rng_;
     std::vector<Drop> drops_;
     std::vector<RippleSource> src_;
     std::vector<Pending> pending_;
-    double next_spawn_ = -1.0;   // < 0 = schedule from the first update()
-    double last_t_ = 0.0;
     int    spawns_ = 0;
 };
 

@@ -18,7 +18,6 @@
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_metal.h"
 
-#include "audio_pulse.h"
 #include "metal_context.h"
 #include "mirror_scene.h"
 #include "fit_target.h"
@@ -2820,21 +2819,6 @@ int main(int argc, char** argv) {
             const show::Phase dropPhase = g_show.phase();
             if (mirror.valid())
                 mirror.params().drops_on = (dropPhase == show::Phase::Idle);
-
-            // Audio onsets -> raindrops. Polled here, once per frame and
-            // whatever scene is up: the tap is a live input, and letting it
-            // back up while another scene is showing would land the whole
-            // backlog at once on the way back to the mirror. The phase check
-            // above already keeps these from rendering outside Idle; skipping
-            // the trigger call too just avoids queuing work that would only
-            // be thrown away.
-            {
-                const std::vector<mirror::AudioOnset> hits = g_pulses.poll();
-                if (g_pulse_drops && mirror.valid() && dropPhase == show::Phase::Idle) {
-                    for (const mirror::AudioOnset& e : hits)
-                        mirror.pond().triggerDrop(e.strength * g_pulse_gain, e.pan);
-                }
-            }
 
             // Pluck-bed crackle onsets -> raindrops, and (now that the pluck
             // rings all the way through Roots too, see the Phase::Roots audio
