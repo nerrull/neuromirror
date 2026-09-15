@@ -4507,6 +4507,18 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                                         g_vp_skips, g_vp_relayers);
                 }
                 ImGui::TextDisabled("%.0f fps", pf.fpsShown);
+                if (!g_frame_profile.empty()) {
+                    ImGui::TextDisabled("%s", g_frame_profile.c_str());
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where the frame goes, ms averaged over the last\n"
+                            "half second. 'drawable' is time blocked waiting\n"
+                            "for the display -- large when the GPU is the\n"
+                            "limit. 'scene' is the active scene's step and\n"
+                            "encode; 'gpu' the whole command buffer.\n"
+                            "MIRROR_PROFILE=1 prints this every 2 s.");
+                    }
+                }
                 ImGui::End();
             }
 }

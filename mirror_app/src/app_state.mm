@@ -526,6 +526,8 @@ mirror::DstRect g_mask_bbox;
 // How big the subject should be on screen: the half-height the head box is
 // resampled to, as a fraction of the frame. Off by default, where the size is
 // simply whatever distance the person is standing at.
+std::string g_frame_profile;
+
 bool  g_face_size_on = false;
 float g_face_size_near = 0.28f, g_face_size_far = 0.16f;
 float g_face_near_hy = 0.30f, g_face_far_hy = 0.10f;

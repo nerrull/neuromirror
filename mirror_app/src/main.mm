@@ -51,6 +51,7 @@
 #include "panel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <type_traits>
@@ -208,6 +209,53 @@ static bool SourceRGBF(int w, int h, std::vector<float>& out,
     return false;
 #endif
 }
+
+// --- frame profile ----------------------------------------------------------
+//
+// Where a frame goes, for the fps in the title to be diagnosable rather than
+// just read. ProfMark("name") closes the stage since the previous mark into
+// that bucket; the GPU time of the frame's command buffer lands from its
+// completion handler; "drawable" is the time blocked in nextDrawable, which
+// is where a frame waits when the GPU (or the display) is the limit. Summed
+// over half a second into g_frame_profile, which the panel shows next to
+// the fps, and printed with MIRROR_PROFILE=1 so a run can be pasted back.
+namespace {
+struct FrameProf {
+    std::vector<std::pair<std::string, double>> buckets;   // insertion order
+    std::chrono::steady_clock::time_point last;
+    std::atomic<double> gpuAccum{0.0};
+    double frames = 0, since = 0;
+    double lastPrint = 0;
+    bool print = getenv("MIRROR_PROFILE") != nullptr;
+    void begin() { last = std::chrono::steady_clock::now(); }
+    void mark(const char* name) {
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+        last = now;
+        for (auto& b : buckets) if (b.first == name) { b.second += ms; return; }
+        buckets.push_back({name, ms});
+    }
+    // Once per frame, after the last mark; `dt` is the wall time the frame took.
+    void end(double dt, double nowT) {
+        frames += 1; since += dt;
+        if (since < 0.5) return;
+        char line[512];
+        int n = snprintf(line, sizeof line, "%.1f ms/frame:", since * 1e3 / frames);
+        double cpu = 0;
+        for (auto& b : buckets) {
+            cpu += b.second;
+            n += snprintf(line + n, sizeof line - size_t(n), " %s %.1f", b.first.c_str(), b.second / frames);
+            b.second = 0;
+        }
+        const double gpu = gpuAccum.exchange(0.0);
+        snprintf(line + n, sizeof line - size_t(n), " | cpu %.1f gpu %.1f", cpu / frames, gpu / frames);
+        g_frame_profile = line;
+        if (print && nowT - lastPrint > 2.0) { printf("profile: %s\n", line); fflush(stdout); lastPrint = nowT; }
+        frames = 0; since = 0;
+    }
+};
+FrameProf g_prof;
+}  // namespace
 
 // Move the source on by one frame without resampling it. Returns true when
 // something new arrived -- which is what decides whether the fit gets a new
@@ -1835,10 +1883,17 @@ int main(int argc, char** argv) {
         }
 
         @autoreleasepool {
+            g_prof.begin();
             id<CAMetalDrawable> drawable = [layer nextDrawable];
             if (!drawable) { continue; }
+            g_prof.mark("drawable");
 
             id<MTLCommandBuffer> cb = [queue commandBuffer];
+            [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                const double ms = (done.GPUEndTime - done.GPUStartTime) * 1e3;
+                double cur = g_prof.gpuAccum.load();
+                while (!g_prof.gpuAccum.compare_exchange_weak(cur, cur + ms)) {}
+            }];
 
             // Update the active scene's texture (MLX compute happens here).
             static double prevT = glfwGetTime();
@@ -1919,6 +1974,7 @@ int main(int argc, char** argv) {
                 source_polled = true;
             }
 
+            g_prof.mark("pull");
             // --- face tracking ------------------------------------------
             // Once per frame, before either scene uses it, so the mirror's
             // mask and the roots' mesh are built from the same detection
@@ -2001,6 +2057,7 @@ int main(int argc, char** argv) {
                 }
             }
 
+            g_prof.mark("track");
             // --- head movement ------------------------------------------
             // After the detection, before anything that consumes it. The
             // input shift and the region have to be settled here: the fit
@@ -2092,6 +2149,7 @@ int main(int argc, char** argv) {
                 netFresh = true;
             }
 
+            g_prof.mark("fit input");
             // --- the show -------------------------------------------------
             //
             // Stepped here: after the tracker and the fit have produced this
@@ -2921,6 +2979,7 @@ int main(int argc, char** argv) {
             roots.setTrackedPosition(g_face.centre_x, g_face.centre_y,
                                      g_track_on && g_face.valid);
 
+            g_prof.mark("show");
             id<MTLTexture> sceneTex = nil;
 
             // The mirror's frame, trained and rendered. A lambda because two
@@ -3500,6 +3559,7 @@ int main(int argc, char** argv) {
                 static double last_scan = 0.0;
                 if (nowT - last_scan > 2.0) { g_midi.rescan(); last_scan = nowT; }
             }
+            g_prof.mark("scene");
             ui::BeginFrame();
 
             ImGui_ImplMetal_NewFrame(rpd);
@@ -3907,6 +3967,7 @@ int main(int argc, char** argv) {
             DrawOverlayWindows(panelArgs);
 
             ImGui::Render();
+            g_prof.mark("panel");
 
             // The text refracts through the ripples the mirror was *just*
             // rendered with, so the sources come from the pond rather than
@@ -3951,6 +4012,7 @@ int main(int argc, char** argv) {
 
             [cb presentDrawable:drawable];
             [cb commit];
+            g_prof.mark("present");
 
             // Windows that live outside the main one: their platform windows
             // are created, moved and drawn here, each on its own command
@@ -3979,6 +4041,7 @@ int main(int argc, char** argv) {
         }
 
         double now = glfwGetTime();
+        g_prof.end(now - lastTime, now);
         fpsAccum += now - lastTime; lastTime = now; fpsFrames++;
         if (fpsAccum >= 0.5) { fpsShown = fpsFrames / fpsAccum; fpsAccum = 0; fpsFrames = 0; }
     }

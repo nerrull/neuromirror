@@ -277,6 +277,11 @@ extern std::vector<float> g_region_dist;
 extern bool g_have_mask;
 extern mirror::DstRect g_mask_bbox;
 
+// The live frame profile (main.mm's FrameProf): where the last half
+// second's frames went, CPU stage by stage plus the GPU, as one line for
+// the panel and, with MIRROR_PROFILE=1, the log every two seconds.
+extern std::string g_frame_profile;
+
 extern bool  g_face_size_on;
 // The size follows the person's distance: between `near` and `far` (the
 // tracked head's half-height in the camera frame, the proxy the sound's
