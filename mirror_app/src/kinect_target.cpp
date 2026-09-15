@@ -139,7 +139,13 @@ struct KinectFitTarget::Impl {
             bool ok = false;
             for (;;) {
                 std::string open_err;
-                ok = dead->open(/*use_opengl=*/true, KinectSource::UsbReset::kReset,
+                // No USB reset on a recovery reopen: the sensor is here
+                // because its link dropped and it re-enumerated itself
+                // (kernel: "terminateDevice ... link change interrupt"), so a
+                // reset only forces a second detach/attach and about a
+                // second more of dead feed. open() still falls back to a
+                // reset if the plain open fails.
+                ok = dead->open(/*use_opengl=*/true, KinectSource::UsbReset::kSkip,
                                 open_err, /*want_depth=*/false);
                 ++local_attempts;
                 if (ok) break;
