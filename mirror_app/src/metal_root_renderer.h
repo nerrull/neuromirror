@@ -479,6 +479,12 @@ public:
     // instance is still dark. RootDrawU::pulseStart in root_shared.h.
     void setInstancePulseStart(int i, float start);
 
+    // The camera's up -- the axis azimuth turns about and elevation is
+    // measured from. World up unless a shot says otherwise: RootSequence's
+    // pull-back stands the plant upright on screen by making this the
+    // structure's own axis.
+    float camUp[3] = {0.f, 1.f, 0.f};
+
     // Culling / LOD tuning.
     bool  cullInstances = true;    // frustum-cull whole systems
     float instanceCullPx = 2.0f;   // skip systems whose bound projects smaller than this

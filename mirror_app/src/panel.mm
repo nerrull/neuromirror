@@ -636,7 +636,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     const bool on = live && g_root_stage == (int)j.s;
                                     if (on) ImGui::PushStyleColor(ImGuiCol_Button,
                                                                   ImVec4(0.26f, 0.45f, 0.30f, 1.f));
-                                    if (ImGui::Button(j.name)) g_root_jump = (int)j.s;
+                                    // "##jump": the stage headers below carry the
+                                    // same labels, and ImGui IDs by label.
+                                    if (ImGui::Button((std::string(j.name) + "##jump").c_str()))
+                                        g_root_jump = (int)j.s;
                                     if (on) ImGui::PopStyleColor();
                                     hovered = hovered ||
                                               ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
@@ -716,17 +719,18 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "Guard: Grow ends at face seconds x (N-1) x this\n"
                                         "even if the sim has not reported done.");
                                 }
-                                const char* kReveal[] = {"on arrival", "when framed"};
-                                ImGui::SetNextItemWidth(140);
-                                ImGui::Combo("reveal mode", &S.reveal_mode, kReveal, IM_ARRAYSIZE(kReveal));
-                                ui::DeclareInt("reveal mode", &S.reveal_mode, 0, IM_ARRAYSIZE(kReveal) - 1);
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "on arrival: a mask appears when the root\n"
-                                        "reaches it. when framed: a planned mask is\n"
-                                        "drawn as soon as it is inside the frustum, and\n"
-                                        "stays drawn.");
+                                // Retired: a planned mask now stands from the
+                                // moment the root heads for it, which leaves
+                                // "when framed" nothing to add.
+                                ui::BeginRetired("reveal mode");
+                                {
+                                    const char* kReveal[] = {"on arrival", "when framed"};
+                                    ImGui::SetNextItemWidth(140);
+                                    if (ui::Visible())
+                                        ImGui::Combo("reveal mode", &S.reveal_mode, kReveal, IM_ARRAYSIZE(kReveal));
+                                    ui::DeclareInt("reveal mode", &S.reveal_mode, 0, IM_ARRAYSIZE(kReveal) - 1);
                                 }
+                                ui::EndRetired();
                             }
                             ui::EndHeader();
                             ui::BeginHeader("mouth", false);
@@ -785,7 +789,52 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 ui::EndGate();
                             }
                             ui::EndHeader();
-                            ui::BeginHeader("turn", false);
+                            ui::BeginHeader("finale", false);
+                            {
+                                ui::Checkbox("other structures", &S.hood_enabled);
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "On: the hood -- previous visitors' plants --\n"
+                                        "pops in at Turn and lights through the Orbit\n"
+                                        "(the turn / reveal / orbit sections below).\n"
+                                        "Off: nothing else is ever placed. Grow ends\n"
+                                        "straight into a slow pull-back from the last\n"
+                                        "face to the centre of this structure, zooming\n"
+                                        "out until the whole plant fills the frame\n"
+                                        "(frame margin) while the orbit turns; then the\n"
+                                        "rest of the orbit seconds, and the outro.");
+                                }
+                                ui::BeginGate(!S.hood_enabled);
+                                ui::SliderFloat("zoom out seconds", &S.zoom_out_seconds, 1.f, 120.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How long the pull-back from the last face to\n"
+                                        "the whole plant takes, from the start of the\n"
+                                        "Orbit.");
+                                }
+                                ui::SliderFloat("orbit tilt (deg)", &S.orbit_tilt_deg, 0.f, 90.f, "%.0f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "0: the orbit turns about the plant's own axis,\n"
+                                        "so it stands upright on screen (mask 0 at the\n"
+                                        "top). More tilts that axis toward world up by\n"
+                                        "this many degrees -- past the angle between the\n"
+                                        "two it is simply the world orbit.");
+                                }
+                                ui::EndGate();
+                                ui::SliderFloat("frame margin", &S.frame_margin, -0.9f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Alone: margin around every mask of the plant,\n"
+                                        "as a fraction of each one's extent, for the\n"
+                                        "pull-back's end framing -- negative lets the\n"
+                                        "outer masks run off the frame's edge. With the\n"
+                                        "hood: the same around every structure, for\n"
+                                        "Turn's end framing and the Orbit's.");
+                                }
+                            }
+                            ui::EndHeader();
+                            ui::BeginHeader("turn", false, S.hood_enabled);
                             {
                                 ui::SliderFloat("turn seconds", &S.turn_seconds, 0.5f, 20.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
@@ -796,17 +845,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "-- there is nothing left to ease once Orbit\n"
                                         "begins.");
                                 }
-                                ui::SliderFloat("frame margin", &S.frame_margin, 0.f, 1.5f, "%.2f");
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "Margin around the whole structure and every\n"
-                                        "other structure, as a fraction of the bound's\n"
-                                        "extent -- Turn's end framing and Orbit's share\n"
-                                        "this fit.");
-                                }
                             }
                             ui::EndHeader();
-                            ui::BeginHeader("reveal", false);
+                            ui::BeginHeader("reveal", false, S.hood_enabled);
                             {
                                 ui::SliderFloat("reveal ring radius", &S.reveal_ring_radius, 0.1f, 20.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
@@ -882,6 +923,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 ui::SliderFloat("orbit elevation (deg)", &S.orbit_elevation_deg,
                                                 -60.f, 80.f, "%.0f");
                                 ui::SliderFloat("orbit seconds", &S.orbit_seconds, 1.f, 300.f, "%.0f");
+                                // The hood's framing: how many structures to
+                                // fit and how far out to stand. Alone, the
+                                // pull-back's own fit (finale) decides that.
+                                ui::BeginGate(S.hood_enabled);
                                 ui::SliderFloat("orbit bound frac", &S.orbit_bound_frac, 0.1f, 1.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
@@ -906,11 +951,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "fill the frame. One framing from the moment the\n"
                                         "structures appear: the reveal and the orbit share it.");
                                 }
+                                ui::EndGate();
                                 ui::SliderFloat("orbit target lift", &S.orbit_target_lift, -40.f, 40.f, "%.1f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
                                         "Raises (or lowers) the point the orbit looks at,\n"
-                                        "in world units, off the framed structures' mean.");
+                                        "in world units, off the framed structures' mean.\n"
+                                        "Alone: along the orbit axis (screen vertical),\n"
+                                        "after the fit -- positive moves the plant down\n"
+                                        "the frame, and nothing else changes.");
                                 }
                             }
                             ui::EndHeader();

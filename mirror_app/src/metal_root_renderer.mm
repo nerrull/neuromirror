@@ -786,15 +786,37 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         if (P.sb) g_passProf = &P;
     }
 
-    // --- Camera (verbatim port of RootRenderer::render) ---
+    // --- Camera (a port of RootRenderer::render, about camUp) ---
+    // eye = target + R (cosEl sinAz e1 + sinEl U + cosEl cosAz e2), where
+    // (e1, U, e2) is world (x, y, z) carried onto U = camUp by the smallest
+    // rotation -- the identity for world up, so the original formula falls
+    // out of it, and continuous everywhere but U = -y.
     float cosEl = cosf(elevation), sinEl = sinf(elevation);
     float cosAz = cosf(azimuth),   sinAz = sinf(azimuth);
-    float ex = target3[0] + radius * cosEl * sinAz;
-    float ey = target3[1] + radius * sinEl;
-    float ez = target3[2] + radius * cosEl * cosAz;
+    V3 wup = norm3({camUp[0], camUp[1], camUp[2]});
+    V3 e1 = {1.f, 0.f, 0.f}, e2 = {0.f, 0.f, 1.f};
+    {
+        const V3 y = {0.f, 1.f, 0.f};
+        const V3 ax = cross3(y, wup);
+        const float s2 = dot3(ax, ax), c = dot3(y, wup);
+        if (s2 > 1e-10f && c > -0.9999f) {
+            // Rodrigues with sin = |ax|, cos = c: v' = v c + (k x v) s + k (k.v)(1 - c)
+            const float s = std::sqrt(s2);
+            const V3 k = {ax.x / s, ax.y / s, ax.z / s};
+            auto rot = [&](V3 v) {
+                const V3 kv = cross3(k, v);
+                const float kd = dot3(k, v) * (1.f - c);
+                return V3{v.x * c + kv.x * s + k.x * kd, v.y * c + kv.y * s + k.y * kd,
+                          v.z * c + kv.z * s + k.z * kd};
+            };
+            e1 = rot(e1); e2 = rot(e2);
+        }
+    }
+    float ex = target3[0] + radius * (cosEl * sinAz * e1.x + sinEl * wup.x + cosEl * cosAz * e2.x);
+    float ey = target3[1] + radius * (cosEl * sinAz * e1.y + sinEl * wup.y + cosEl * cosAz * e2.y);
+    float ez = target3[2] + radius * (cosEl * sinAz * e1.z + sinEl * wup.z + cosEl * cosAz * e2.z);
 
     V3 fwd = norm3({target3[0]-ex, target3[1]-ey, target3[2]-ez});
-    V3 wup = {0.f, 1.f, 0.f};
     V3 rawRgt = cross3(fwd, wup);
     V3 rgt = (dot3(rawRgt, rawRgt) > 1e-8f) ? norm3(rawRgt) : V3{1.f, 0.f, 0.f};
     V3 up  = cross3(rgt, fwd);

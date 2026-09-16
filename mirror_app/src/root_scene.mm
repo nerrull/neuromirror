@@ -2466,5 +2466,6 @@ id<MTLTexture> RootScene::render(id<MTLCommandBuffer> cb) {
                           renderLightDir_[2] * renderLightDir_[2]);
     if (ld < 1e-5f) ld = 1.f;
     float L[3] = {renderLightDir_[0] / ld, renderLightDir_[1] / ld, renderLightDir_[2] / ld};
+    for (int k = 0; k < 3; ++k) rr_->camUp[k] = camUp[k];
     return rr_->render(cb, azimuth, elevation, radius, target, effectiveFov(), L);
 }

@@ -90,7 +90,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (103 parameters)
+## show (106 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -127,7 +127,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/fade seconds` | float | 0.2 .. 10 | 2 |
 | `show/roots/fog fade seconds` | float | 0 .. 20 | 2 |
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
-| `show/roots/frame margin` | float | 0 .. 1.5 | 0 |
+| `show/roots/frame margin` | float | -0.9 .. 1.5 | 0 |
 | `show/roots/grow face seconds` | float | 0.5 .. 60 | 4.9 |
 | `show/roots/grow hop lead` | float | 0 .. 1 | 0.3 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
@@ -142,12 +142,15 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/mouth open amount` | float | 0 .. 1.5 | 0.8 |
 | `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.72 |
 | `show/roots/mouth open seconds` | float | 0.1 .. 5 | 1.2 |
+| `show/roots/other structures` | bool | -- | 0 | (off: no hood; a slow pull-back to the whole plant instead)
+| `show/roots/zoom out seconds` | float | 1 .. 120 | 20 |
 | `show/roots/orbit bound frac` | float | 0.1 .. 1 | 0.53 |
 | `show/roots/orbit elevation (deg)` | float | -60 .. 80 | 25 |
 | `show/roots/orbit max radius` | float | 20 .. 400 | 73 |
 | `show/roots/orbit rate (rad-s)` | float | -1 .. 1 | 0.08 |
 | `show/roots/orbit seconds` | float | 1 .. 300 | 20 |
 | `show/roots/orbit target lift` | float | -40 .. 40 | 0 |
+| `show/roots/orbit tilt (deg)` | float | 0 .. 90 | 0 | (alone: 0 = orbit about the plant's own axis)
 | `show/roots/orbit zoom` | float | 0.1 .. 1.5 | 0.55 |
 | `show/roots/reveal fallback seconds` | float | 0.2 .. 20 | 2.5 |
 | `show/roots/reveal max structures` | int | 1 .. 32 | 6 |

@@ -544,6 +544,10 @@ public:
     float azimuth   = 0.6f;
     float elevation = 0.35f;
     float radius    = 42.0f;
+    // The axis the camera orbits about (MetalRootRenderer::camUp). World up
+    // except during RootSequence's pull-back, which sets it to the plant's
+    // own axis and puts it back.
+    float camUp[3]  = {0.f, 1.f, 0.f};
     // Field of view. Held as a focal length because that is the number that
     // means something: "17.5 mm" says wide-angle to anyone who has held a
     // camera, where "0.6 radians of vertical half-angle" says nothing. The

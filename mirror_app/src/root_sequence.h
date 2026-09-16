@@ -32,6 +32,12 @@
 //           the piece runs to the end.
 //   Outro   the datamosh, then the screen fade. Done when the fade lands.
 //
+// That is the piece with the hood (RootSequenceParams::hood_enabled). Alone
+// -- the default now -- no other structure is ever placed: Grow ends
+// straight into Orbit, which is one slow pull-back from the last face to
+// the centre of this structure, zooming out until the whole plant fills the
+// frame while the orbit turns, and the Outro follows.
+//
 // This replaces RootCameraSequence (Face -> Deal -> Growth -> Meander), which
 // was built for an offline exporter and grafted onto the live show; the mask
 // deal-out, the marker-gated focus/grow toggle and the waypoint meander made
@@ -128,6 +134,24 @@ struct RootSequenceParams {
     // Hard cap on how fast azimuth/elevation may change, rad/s, so no stage
     // boundary can read as a whip-pan.
     float cam_max_angular_speed = 1.2f;
+
+    // --- the finale: with the hood, or alone -------------------------------
+    // hood_enabled: the other structures (the hood) are placed at Turn's
+    // entry and lit through the Orbit, as described in the header. Off, no
+    // other structure is ever placed: Turn is skipped, and the Orbit is one
+    // slow move from the close Grow-end pose back to the centre of this
+    // structure, zooming out over zoom_out_seconds until the whole plant
+    // fills the frame (frame_margin), while the azimuth advances at
+    // orbit_rate and the elevation settles on orbit_elevation_deg -- then
+    // it keeps orbiting for the rest of orbit_seconds and goes out.
+    bool  hood_enabled     = false;
+    float zoom_out_seconds = 20.f;
+    // Alone, the orbit turns about the plant's own axis (mask 0 at the top,
+    // the chain hanging from it), so the structure stands upright on screen
+    // -- tilted away from that toward world up by this many degrees, up to
+    // however far apart the two are (past which it is just the world orbit
+    // the hood uses).
+    float orbit_tilt_deg   = 0.f;
 
     // --- Turn --------------------------------------------------------------
     // Turn is the single move from the close Grow pose to the Orbit's own
@@ -361,6 +385,7 @@ public:
         // ease from yet.
         curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
         for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
+        curUp_[0] = 0.f; curUp_[1] = 1.f; curUp_[2] = 0.f;
     }
 
     // Advance one rendered frame. `clock` is seconds since begin(); `dt` is
@@ -405,6 +430,10 @@ public:
             if (cm < 0 || cm >= (int)pm.size()) cm = (int)pm.size() - 1;
             const rootsim::SimMask& tm = pm[size_t(cm)];
             const rootsim::SimMask& fm = pm[size_t(std::max(0, cm - 1))];
+            // The face the root is heading for stands from the moment the
+            // hop starts, not the moment the root arrives: the camera is
+            // already looking at where it will be.
+            roots.setMaskVisible(cm);
             float tip[3];
             const bool haveTip = roots.growthTip(tip);
 
@@ -437,13 +466,20 @@ public:
             easeTo(curR_, std::max(need, tightR_), kEase);
 
             if (roots.simDone() || tIn >= (double)growTimeout_) {
-                enter(Stage::Turn, clock);
                 turnFromAz_ = curAz_; turnFromEl_ = curEl_; turnFromR_ = curR_;
                 for (int k = 0; k < 3; ++k) turnFromT_[k] = curT_[k];
-                // The hood pops in right here, at the last Grow framing --
-                // before the camera has moved at all -- so it is already
-                // standing (dark) when Turn starts pulling back.
-                enterTurn(roots, P);
+                if (P.hood_enabled) {
+                    enter(Stage::Turn, clock);
+                    // The hood pops in right here, at the last Grow framing
+                    // -- before the camera has moved at all -- so it is
+                    // already standing (dark) when Turn starts pulling back.
+                    enterTurn(roots, P);
+                } else {
+                    // Alone: straight into the slow pull-back (see the
+                    // Orbit case), from this pose.
+                    enter(Stage::Orbit, clock);
+                    enterOrbit(roots, P, clock);
+                }
             }
             break;
         }
@@ -481,19 +517,56 @@ public:
             // the lighting, so a structure caught mid-front is not left
             // half dark.
             stepGrowth(roots, fdt);
-            stepLighting(roots, P, in, clock);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
-            easeAngle(curEl_, wantEl, kEase);
-            float wantT[3];
-            orbitTarget(P, wantT);
-            for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kEase);
-            easeTo(curR_, orbitRadius(roots, curAz_, wantEl, P), kEase);
+            if (P.hood_enabled) {
+                stepLighting(roots, P, in, clock);
+                easeAngle(curEl_, wantEl, kEase);
+                float wantT[3];
+                orbitTarget(P, wantT);
+                for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kEase);
+                easeTo(curR_, orbitRadius(roots, curAz_, wantEl, P), kEase);
+            } else {
+                // Alone: one slow smoothstep from the Grow-end pose back to
+                // the structure's centre, out to the radius that holds the
+                // whole plant (a sphere, so the same from every azimuth),
+                // over zoom_out_seconds -- while the orbit turns underneath.
+                // Reads the Orbit's own clock, not the stage's, so the
+                // Outro does not restart it.
+                const float u = smoothstep((clock - orbitT0_) / std::max(1e-3, (double)P.zoom_out_seconds));
+                // The orbit's axis: the plant's own, tilted by the knob,
+                // blended in from world up (the Grow poses) with the move.
+                float endUp[3];
+                plantUp(P, endUp);
+                for (int k = 0; k < 3; ++k) curUp_[k] = (1.f - u) * (k == 1 ? 1.f : 0.f) + u * endUp[k];
+                normalize3(curUp_);
+                // Every mask as its own bound, not one sphere over the lot:
+                // the chain is long and thin, and a sphere over it is
+                // fitted on a width it does not have.
+                const auto& pm = roots.plannedMasks();
+                std::vector<Bound> bs;
+                bs.reserve(pm.size());
+                for (const auto& m : pm)
+                    bs.push_back({{m.pos[0], m.pos[1], m.pos[2]}, std::max(m.rWidth, m.rHeight)});
+                // Fitted about the plant's centre; the lift is applied after,
+                // along the orbit axis (screen vertical), so it only moves
+                // the picture up or down the frame -- lifting the target
+                // *before* the fit pushed the camera back to keep every
+                // mask in, and in world y rather than along the axis.
+                const float endR = fitRadius(roots, centroid_, curAz_, wantEl, bs.data(), (int)bs.size(),
+                                             P.frame_margin, curUp_);
+                float endT[3];
+                for (int k = 0; k < 3; ++k) endT[k] = centroid_[k] + curUp_[k] * P.orbit_target_lift;
+                curEl_ = turnFromEl_ + (wantEl - turnFromEl_) * u;
+                curR_  = turnFromR_ + (endR - turnFromR_) * u;
+                for (int k = 0; k < 3; ++k) curT_[k] = turnFromT_[k] + (endT[k] - turnFromT_[k]) * u;
+            }
 
             if (stage_ == Stage::Orbit) {
                 // Both: the orbit's seconds, and every structure lit to its
                 // last mask -- a hood still lighting is not over.
-                if (tIn >= (double)P.orbit_seconds && allLit(roots)) enter(Stage::Outro, clock);
+                if (tIn >= (double)P.orbit_seconds && (!P.hood_enabled || allLit(roots)))
+                    enter(Stage::Outro, clock);
             } else {
                 // The datamosh once, on entry; then the fade once the mosh
                 // has had its time. The host owns the screen-wide fade
@@ -513,7 +586,12 @@ public:
                 }
                 if (tIn >= (double)P.datamosh_seconds) {
                     fade_ = std::clamp(fade_ + fdt / std::max(1e-3f, P.fade_seconds), 0.f, 1.f);
-                    if (fade_ >= 1.f) enter(Stage::Done, clock);
+                    if (fade_ >= 1.f) {
+                        enter(Stage::Done, clock);
+                        // The world orbit back for whoever drives the
+                        // camera next (the operator's own framing).
+                        curUp_[0] = 0.f; curUp_[1] = 1.f; curUp_[2] = 0.f;
+                    }
                 }
             }
             break;
@@ -558,6 +636,7 @@ public:
         roots.radius    = std::max(0.1f, curR_);
         roots.azimuth   = az;
         roots.elevation = el;
+        for (int k = 0; k < 3; ++k) roots.camUp[k] = curUp_[k];
 
         // WhenFramed reveal: a planned mask becomes visible the first frame
         // its bound is inside the frustum the camera above will render, and
@@ -609,6 +688,7 @@ public:
         roots.radius    = std::max(0.1f, curR_);
         roots.azimuth   = curAz_;
         roots.elevation = std::clamp(curEl_, -1.5f, 1.5f);
+        for (int k = 0; k < 3; ++k) roots.camUp[k] = curUp_[k];
     }
 private:
     void jumpState(Stage s, RootScene& roots, const RootSequenceParams& P, double clock) {
@@ -634,6 +714,7 @@ private:
         // The Face pose is where every stage starts from.
         curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
         for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
+        curUp_[0] = 0.f; curUp_[1] = 1.f; curUp_[2] = 0.f;
         growStepAcc_ = 0.f;
         clothClearAt_ = -1.0;
 
@@ -665,6 +746,15 @@ private:
         growEndPose(roots, P);
         turnFromAz_ = curAz_; turnFromEl_ = curEl_; turnFromR_ = curR_;
         for (int k = 0; k < 3; ++k) turnFromT_[k] = curT_[k];
+        if (!P.hood_enabled) {
+            // No Turn to jump to alone: it lands on the pull-back's start.
+            // The pose is the Grow-end one, already in cur*; enterOrbit
+            // starts the pull-back's clock.
+            hideHood();
+            enter(s == Stage::Outro ? Stage::Outro : Stage::Orbit, clock);
+            enterOrbit(roots, P, clock);
+            return;
+        }
         enterTurn(roots, P);
         if (s == Stage::Turn) { enter(Stage::Turn, clock); return; }
 
@@ -799,6 +889,14 @@ private:
     // the lighting actually begins -- nothing lights during Turn), and
     // what the orbit frames decided.
     void enterOrbit(RootScene& roots, const RootSequenceParams& P, double clock) {
+        orbitT0_ = clock;
+        if (!P.hood_enabled) {
+            // Alone: nothing placed, nothing to light; the orbit frames
+            // this structure (orbitBound with no neighbours is just that).
+            litOrder_.clear();
+            litNext_ = 0;
+            return;
+        }
         if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P);
         // A hood already standing (a jump back into Orbit) starts over: all
         // of it visible and dark.
@@ -940,19 +1038,64 @@ private:
         el = std::asin(std::clamp(v[1], -1.f, 1.f));
     }
 
+    static void cross3(const float a[3], const float b[3], float out[3]) {
+        out[0] = a[1] * b[2] - a[2] * b[1];
+        out[1] = a[2] * b[0] - a[0] * b[2];
+        out[2] = a[0] * b[1] - a[1] * b[0];
+    }
+    // The orbit axis the pull-back ends on (see orbit_tilt_deg): the plant's
+    // axis, mask 0 up, rotated toward world up by the tilt (no further than
+    // world up itself). World up when the plant has no axis to speak of.
+    void plantUp(const RootSequenceParams& P, float out[3]) const {
+        const float y[3] = {0.f, 1.f, 0.f};
+        float a[3] = {anchor_.pos[0] - centroid_[0], anchor_.pos[1] - centroid_[1],
+                      anchor_.pos[2] - centroid_[2]};
+        if (!normalize3(a)) { out[0] = y[0]; out[1] = y[1]; out[2] = y[2]; return; }
+        const float ang = std::acos(std::clamp(a[1], -1.f, 1.f));   // to world up
+        const float t = std::clamp(P.orbit_tilt_deg * kDeg, 0.f, ang);
+        const float sa = std::sin(ang);
+        if (sa < 1e-4f || t <= 0.f) { out[0] = a[0]; out[1] = a[1]; out[2] = a[2]; return; }
+        // Slerp from the axis toward world up by t.
+        const float wa = std::sin(ang - t) / sa, wy = std::sin(t) / sa;
+        for (int k = 0; k < 3; ++k) out[k] = wa * a[k] + wy * y[k];
+        normalize3(out);
+    }
+    // The renderer's camera frame: world (x, y, z) carried onto `up` by the
+    // smallest rotation (MetalRootRenderer::render does the same), so an
+    // (az, el) pose reads the same about any axis.
+    static void frameFor(const float up[3], float e1[3], float e2[3]) {
+        e1[0] = 1.f; e1[1] = 0.f; e1[2] = 0.f;
+        e2[0] = 0.f; e2[1] = 0.f; e2[2] = 1.f;
+        const float y[3] = {0.f, 1.f, 0.f};
+        float ax[3];
+        cross3(y, up, ax);
+        const float s2 = ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2], c = up[1];
+        if (s2 <= 1e-10f || c <= -0.9999f) return;
+        const float sn = std::sqrt(s2);
+        const float k[3] = {ax[0] / sn, ax[1] / sn, ax[2] / sn};
+        auto rot = [&](float v[3]) {
+            float kv[3];
+            cross3(k, v, kv);
+            const float kd = (k[0] * v[0] + k[1] * v[1] + k[2] * v[2]) * (1.f - c);
+            for (int i = 0; i < 3; ++i) v[i] = v[i] * c + kv[i] * sn + k[i] * kd;
+        };
+        rot(e1); rot(e2);
+    }
     // The camera's basis for a pose, in the renderer's own terms: forward
-    // from eye to target, right = forward x world-up, up = right x forward.
+    // from eye to target, right = forward x up, up = right x forward.
     struct Basis { float fwd[3], rgt[3], up[3]; };
-    static Basis basisFor(float az, float el) {
+    static Basis basisFor(float az, float el, const float* up = nullptr) {
         Basis b;
+        const float y[3] = {0.f, 1.f, 0.f};
+        const float* U = up ? up : y;
+        float e1[3], e2[3];
+        frameFor(U, e1, e2);
         const float ce = std::cos(el), se = std::sin(el);
-        b.fwd[0] = -ce * std::sin(az); b.fwd[1] = -se; b.fwd[2] = -ce * std::cos(az);
-        // cross(fwd, (0,1,0)) = (-fwd.z, 0, fwd.x)
-        b.rgt[0] = -b.fwd[2]; b.rgt[1] = 0.f; b.rgt[2] = b.fwd[0];
+        for (int k = 0; k < 3; ++k)
+            b.fwd[k] = -(ce * std::sin(az) * e1[k] + se * U[k] + ce * std::cos(az) * e2[k]);
+        cross3(b.fwd, U, b.rgt);
         if (!normalize3(b.rgt)) { b.rgt[0] = 1.f; b.rgt[1] = 0.f; b.rgt[2] = 0.f; }
-        b.up[0] = b.rgt[1] * b.fwd[2] - b.rgt[2] * b.fwd[1];
-        b.up[1] = b.rgt[2] * b.fwd[0] - b.rgt[0] * b.fwd[2];
-        b.up[2] = b.rgt[0] * b.fwd[1] - b.rgt[1] * b.fwd[0];
+        cross3(b.rgt, b.fwd, b.up);
         return b;
     }
     // The frustum's half-extents at unit depth. `fov` on RootScene is the
@@ -973,10 +1116,10 @@ private:
     // which solves for R directly. The largest R over both axes and every
     // bound is the answer.
     static float fitRadius(const RootScene& roots, const float target[3], float az, float el,
-                           const Bound* pts, int n, float margin) {
+                           const Bound* pts, int n, float margin, const float* up = nullptr) {
         float tanH, tanV;
         tanHV(roots, tanH, tanV);
-        const Basis b = basisFor(az, el);
+        const Basis b = basisFor(az, el, up);
         const float grow = 1.f + std::max(0.f, margin);
         float R = 0.f;
         for (int i = 0; i < n; ++i) {
@@ -1073,9 +1216,11 @@ private:
     float growStepAcc_ = 0.f;              // fractional steps owed, see stepGrowth
     float growTimeout_ = 30.f;
 
-    // Where the Turn started from, captured at its entry.
+    // Where the Turn (or, alone, the Orbit's pull-back) started from: the
+    // Grow-end pose, captured as Grow ends.
     float turnFromAz_ = 0.f, turnFromEl_ = 0.f, turnFromR_ = 0.f;
     float turnFromT_[3] = {0.f, 0.f, 0.f};
+    double orbitT0_ = 0.0;   // clock at the Orbit's entry, for the pull-back
     // The hood's centre and how far out its furthest structure stands, for
     // Orbit (see orbitBound).
     float orbitC_[3] = {0.f, 0.f, 0.f};
@@ -1092,6 +1237,7 @@ private:
     // The camera, before the head pan and the angular clamp.
     float curAz_ = 0.f, curEl_ = 0.f, curR_ = 1.f;
     float curT_[3] = {0.f, 0.f, 0.f};
+    float curUp_[3] = {0.f, 1.f, 0.f};   // the orbit axis -- see plantUp
     float panAz_ = 0.f, panEl_ = 0.f;
     float prevAz_ = 0.f, prevEl_ = 0.f;
     bool  prevValid_ = false;
