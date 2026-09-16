@@ -416,14 +416,22 @@ struct RootSim::Impl {
         // mouth outward along the normal before any cavity repulsion (this
         // mask's or another's) applies. Dwell (travel=false) always gets the
         // full geometry back, including this mask's own cavity.
+        //
+        // Mask 0 -- the visitor's own face, the one the chain grows out of --
+        // has no cavity and no tube at any point, for any hop: the roots
+        // grow out of it, so nothing should ever push them back off it.
+        // Only masks 1..n keep the roots out.
         int noCavity = -1;
         if (travel) {
             const int from = hopFrom(hop);
             if (from >= 0 && from < (int)localRevealed.size())
                 noCavity = from;
         }
-        auto geom = buildCavityGeometry(localRevealed, p.R0, p.Hh, false, 2.0,
-                                        tipRadius, p.viewCylLen, 0.9, p.taperPower, noCavity);
+        std::vector<MaskNode> geomMasks;
+        for (size_t k = 1; k < localRevealed.size(); ++k)
+            if ((int)k != noCavity) geomMasks.push_back(localRevealed[k]);
+        auto geom = buildCavityGeometry(geomMasks, p.R0, p.Hh, false, 2.0,
+                                        tipRadius, p.viewCylLen, 0.9, p.taperPower, -1);
         // The travel shell: intersecting the cavity-avoidance geometry with a
         // thin shell around the cone makes the root crawl over the surface
         // rather than cut through the middle. It only constrains the radial

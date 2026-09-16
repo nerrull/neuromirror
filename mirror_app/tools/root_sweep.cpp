@@ -152,9 +152,15 @@ void printHops(const SimParams& p, int maxSteps) {
 // Where the growth actually is after `steps`, relative to the first mask.
 // "The roots start in the wrong place" is a claim about geometry, and this is
 // the only way to check it that does not involve squinting at a render.
-void probe(const SimParams& p, int steps) {
+void probe(const SimParams& p, int steps, float swing) {
     rootsim::RootSim sim;
     if (!sim.reset(p)) { fprintf(stderr, "probe: reset failed\n"); return; }
+    // swing=X stands in for the app's motion extents (RootScene::setMaskExtent
+    // off the replayed head): every chain mask past the anchor padded as if
+    // its head swept X x its rest extent.
+    if (swing > 0.f)
+        for (int m = 1; m < (int)sim.plannedMasks().size(); ++m)
+            sim.setMaskExtent(m, swing * p.faceHalfW, swing * p.faceHalfH, swing * p.faceHalfD);
     for (int i = 0; i < steps; ++i) sim.step();
 
     const auto& planned = sim.plannedMasks();
@@ -220,6 +226,47 @@ void probe(const SimParams& p, int steps) {
             const float dist = std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
             if (dist < 8.f) { if (w >= 0) ++front[(int)dist]; else ++back[(int)dist]; }
         }
+        // Segments within 10 cm of mask 0 heading back toward it (against
+        // its normal): the "laterals travelling up" measure.
+        int nearSegs = 0, backSegs = 0;
+        for (size_t i = 0; i + 1 < segs.size(); i += 2) {
+            const float* a = &nodes[(size_t)segs[i] * 3];
+            const float* b = &nodes[(size_t)segs[i + 1] * 3];
+            float mid[3], dir[3], l = 0.f, dm = 0.f;
+            for (int k = 0; k < 3; ++k) { mid[k] = 0.5f * (a[k] + b[k]); dir[k] = b[k] - a[k]; l += dir[k] * dir[k];
+                                          dm += (mid[k] - m0.pos[k]) * (mid[k] - m0.pos[k]); }
+            if (dm > 100.f || l <= 0.f) continue;
+            l = std::sqrt(l);
+            const float dn = (dir[0] * m0.normal[0] + dir[1] * m0.normal[1] + dir[2] * m0.normal[2]) / l;
+            ++nearSegs;
+            if (dn < -0.3f) ++backSegs;
+        }
+        printf("segments within 10 cm of mask0: %d, of which heading back toward it: %d (%.0f%%)\n",
+               nearSegs, backSegs, nearSegs ? 100.f * backSegs / nearSegs : 0.f);
+        // The same around mask 1, against the chain's own direction (mask 0
+        // -> mask 1): what heads back up the chain once mask 1's cavity is
+        // in the geometry.
+        if (planned.size() > 1) {
+            const auto& m1 = planned[1];
+            float ch[3], cl = 0.f;
+            for (int k = 0; k < 3; ++k) { ch[k] = m1.pos[k] - m0.pos[k]; cl += ch[k] * ch[k]; }
+            cl = std::sqrt(cl); for (int k = 0; k < 3; ++k) ch[k] /= std::max(cl, 1e-6f);
+            const float R = 3.f * std::max(m1.rWidth, m1.rHeight);
+            int near1 = 0, up1 = 0;
+            for (size_t i = 0; i + 1 < segs.size(); i += 2) {
+                const float* a = &nodes[(size_t)segs[i] * 3];
+                const float* b = &nodes[(size_t)segs[i + 1] * 3];
+                float mid[3], dir[3], l = 0.f, dm = 0.f;
+                for (int k = 0; k < 3; ++k) { mid[k] = 0.5f * (a[k] + b[k]); dir[k] = b[k] - a[k]; l += dir[k] * dir[k];
+                                              dm += (mid[k] - m1.pos[k]) * (mid[k] - m1.pos[k]); }
+                if (dm > R * R || l <= 0.f) continue;
+                l = std::sqrt(l);
+                ++near1;
+                if ((dir[0] * ch[0] + dir[1] * ch[1] + dir[2] * ch[2]) / l < -0.3f) ++up1;
+            }
+            printf("segments within %.1f cm of mask1: %d, of which heading back up the chain: %d (%.0f%%)\n",
+                   R, near1, up1, near1 ? 100.f * up1 / near1 : 0.f);
+        }
         printf("nodes by cavity-ellipsoid distance (0.25 bins, 0..3):");
         for (int b = 0; b < 12; ++b) printf(" %d", hist[b]);
         printf("\nnodes by distance from mask0 (1-unit bins), in front / behind the face:\n");
@@ -279,6 +326,7 @@ int main(int argc, char** argv) {
     p.paramDir = ROOTSIM_PARAM_DIR;
     int seeds = 1, maxSteps = 200000, probeSteps = 0;
     bool quiet = false;
+    float swing = 0.f;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -289,10 +337,11 @@ int main(int argc, char** argv) {
         if (k == "maxSteps") { maxSteps = atoi(v.c_str()); continue; }
         if (k == "quiet")    { quiet = atoi(v.c_str()) != 0; continue; }
         if (k == "probe")    { probeSteps = atoi(v.c_str()); continue; }
+        if (k == "swing")    { swing = (float)atof(v.c_str()); continue; }
         applyOverride(p, k, v);
     }
 
-    if (probeSteps > 0) { probe(p, probeSteps); return 0; }
+    if (probeSteps > 0) { probe(p, probeSteps, swing); return 0; }
 
     int totalHops = 0, totalReached = 0, totalTouched = 0, unfinished = 0;
     float sumLen = 0.f, sumDays = 0.f, worst = 0.f, worstTouch = 0.f;
