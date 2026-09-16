@@ -522,6 +522,18 @@ struct RootSim::Impl {
 
         rs = std::make_shared<RootSystem>();
         rs->readParameters(paramPath, "plant", true, false);
+        // No laterals until the main root has cleared the mouth (see
+        // SimParams::basalClear): the basal zone is the spawn depth plus
+        // the clearance, with no spread.
+        if (p.basalClear >= 0.f) {
+            const int from = hopFrom(h);
+            const double depth = (from == 0 && anchorAxis) ? std::max(0.f, p.anchorSpawn)
+                                                           : std::max(0.f, p.spawnBehind);
+            if (auto tap = rs->getRootRandomParameter(1)) {
+                tap->lb = std::max(tap->lb, depth + (double)p.basalClear);
+                tap->lbs = 0.0;
+            }
+        }
         rs->setSeed(p.seed + (unsigned)h);
         rs->initialize(false);
         // The seed's initial heading, rather than CPlantBox's default straight

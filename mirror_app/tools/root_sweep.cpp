@@ -195,6 +195,81 @@ void probe(const SimParams& p, int steps) {
     for (int i = 0; i < std::min(n, 6); ++i)
         printf("  node %d (%.2f %.2f %.2f)\n", i,
                nodes[(size_t)i * 3], nodes[(size_t)i * 3 + 1], nodes[(size_t)i * 3 + 2]);
+
+    // The first root's own path (node 0, then each node's first outgoing
+    // segment -- CPlantBox numbers a root's nodes before its laterals'), as
+    // distance along and off the chord from where it started to mask 1, and
+    // its render y. "Is there a hump" is a question about this line.
+    if (planned.size() > 1 && n >= 2) {
+        // Where the root mass sits around mask 0, in the mask's own frame:
+    // distance in cavity-ellipsoid units (1 = on the r_width/r_height/
+    // r_depth surface), and along the normal (+ = in front of the face).
+    // A pile-up just outside 1 is the cavity repulsion stacking roots on
+    // its own boundary.
+    {
+        int hist[12] = {0};
+        int front[8] = {0}, back[8] = {0};
+        for (int i = 0; i < n; ++i) {
+            const float* q = &nodes[(size_t)i * 3];
+            float d[3]; for (int k = 0; k < 3; ++k) d[k] = q[k] - m0.pos[k];
+            const float u = d[0]*m0.tangent[0] + d[1]*m0.tangent[1] + d[2]*m0.tangent[2];
+            const float v = d[0]*m0.bitangent[0] + d[1]*m0.bitangent[1] + d[2]*m0.bitangent[2];
+            const float w = d[0]*m0.normal[0] + d[1]*m0.normal[1] + d[2]*m0.normal[2];
+            const float e = std::sqrt((u*u)/(m0.rWidth*m0.rWidth) + (v*v)/(m0.rHeight*m0.rHeight) + (w*w)/(m0.rDepth*m0.rDepth));
+            if (e < 3.f) ++hist[(int)(e / 0.25f)];
+            const float dist = std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+            if (dist < 8.f) { if (w >= 0) ++front[(int)dist]; else ++back[(int)dist]; }
+        }
+        printf("nodes by cavity-ellipsoid distance (0.25 bins, 0..3):");
+        for (int b = 0; b < 12; ++b) printf(" %d", hist[b]);
+        printf("\nnodes by distance from mask0 (1-unit bins), in front / behind the face:\n");
+        for (int b = 0; b < 8; ++b) printf("  %d-%d: %5d / %5d\n", b, b + 1, front[b], back[b]);
+    }
+
+    // BFS over the segment graph from node 0; the path to the node that
+        // ends nearest mask 1 is the first root's line (the laterals branch
+        // off it and never get closer to the mask than the tip that arrived).
+        std::vector<std::vector<int>> adj(n);
+        for (size_t i = 0; i + 1 < segs.size(); i += 2) {
+            adj[segs[i]].push_back(segs[i + 1]);
+            adj[segs[i + 1]].push_back(segs[i]);
+        }
+        std::vector<int> parent(n, -2);
+        // Node 0 is the seed with no segment of its own; the root starts at 1.
+        const int root0 = (n > 1 && adj[0].empty()) ? 1 : 0;
+        std::vector<int> queue{root0};
+        parent[root0] = -1;
+        for (size_t qi = 0; qi < queue.size(); ++qi)
+            for (int nb : adj[queue[qi]])
+                if (parent[nb] == -2) { parent[nb] = queue[qi]; queue.push_back(nb); }
+        int end = 0; float bestD = 1e30f;
+        for (int i : queue) {
+            const float* q = &nodes[(size_t)i * 3];
+            float d = 0.f;
+            for (int k = 0; k < 3; ++k) d += (q[k] - planned[1].pos[k]) * (q[k] - planned[1].pos[k]);
+            if (d < bestD) { bestD = d; end = i; }
+        }
+        std::vector<int> path;
+        for (int c = end; c >= 0; c = parent[c]) path.push_back(c);
+        std::reverse(path.begin(), path.end());
+        const float* a = &nodes[0];
+        const float* b = planned[1].pos;
+        float ab[3], L = 0.f;
+        for (int k = 0; k < 3; ++k) { ab[k] = b[k] - a[k]; L += ab[k] * ab[k]; }
+        L = std::sqrt(L);
+        for (int k = 0; k < 3; ++k) ab[k] /= std::max(L, 1e-6f);
+        printf("first root, chord to mask 1 (length %.2f): along  off  y  (dist to mask0 centre)\n", L);
+        int count = 0;
+        for (int cur : path) {
+            const float* q = &nodes[(size_t)cur * 3];
+            float d[3], along = 0.f, off2 = 0.f, dm = 0.f;
+            for (int k = 0; k < 3; ++k) { d[k] = q[k] - a[k]; along += d[k] * ab[k]; }
+            for (int k = 0; k < 3; ++k) { const float o = d[k] - along * ab[k]; off2 += o * o;
+                                          dm += (q[k] - m0.pos[k]) * (q[k] - m0.pos[k]); }
+            printf("  %3d  %7.2f %6.2f %7.2f  (%.2f)\n", count, along, std::sqrt(off2), q[1], std::sqrt(dm));
+            ++count;
+        }
+    }
 }
 
 }  // namespace

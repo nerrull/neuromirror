@@ -2770,6 +2770,7 @@ int main(int argc, char** argv) {
                     // still report the last visitor's converged loss.
                     mirror.clearLastLoss();
                     g_fit_arm = false;
+                    g_fit_t0 = nowT;
                     if (g_show_log)
                         printf("show: fit started (%dx%d, %d px%s)\n", fit_w, fit_h,
                                mirror.pond().fitPixels(),
@@ -3106,7 +3107,15 @@ int main(int argc, char** argv) {
                         ++g_target_swaps;
                     }
                     const FitTune& tune = g_have_mask ? g_tune_crop : g_tune_full;
-                    mirror.fitSteps(tune.steps, tune.lr);
+                    // The warm-up: the lr eased up from g_lr_warm_from x over
+                    // the first g_lr_warm_secs of the fit, so the first
+                    // seconds resolve rather than snap.
+                    float warm = 1.f;
+                    if (g_fit_t0 >= 0.0 && g_lr_warm_secs > 0.f) {
+                        const float t = std::min(1.f, (float)((nowT - g_fit_t0) / g_lr_warm_secs));
+                        warm = g_lr_warm_from + (1.f - g_lr_warm_from) * t * t;
+                    }
+                    mirror.fitSteps(tune.steps, tune.lr * warm);
                 }
                 id<MTLTexture> out = mirror.render();
 

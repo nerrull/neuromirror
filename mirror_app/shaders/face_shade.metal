@@ -154,11 +154,11 @@ static float4 shadeFace(float3 P, float3 nIn, float3 albedo, float3 lightPos,
     // through the skin (the transmission lobe, tinted) and whatever the eye
     // and mouth holes let straight through; the back and the rim take it
     // directly.
-    if (any(U.flashColor.xyz > 0.0)) {
-        const float3 toF = U.flashPos.xyz - P;
+    for (int fi = 0; fi < U.flashCount; ++fi) {
+        const float3 toF = U.flashPos[fi].xyz - P;
         const float d2 = dot(toF, toF);
         const float3 fl = toF * rsqrt(max(d2, 1e-6));
-        const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+        const float r2 = max(U.flashPos[fi].w * U.flashPos[fi].w, 1e-4);
         const float fat = 1.0 / (1.0 + d2 / r2);
         float3 f = baseColor * max(dot(n, fl), 0.0) / kFacePI;
         f += baseColor * U.sssTint.xyz

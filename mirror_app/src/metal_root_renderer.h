@@ -166,7 +166,8 @@ public:
     // for a moment on a pluck marker (RootScene::triggerFlash, Orbit only).
     // The host sets pos/level every frame; the rest is the look.
     struct Flash {
-        float pos[3]       = {0.f, 0.f, 0.f};
+        float pos[ROOT_MAX_FLASH][3] = {};
+        int   count        = 0;      // lights in pos this frame
         float level        = 0.f;    // this frame's envelope, 0..1
         float intensity    = 12.f;   // colour x this x level reaches the shaders
         float color[3]     = {1.0f, 0.93f, 0.80f};
@@ -174,6 +175,9 @@ public:
         float decaySeconds = 0.7f;   // the envelope's e-fold time after the hit
         float depth        = 0.6f;   // where inside the head, x the mask's r_depth
         bool  nearest      = false;  // pick the mask nearest the camera, else random
+        bool  all          = false;  // every mask at once, rather than one
+        bool  mask0        = true;   // the visitor's own mask (the live chain's
+                                     // mask 0) may flash
     };
     Flash flash;
     // Shading for the meshed leaves. Separate from FaceParams because a leaf is

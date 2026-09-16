@@ -160,6 +160,14 @@ struct SimParams {
     // -normal, a non-anchor hop starts. The root then heads for the next mask
     // from behind the face (initHop) -- it never crosses in front of it.
     float spawnBehind  = 1.5f;
+    // How far past the mouth, cm, a hop's main root grows before its first
+    // lateral: the tap's basal zone is set to (spawn depth + this) at each
+    // hop. The species files put the first lateral 1 cm from the base --
+    // i.e. inside the head, since the root starts 1.5 cm behind the mouth
+    // -- and those laterals, sprouting inside the cavity and then pushed
+    // out of it once the dwell restores it, were the pile of root behind
+    // and around the first mask. Negative disables (the species' own lb).
+    float basalClear   = 2.0f;
     // How far behind the face, cm along -normal, the dwell's rim ring sits.
     // 0 rings the face in its own plane, so the wrap is around the rim and
     // the nest reads as a frame; positive pulls it back behind the head,
@@ -267,6 +275,7 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("coneShellThickness", p.coneShellThickness);
     f("growthDt", p.growthDt);
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
+    f("basalClear", p.basalClear);
     f("nestBehind", p.nestBehind); f("nestHitRadius", p.nestHitRadius);
     f("nestRings", p.nestRings); f("nestPerRing", p.nestPerRing);
     f("cavityMargin", p.cavityMargin); f("motionCavity", p.motionCavity);

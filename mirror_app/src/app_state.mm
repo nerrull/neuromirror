@@ -41,6 +41,9 @@ float g_w0_ramp_secs = 1.5f;
 float g_w0_from      = 0.f;
 float g_w0_idle      = -1.f;    // < 0 = nothing saved
 double g_w0_t0       = -1.0;    // < 0 = not ramping
+float  g_lr_warm_secs = 5.f;
+float  g_lr_warm_from = 0.2f;
+double g_fit_t0       = -1.0;
 
 // --- colour follows the fit ----------------------------------------------
 // The mirror idles in black and white and the fitting phase brings colour in,

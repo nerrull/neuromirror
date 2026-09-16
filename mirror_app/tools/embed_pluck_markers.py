@@ -32,14 +32,22 @@ the ~50ms before it. A real pluck's click peak dwarfs its own lead-in noise
 (ratio commonly 10-25x in this source); a decay-tail retrigger or ambient
 bump does not (commonly <4x). MIN_TRANSIENT_RATIO below is the cut.
 
-Each cue's label is the hit's 0..1 strength as plain text ("0.734"), which
-WwiseAudio::MarkerCallback (wwise_audio.cpp) parses back out at runtime --
-this is how a marker hit gets a variable raindrop size instead of a fixed one.
+The onset detector only says *where* something started. What the piece
+reacts to is the pop -- the literal click of a fibre letting go -- and the
+source is full of onsets that are not pops: crackle, decay-tail ripple,
+the bed's own texture. Measured on this file those two populations barely
+overlap: a pop peaks at -20 dBFS or louder in the 20 ms after its onset and
+stands 6x or more over the RMS of the 50 ms before it; the rest sits at
+-28..-22 dBFS and 2.8..4x. So each onset is scored by its own peak
+(peak_dbfs) and gated on MIN_PEAK_DBFS and MIN_TRANSIENT_RATIO, which cuts
+the file from ~4.7 hits/s to ~1.1.
 
-MIN_STRENGTH below drops the quiet end of that same distribution before any
-cue is ever written, so "only the loud plucks" isn't something the app has to
-filter live -- a hit that made it into the bank was already loud enough to
-want a drop.
+Each cue's label is the hit's 0..1 strength as plain text ("0.734") --
+the pop's peak, STRENGTH_FLOOR_DBFS..0 dBFS mapped to 0..1 -- which
+WwiseAudio::MarkerCallback (wwise_audio.cpp) parses back out at runtime;
+this is how a marker hit gets a variable raindrop size instead of a fixed
+one. A hit that made it into the bank was already a pop, so "only the real
+plucks" isn't something the app has to filter live.
 """
 import struct
 import sys
@@ -59,19 +67,22 @@ WINDOW_MS = 1000.0
 ATTACK_MS = 1.0
 RELEASE_MS = 60.0
 
-# Hits below this normalized strength (see detect_onsets' `strength`, 0..1
-# across floorDb..0 dBFS) are dropped before the cue chunk is ever written --
-# "very loud plucks only". Print the full distribution below and re-run with
-# a higher number if too much still gets through, or lower if too little does.
-MIN_STRENGTH = 0.35
-
-# See transient_ratio() docstring above for what this measures and why.
-# Set to 0 (disabled) -- an amplitude filter at the Wwise program level now
-# does this job at playback time, so decay-tail retriggers no longer need to
-# be filtered out of the marker set itself.
+# The pop gate (see the module docstring): an onset is kept only if the
+# waveform's peak in the PEAK_POST_MS after it reaches MIN_PEAK_DBFS *and*
+# that peak is MIN_TRANSIENT_RATIO x the RMS of the TRANSIENT_PRE_MS before
+# it. The detector's own envelope-rise strength is not used for the cut any
+# more: it is a dB rise over a 60 ms release envelope, which the crackle
+# clears about as often as the pops do (its distribution on this file is
+# 0.40..0.56 for both). Run the script to print the peak/ratio distribution
+# and move these if too much or too little gets through.
+MIN_PEAK_DBFS = -20.0
+MIN_TRANSIENT_RATIO = 6.0
+PEAK_POST_MS = 20.0
 TRANSIENT_PRE_MS = 50.0
-TRANSIENT_POST_MS = 30.0
-MIN_TRANSIENT_RATIO = 0.0
+TRANSIENT_POST_MS = 20.0
+# The label's 0..1: a pop's peak over this range. -30 puts the quietest
+# kept pop (-20 dBFS) at 0.33, so a drop is never sized from a zero.
+STRENGTH_FLOOR_DBFS = -30.0
 
 
 def coeff(ms, dt):
@@ -86,6 +97,15 @@ def transient_ratio(mono, sr, offset, pre_ms=TRANSIENT_PRE_MS, post_ms=TRANSIENT
     return float(post_peak / (pre_rms + 1e-9))
 
 
+def peak_dbfs(mono, sr, offset, post_ms=PEAK_POST_MS):
+    post = mono[offset:offset + int(post_ms * 0.001 * sr)]
+    return float(20.0 * np.log10(np.max(np.abs(post)) + 1e-9)) if len(post) else -200.0
+
+
+def peak_strength(db, floor_db=STRENGTH_FLOOR_DBFS):
+    return float(np.clip((db - floor_db) / max(-floor_db, 1.0), 0.0, 1.0))
+
+
 def detect_onsets(mono, sr, params=None, debug=False):
     p = dict(
         sensitivity=SENSITIVITY, floor_db=FLOOR_DB, min_rise_db=MIN_RISE_DB,
@@ -93,6 +113,8 @@ def detect_onsets(mono, sr, params=None, debug=False):
         attack_ms=ATTACK_MS, release_ms=RELEASE_MS,
         transient_pre_ms=TRANSIENT_PRE_MS, transient_post_ms=TRANSIENT_POST_MS,
         min_transient_ratio=MIN_TRANSIENT_RATIO,
+        min_peak_dbfs=MIN_PEAK_DBFS, peak_post_ms=PEAK_POST_MS,
+        strength_floor_dbfs=STRENGTH_FLOOR_DBFS,
     )
     if params:
         p.update(params)
@@ -164,11 +186,13 @@ def detect_onsets(mono, sr, params=None, debug=False):
             thr_trace[i] = thr
 
     survivors = suppress_neighbors(candidates, sr, p["min_interval_ms"])
-    hits = [
-        (off, strength) for off, strength in survivors
-        if transient_ratio(mono, sr, off, p["transient_pre_ms"], p["transient_post_ms"])
-        >= p["min_transient_ratio"]
-    ]
+    # The pop gate, and the strength re-scored from the pop's own peak.
+    hits = []
+    for off, _rise_strength in survivors:
+        db = peak_dbfs(mono, sr, off, p["peak_post_ms"])
+        ratio = transient_ratio(mono, sr, off, p["transient_pre_ms"], p["transient_post_ms"])
+        if db >= p["min_peak_dbfs"] and ratio >= p["min_transient_ratio"]:
+            hits.append((off, peak_strength(db, p["strength_floor_dbfs"])))
 
     if debug:
         return hits, {
@@ -258,27 +282,29 @@ def build_list_adtl_chunk(hits):
 
 def main():
     mono, sr = read_wav_mono(IN_PATH)
-    all_hits = detect_onsets(mono, sr)
-    print(f"{len(all_hits)} onsets detected over {len(mono)/sr:.1f}s "
-          f"({len(all_hits)/(len(mono)/sr):.2f}/s)")
-    if not all_hits:
-        print("no onsets found -- aborting, leaving the file untouched")
-        sys.exit(1)
+    dur = len(mono) / sr
+    # The ungated onsets, for the distribution print: where the gate sits
+    # against what the detector found.
+    ungated = detect_onsets(mono, sr, dict(min_peak_dbfs=-200.0, min_transient_ratio=0.0))
+    peaks = np.array([peak_dbfs(mono, sr, off) for off, _s in ungated])
+    ratios = np.array([transient_ratio(mono, sr, off) for off, _s in ungated])
+    print(f"{len(ungated)} onsets detected over {dur:.1f}s ({len(ungated)/dur:.2f}/s)")
+    if len(ungated):
+        pp = np.percentile(peaks, [10, 25, 50, 75, 90])
+        pr = np.percentile(ratios, [10, 25, 50, 75, 90])
+        print("peak dBFS  p10 %.1f  p25 %.1f  median %.1f  p75 %.1f  p90 %.1f" % tuple(pp))
+        print("ratio      p10 %.1f  p25 %.1f  median %.1f  p75 %.1f  p90 %.1f" % tuple(pr))
 
-    strengths = np.array([s for _off, s in all_hits])
-    pct = np.percentile(strengths, [10, 25, 50, 75, 90, 99])
-    print(f"strength distribution: min {strengths.min():.2f}  "
-          f"p10 {pct[0]:.2f}  p25 {pct[1]:.2f}  median {pct[2]:.2f}  "
-          f"p75 {pct[3]:.2f}  p90 {pct[4]:.2f}  p99 {pct[5]:.2f}  "
-          f"max {strengths.max():.2f}")
-
-    hits = [(off, s) for off, s in all_hits if s >= MIN_STRENGTH]
-    print(f"MIN_STRENGTH={MIN_STRENGTH}: keeping {len(hits)}/{len(all_hits)} onsets "
-          f"({len(hits)/(len(mono)/sr):.2f}/s)")
+    hits = detect_onsets(mono, sr)
+    print(f"pop gate (peak >= {MIN_PEAK_DBFS} dBFS, ratio >= {MIN_TRANSIENT_RATIO}x): "
+          f"keeping {len(hits)}/{len(ungated)} ({len(hits)/dur:.2f}/s)")
     if not hits:
-        print("MIN_STRENGTH filtered out everything -- aborting, "
-              "leaving the file untouched; lower MIN_STRENGTH and re-run")
+        print("the gate filtered out everything -- aborting, leaving the file "
+              "untouched; lower MIN_PEAK_DBFS / MIN_TRANSIENT_RATIO and re-run")
         sys.exit(1)
+    strengths = np.array([s for _off, s in hits])
+    print("strength  min %.2f  median %.2f  max %.2f" %
+          (strengths.min(), np.median(strengths), strengths.max()))
 
     with open(IN_PATH, "rb") as f:
         data = f.read()

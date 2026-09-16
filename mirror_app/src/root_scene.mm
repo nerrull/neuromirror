@@ -1120,8 +1120,19 @@ void RootScene::uploadFaceFromMasks() {
     rr_->uploadFaceMesh(data);
 }
 
+// flash.mask0 off keeps the visitor's own mask (the live chain's mask 0)
+// out of it.
+bool RootScene::flashAllowed(const FaceBlock& fb) const {
+    return rr_->flash.mask0 || !(fb.structure == -1 && fb.slot == 0);
+}
+
 void RootScene::triggerFlash() {
     if (!rr_ || faceBlocks_.empty()) return;
+    if (rr_->flash.all) {
+        flashStructure_ = -3; flashSlot_ = -1;
+        flashLevel_ = 1.f;
+        return;
+    }
     int pick = -1;
     if (rr_->flash.nearest) {
         // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz), the
@@ -1132,20 +1143,25 @@ void RootScene::triggerFlash() {
                               target[2] + radius * ce * std::cos(azimuth)};
         float best = 1e30f;
         for (int i = 0; i < (int)faceBlocks_.size(); ++i) {
+            if (!flashAllowed(faceBlocks_[size_t(i)])) continue;
             const auto& m = faceBlocks_[size_t(i)].mask;
             const float d[3] = {m.pos[0] - eye[0], m.pos[1] - eye[1], m.pos[2] - eye[2]};
             const float d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if (d2 < best) { best = d2; pick = i; }
         }
     } else {
-        pick = int(std::rand() % faceBlocks_.size());
+        std::vector<int> ok;
+        for (int i = 0; i < (int)faceBlocks_.size(); ++i)
+            if (flashAllowed(faceBlocks_[size_t(i)])) ok.push_back(i);
+        if (!ok.empty()) pick = ok[size_t(std::rand()) % ok.size()];
     }
+    if (pick < 0) return;
     flashStructure_ = faceBlocks_[size_t(pick)].structure;
     flashSlot_      = faceBlocks_[size_t(pick)].slot;
     flashLevel_     = 1.f;
 }
 
-// The flash's envelope and position, once a frame. The position is looked
+// The flash's envelope and positions, once a frame. Positions are looked
 // up by (structure, slot) rather than kept from the trigger, so a rebuilt
 // face mesh (a re-placed structure, a rebuildFace) moves the light with it.
 void RootScene::stepFlash(double dt) {
@@ -1154,19 +1170,20 @@ void RootScene::stepFlash(double dt) {
         flashLevel_ *= std::exp(-(float)dt / std::max(rr_->flash.decaySeconds, 1e-3f));
     if (flashLevel_ < 1e-3f) { flashLevel_ = 0.f; flashStructure_ = -2; }
     rr_->flash.level = flashLevel_;
+    rr_->flash.count = 0;
     if (flashLevel_ <= 0.f) return;
     for (const auto& fb : faceBlocks_) {
-        if (fb.structure != flashStructure_ || fb.slot != flashSlot_) continue;
+        const bool mine = flashStructure_ == -3 ? flashAllowed(fb)
+                        : (fb.structure == flashStructure_ && fb.slot == flashSlot_);
+        if (!mine || rr_->flash.count >= ROOT_MAX_FLASH) continue;
         // Inside the head: back from the mask's centre along its facing, a
         // fraction of its cavity half-depth (the same depth the face plane
         // is recessed by, in faceRecess terms).
         const float back = fb.mask.rDepth * rr_->flash.depth;
-        for (int c = 0; c < 3; ++c)
-            rr_->flash.pos[c] = fb.mask.pos[c] - fb.mask.normal[c] * back;
-        return;
+        float* out = rr_->flash.pos[rr_->flash.count++];
+        for (int c = 0; c < 3; ++c) out[c] = fb.mask.pos[c] - fb.mask.normal[c] * back;
     }
-    flashLevel_ = 0.f;   // its mask is gone
-    rr_->flash.level = 0.f;
+    if (rr_->flash.count == 0) { flashLevel_ = 0.f; rr_->flash.level = 0.f; }   // its mask is gone
 }
 
 // See root_scene.h's debugSpawnMarkers. Every planned mask gets a mouth

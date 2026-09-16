@@ -80,6 +80,14 @@ extern float  g_w0_from;
 extern float  g_w0_idle;
 extern double g_w0_t0;
 
+// --- the fit's warm-up ----------------------------------------------------
+// The learning rate is scaled up from g_lr_warm_from x to 1 x over the first
+// g_lr_warm_secs of a fit (from beginFit), so the face does not snap in on
+// the first second and then sit there. g_fit_t0 < 0 = no fit started.
+extern float  g_lr_warm_secs;
+extern float  g_lr_warm_from;
+extern double g_fit_t0;
+
 // --- colour follows the fit ----------------------------------------------
 extern bool   g_colour_fit_on;
 extern float  g_colour_fit_full;

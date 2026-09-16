@@ -2258,6 +2258,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 }
                 ui::EndGate();
 
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("lr warm-up secs", &g_lr_warm_secs, 0.f, 15.f, "%.1fs");
+                ImGui::SameLine();
+                ui::SliderFloat("lr warm-up from", &g_lr_warm_from, 0.f, 1.f, "%.2fx");
+                ImGui::PopItemWidth();
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The learning rate starts at this fraction of the\n"
+                        "crop/full lr when a fit begins and eases up to the\n"
+                        "full value over the warm-up seconds (0 = off), so the\n"
+                        "face resolves over the first seconds instead of\n"
+                        "snapping in on the first.");
+                }
+
                 ui::Checkbox("colour follows the fit", &g_colour_fit_on);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
@@ -3413,6 +3427,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SameLine();
                         ui::SliderFloat("nest behind", &SP.nestBehind, -5.f, 15.f,
                                         "%.2f cm");
+                        ui::SliderFloat("basal clear", &SP.basalClear, -1.f, 10.f, "%.1f cm");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "How far past the mouth the main root grows before\n"
+                                "its first lateral. The species files start laterals\n"
+                                "1 cm from the base -- inside the head -- and those\n"
+                                "were the pile of root behind the first mask.\n"
+                                "-1 = the species' own value.");
+                        }
                         ui::SliderFloat("motion cavity", &SP.motionCavity, 0.f, 1.5f, "%.2f");
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip(
@@ -3952,7 +3975,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("flash depth", &R.flash.depth, -1.0f, 2.0f);
                     ImGui::TextDisabled("x the mask's cavity half-depth, back along\n"
                                         "its facing; negative is in front of the face");
+                    ui::Checkbox("flash all masks", &R.flash.all);
                     ui::Checkbox("flash nearest mask", &R.flash.nearest);
+                    ui::Checkbox("flash mask 0", &R.flash.mask0);
+                    ImGui::TextDisabled("mask 0 = the visitor's own face");
                     if (ImGui::Button("fire flash")) pf.roots.triggerFlash();
                 }
                 ui::EndHeader();

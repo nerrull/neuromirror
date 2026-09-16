@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -884,8 +885,10 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                                 env.keyColor[2] * env.keyIntensity, 0};
     {
         const float k = std::max(0.f, flash.level) * flash.intensity;
-        gu.flashPos   = (simd_float4){flash.pos[0], flash.pos[1], flash.pos[2],
-                                      std::max(flash.radius, 0.01f)};
+        gu.flashCount = (k > 0.f) ? std::min(std::max(flash.count, 0), ROOT_MAX_FLASH) : 0;
+        for (int i = 0; i < gu.flashCount; ++i)
+            gu.flashPos[i] = (simd_float4){flash.pos[i][0], flash.pos[i][1], flash.pos[i][2],
+                                           std::max(flash.radius, 0.01f)};
         gu.flashColor = (simd_float4){flash.color[0] * k, flash.color[1] * k,
                                       flash.color[2] * k, 0};
     }
@@ -1062,8 +1065,9 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         ffu.sssWrap = face.sssWrap;
         ffu.sssTrans = face.sssTrans;
         ffu.sssPower = face.sssPower;
-        ffu.flashPos = gu.flashPos;
+        std::memcpy(ffu.flashPos, gu.flashPos, sizeof(ffu.flashPos));
         ffu.flashColor = gu.flashColor;
+        ffu.flashCount = gu.flashCount;
         [ge setRenderPipelineState:facePipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];
@@ -1182,8 +1186,9 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     fu.fogNoiseLod = std::max(0.f, std::min(fog.noiseLod, 6.f));
     fu.lightDir = gu.lightDir;
     fu.keyColor = gu.keyColor;
-    fu.flashPos = gu.flashPos;
+    std::memcpy(fu.flashPos, gu.flashPos, sizeof(fu.flashPos));
     fu.flashColor = gu.flashColor;
+    fu.flashCount = gu.flashCount;
     // Two advection vectors that are deliberately not parallel and not
     // commensurate in speed: with one, or with two that differ only in
     // magnitude, the field still resolves into a single sliding direction.

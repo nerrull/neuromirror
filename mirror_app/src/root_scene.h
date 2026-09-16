@@ -362,9 +362,10 @@ public:
     float pulseClock() const;
 
     // The pluck flash (MetalRootRenderer::flash): pick a mask -- nearest the
-    // camera or at random, per flash.nearest -- and light it from inside for
-    // a moment. Position is re-read from the mask every frame in advance(),
-    // so it follows the mask wherever the placement puts it.
+    // camera or at random, per flash.nearest; every mask with flash.all --
+    // and light it from inside for a moment. Positions are re-read from the
+    // masks every frame in advance(), so they follow the masks wherever the
+    // placement puts them.
     void triggerFlash();
 
     // --- debug: spawn-point markers ------------------------------------------
@@ -815,11 +816,12 @@ private:
         size_t offset, count;         // floats into the mesh
     };
     std::vector<FaceBlock> faceBlocks_;
-    // The flash's mask (a faceBlocks_ structure/slot, -2 = none) and its
-    // envelope, decayed in advance().
+    // The flash's mask (a faceBlocks_ structure/slot; -2 = none, -3 = all)
+    // and its envelope, decayed in advance().
     int   flashStructure_ = -2, flashSlot_ = -1;
     float flashLevel_ = 0.f;
     void stepFlash(double dt);
+    bool flashAllowed(const FaceBlock& fb) const;
     void patchBankFaces();
     int bankIndexFor(int structure, int slot) const;
     // Which bank face each planned mask draws; see chainFaces().

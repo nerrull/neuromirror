@@ -150,10 +150,10 @@ static float4 marchFog(float3 ro, float3 rd, float t0, float t1, float jitter,
         // from its position, through the same phase function (the direction
         // to the light varies per sample, unlike the key's). This is the
         // volumetric part of the flash -- the glow around the mask.
-        if (any(U.flashColor.xyz > 0.0)) {
-            const float3 toL = U.flashPos.xyz - p;
+        for (int fi = 0; fi < U.flashCount; ++fi) {
+            const float3 toL = U.flashPos[fi].xyz - p;
             const float d2 = dot(toL, toL);
-            const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+            const float r2 = max(U.flashPos[fi].w * U.flashPos[fi].w, 1e-4);
             const float phL = phaseHG(dot(rd, toL * rsqrt(max(d2, 1e-6))),
                                       clamp(U.fogAnisotropy, -0.95, 0.95)) * 12.566370;
             inscat += U.fogScatter * phL * U.flashColor.xyz / (1.0 + d2 / r2);

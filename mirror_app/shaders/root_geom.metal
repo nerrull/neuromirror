@@ -621,11 +621,11 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     // Added after the lit scale on purpose -- it is a light in the room, not
     // part of a structure's own reveal, so it lands on dark roots as hard as
     // on lit ones; that is what makes it read as a flash.
-    if (any(U.flashColor.xyz > 0.0)) {
-        const float3 toL = U.flashPos.xyz - p;
+    for (int fi = 0; fi < U.flashCount; ++fi) {
+        const float3 toL = U.flashPos[fi].xyz - p;
         const float d2 = dot(toL, toL);
         const float3 L = toL * rsqrt(max(d2, 1e-6));
-        const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+        const float r2 = max(U.flashPos[fi].w * U.flashPos[fi].w, 1e-4);
         const float atten = 1.0 / (1.0 + d2 / r2);
         const float3 h = normalize(L + V);
         const float spec = pow(max(dot(n, h), 0.0), U.shininess) * 0.5;

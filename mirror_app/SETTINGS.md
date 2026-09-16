@@ -44,7 +44,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (41 parameters)
+## fit (43 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -77,6 +77,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/identity/ridge` | float | 0.01 .. 20 | 6 |
 | `fit/identity/secs` | float | 1 .. 15 | 5 |
 | `fit/kinect stall s` | float | 0.5 .. 15 | 3 |
+| `fit/lr warm-up from` | float | 0 .. 1 | 0.2 |
+| `fit/lr warm-up secs` | float | 0 .. 15 | 5 |
 | `fit/max colour` | float | 0 .. 1 | 1 |
 | `fit/near (head height)` | float | 0.05 .. 0.5 | 0.3 |
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
@@ -315,7 +317,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
-## roots (219 parameters)
+## roots (222 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -422,6 +424,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/anchor on axis` | bool | -- | 1 |
 | `roots/growth/anchor pitch` | float | 0 .. 85 | 60 |
 | `roots/growth/anchor spawn` | float | 0 .. 6 | 1.5 |
+| `roots/growth/basal clear` | float | -1 .. 10 | 2 |
 | `roots/growth/cone height` | float | 24 .. 96 | 65 |
 | `roots/growth/cone radius` | float | 6 .. 24 | 13 |
 | `roots/growth/crawl the cone surface` | bool | -- | 0 |
@@ -508,10 +511,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/overlays/axes` | bool | -- | 0 |
 | `roots/overlays/grid` | bool | -- | 0 |
 | `roots/overlays/grid spacing` | float | 1 .. 20 | 5 |
+| `roots/pluck flash/flash all masks` | bool | -- | 0 |
 | `roots/pluck flash/flash color` | rgb | -- | 1 0.93 0.8 |
 | `roots/pluck flash/flash decay (s)` | float | 0.05 .. 4 | 0.7 |
 | `roots/pluck flash/flash depth` | float | -1 .. 2 | 0.6 |
 | `roots/pluck flash/flash intensity` | float | 0 .. 60 | 12 |
+| `roots/pluck flash/flash mask 0` | bool | -- | 1 |
 | `roots/pluck flash/flash nearest mask` | bool | -- | 0 |
 | `roots/pluck flash/flash radius` | float | 0.2 .. 12 | 3 |
 | `roots/post/DoF focus (0-auto)` | float | 0 .. 120 | 0 |
