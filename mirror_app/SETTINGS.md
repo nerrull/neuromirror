@@ -92,7 +92,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (108 parameters)
+## show (107 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -129,7 +129,6 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/roots/frame margin` | float | -0.9 .. 1.5 | 0 |
 | `show/roots/grow face seconds` | float | 0.5 .. 60 | 4.9 |
-| `show/roots/grow head-on secs` | float | 0 .. 10 | 1.5 |
 | `show/roots/grow hop lead` | float | 0 .. 1 | 0.3 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
 | `show/roots/grow rate max (steps-s)` | float | 1 .. 2000 | 1200 |

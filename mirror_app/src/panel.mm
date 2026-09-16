@@ -698,14 +698,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
                                 ui::SliderFloat("grow rate max (steps-s)", &S.grow_rate_max, 1.f, 2000.f,
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
-                                ui::SliderFloat("grow head-on secs", &S.grow_headon_seconds, 0.f, 10.f, "%.1f");
-                                if (ImGui::IsItemHovered()) {
-                                    ImGui::SetTooltip(
-                                        "After the mouth has opened and Grow begins, the\n"
-                                        "camera holds square on mask 0 for this long\n"
-                                        "while the root emerges, then swings off toward\n"
-                                        "mask 1.");
-                                }
                                 ui::SliderFloat("grow hop lead", &S.grow_hop_lead, 0.f, 1.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
