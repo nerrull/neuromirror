@@ -2221,6 +2221,7 @@ int seqshot(const char* prefix, int W, int H,
     if (!realtime) {
         sp.face_seconds = 0.1f; sp.face_hold_after_cloth_seconds = 0.f;
         sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f;
+        sp.grow_headon_seconds = 0.15f;   // compressed with the hop it opens
         sp.turn_seconds = 1.0f;
         sp.cam_max_angular_speed = 100.f;    // no clamp: the stages are compressed
         sp.cam_ease_seconds = 0.25f;         // ...and the eases with them

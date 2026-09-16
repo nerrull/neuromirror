@@ -3359,9 +3359,33 @@ int main(int argc, char** argv) {
                                             -g_root_seq.head_pivot_back_cm};
                     mirror::ShiftRotationPivot(verts, g_fitter.rotation(), pivot);
                 }
-                roots.setFittedFace(verts, rootFaceTrisUploaded ? std::vector<int>()
-                                                                : g_fitter.basis().triangles());
+                // Exponential smoothing over the posed mesh
+                // (live_smooth_seconds): the per-frame jitter of the fit,
+                // taken out the way track_smooth_seconds takes it out of a
+                // replay. Restarts whenever the mesh changes size (a new
+                // basis) or the upload was interrupted.
+                static std::vector<float> smoothVerts;
+                const float tau = g_root_seq.live_smooth_seconds;
+                if (tau > 0.f && rootFaceTrisUploaded && smoothVerts.size() == verts.size()) {
+                    const float k = 1.f - std::exp(-(float)dt / tau);
+                    for (size_t i = 0; i < verts.size(); ++i)
+                        smoothVerts[i] += (verts[i] - smoothVerts[i]) * k;
+                } else {
+                    smoothVerts = verts;
+                }
+                roots.setFittedFace(smoothVerts, rootFaceTrisUploaded ? std::vector<int>()
+                                                                      : g_fitter.basis().triangles());
                 rootFaceTrisUploaded = true;
+            };
+            // The mouth-open ramp with nobody tracked: the visitor stepped
+            // out of the sensor (or the tracker lost them) during the last
+            // seconds of Face, so the tracked upload above stops -- and the
+            // mask would freeze with its mouth shut until Grow's replay
+            // opened it in one frame. Keep driving mask 0 from the fitter's
+            // last pose so the ramp still plays.
+            auto uploadLiveFaceForRamp = [&]() {
+                if (g_fitter.valid() && rootFaceTrisUploaded && rootMouthOpenTarget() > 0.f)
+                    uploadLiveFace();
             };
             auto uploadFaceColorsIfFresh = [&]() {
                 if (g_capture_loaded.empty() && g_face_colors_fresh &&
@@ -3455,6 +3479,8 @@ int main(int argc, char** argv) {
                     // see faceTrackRec's declaration above.
                     faceTrackRec.record(g_show.phaseTime(), g_fitter);
                     transitionExitPhaseTime = g_show.phaseTime();
+                } else if (viewerDrivesMask && !rootHold) {
+                    uploadLiveFaceForRamp();
                 }
                 // The mask the cloth is about to uncover has to already be
                 // wearing the face -- see the lambda's own comment. Gated
@@ -3551,6 +3577,8 @@ int main(int argc, char** argv) {
                     // still on Face: from Grow on the mask is the sitting's,
                     // not whoever is in front of the sensor now.
                     uploadLiveFace();
+                } else if (g_drive_roots && viewerDrivesMask && !rootHold) {
+                    uploadLiveFaceForRamp();
                 } else if (!g_drive_roots && roots.usingFittedFace()) {
                     roots.clearFittedFace();
                     // clearFittedFace() puts faceTris_ back to the canonical

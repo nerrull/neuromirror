@@ -118,6 +118,12 @@ struct RootSequenceParams {
     // toward the tip (0 pins the mask centre, 1 follows the tip); once the
     // root has arrived it is the mask.
     float grow_hop_lead      = 0.3f;
+    // The first hop's move waits: for this long after Grow begins the
+    // camera holds the Face pose (square on mask 0) while the root is
+    // already growing out of the mouth, and only then swings off toward
+    // mask 1. So the order reads mouth opens -> root emerges -> camera
+    // leaves, rather than all three at once.
+    float grow_headon_seconds = 1.5f;
     // Margin around the target mask / tip / previous mask, as a fraction of
     // their extent.
     float grow_margin        = 0.35f;
@@ -260,8 +266,13 @@ struct RootSequenceParams {
     // moment Face was left instead -- logged once, since that is the "not
     // knowable" fallback the plan calls for.
     float mouth_open_amount  = 0.8f;   // the jawOpen coefficient at full open
-    float mouth_open_seconds = 1.2f;   // the ease-in
-    float mouth_open_lead    = 0.5f;   // seconds before Grow the ease starts
+    float mouth_open_seconds = 3.f;    // the ease-in
+    float mouth_open_lead    = 3.f;    // seconds before Grow the ease starts
+    // Time constant, seconds, of the exponential smoothing run over the
+    // live fit's mesh while the visitor drives mask 0 (main.mm's
+    // uploadLiveFace) -- the same jitter track_smooth_seconds takes out of
+    // a replay, taken out of the live face. 0 uploads the fit raw.
+    float live_smooth_seconds = 0.12f;
     // Width, seconds, of the temporal filter run over a recorded head track
     // before it is replayed (FaceTrackPlayer::smoothTrack) -- takes the
     // fit's per-frame jitter out of the masks. 0 replays the recording raw.
@@ -459,6 +470,12 @@ public:
             // hop's move starts from there.
             float wantAz, wantEl;
             azelFromDir(tm.normal, wantAz, wantEl);
+            // The head-on hold (grow_headon_seconds): the root is growing,
+            // the camera is not yet moving -- the Face pose, held.
+            if (tIn < (double)P.grow_headon_seconds) {
+                curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
+                for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
+            } else {
             easeAngle(curAz_, wantAz, kEase);
             easeTo(curEl_, wantEl, kEase);
 
@@ -481,6 +498,7 @@ public:
             if (haveTip) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
             const float need = fitRadius(roots, curT_, curAz_, curEl_, pts, np, P.grow_margin);
             easeTo(curR_, std::max(need, tightR_), kEase);
+            }
 
             if (roots.simDone() || tIn >= (double)growTimeout_) {
                 turnFromAz_ = curAz_; turnFromEl_ = curEl_; turnFromR_ = curR_;

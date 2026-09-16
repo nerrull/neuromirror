@@ -92,7 +92,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (106 parameters)
+## show (108 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -129,6 +129,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/roots/frame margin` | float | -0.9 .. 1.5 | 0 |
 | `show/roots/grow face seconds` | float | 0.5 .. 60 | 4.9 |
+| `show/roots/grow head-on secs` | float | 0 .. 10 | 1.5 |
 | `show/roots/grow hop lead` | float | 0 .. 1 | 0.3 |
 | `show/roots/grow margin` | float | 0 .. 1.5 | 0.35 |
 | `show/roots/grow rate max (steps-s)` | float | 1 .. 2000 | 1200 |
@@ -139,12 +140,13 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/head pan tau (s)` | float | 0.05 .. 3 | 0.6 |
 | `show/roots/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
 | `show/roots/min` | float | 0 .. 120 | 40 |
+| `show/roots/live smoothing (s)` | float | 0 .. 0.5 | 0.12 |
 | `show/roots/mouth open amount` | float | 0 .. 1.5 | 0.8 |
-| `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.72 |
+| `show/roots/mouth open lead (s)` | float | 0 .. 5 | 3 |
 | `show/roots/track smoothing (s)` | float | 0 .. 1 | 0.25 |
 | `show/roots/head pivot back (cm)` | float | 0 .. 20 | 8 |
 | `show/roots/head pivot down (cm)` | float | 0 .. 20 | 5 |
-| `show/roots/mouth open seconds` | float | 0.1 .. 5 | 1.2 |
+| `show/roots/mouth open seconds` | float | 0.1 .. 5 | 3 |
 | `show/roots/other structures` | bool | -- | 0 | (off: no hood; a slow pull-back to the whole plant instead)
 | `show/roots/zoom out seconds` | float | 1 .. 120 | 20 |
 | `show/roots/orbit bound frac` | float | 0.1 .. 1 | 0.53 |
