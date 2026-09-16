@@ -65,12 +65,13 @@ struct SimParams {
     // is level with the structure lying along +z. 60 keeps the chain 30
     // degrees off vertical, leaning toward the camera.
     float anchorPitchDeg = 60.f;
-    // Where the root leaves an on-axis anchor: inside the head, at the
-    // mask's centre depth under the mouth, and this far, cm, further back
-    // along -normal. The keep-clear tube in front of the face (viewCylLen)
+    // Where the root leaves an on-axis anchor: inside the head, this far, cm,
+    // behind the mouth along -normal (the basis face is a thin shell whose
+    // centroid sits only ~0.2 behind the lips, so the mouth is the reference,
+    // not the centre). The keep-clear tube in front of the face (viewCylLen)
     // and the mask's own cavity are both dropped for that one hop, since the
     // root starts inside them and grows out through the mouth.
-    float anchorSpawn  = 0.0f;
+    float anchorSpawn  = 1.5f;
     float angleStepGoldenMult = 1.0f;
     float distStepFrac = 0.0f;
     float dwellDays    = 18.0f;
@@ -155,12 +156,10 @@ struct SimParams {
     float coneShellThickness = 9.0f;
     float growthDt     = 0.75f;    // sim days advanced per step()
     float targetLift   = 0.0f;
-    // How far behind the surface, along -normal from the *mouth* point (see
-    // faceMouthU/V/N below), a non-anchor hop starts. Small on purpose: the
-    // root should emerge through the mouth, not sit buried in the cavity --
-    // 0 is right at the mouth's own depth, and this is just enough to read
-    // as "coming from inside" rather than floating in front of the face.
-    float spawnBehind  = 0.05f;
+    // How far behind the mouth point (see faceMouthU/V/N below), along
+    // -normal, a non-anchor hop starts. The root then heads for the next mask
+    // from behind the face (initHop) -- it never crosses in front of it.
+    float spawnBehind  = 1.5f;
     // How far behind the face, cm along -normal, the dwell's rim ring sits.
     // 0 rings the face in its own plane, so the wrap is around the rim and
     // the nest reads as a frame; positive pulls it back behind the head,
@@ -206,7 +205,16 @@ struct SimParams {
     // RootScene::syncFaceParams): not a setting of the growth, so not in
     // visitSimParams, same as faceHalf*.
     float faceMouthU   = 0.0f, faceMouthV = 0.0f, faceMouthN = 0.0f;
+    // How far behind the mask's pos the face is drawn, as a fraction of the
+    // cavity half-depth (RootScene::faceRecess, applied in
+    // appendFaceVertexData). The mouth point has to sit on the *drawn* face,
+    // so the sim recesses it the same way. RootScene's, copied in at reset.
+    float faceRecess   = 0.5f;
     float cavityMargin = 0.15f;
+    // How much of a mask's measured motion (setMaskExtent: the swept
+    // half-extents of its replayed head) is added to its keep-out and nest
+    // ring. 1 keeps the roots clear of the whole swing; 0 ignores it.
+    float motionCavity = 1.0f;
     unsigned seed      = 42u;
     std::string paramDir;          // CPlantBox modelparameter dir (trailing slash)
     std::string speciesXml = "Zea_mays_6_Leitner_2014.xml";
@@ -261,7 +269,7 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
     f("nestBehind", p.nestBehind); f("nestHitRadius", p.nestHitRadius);
     f("nestRings", p.nestRings); f("nestPerRing", p.nestPerRing);
-    f("cavityMargin", p.cavityMargin);
+    f("cavityMargin", p.cavityMargin); f("motionCavity", p.motionCavity);
     f("seed", p.seed);
 }
 
@@ -379,6 +387,23 @@ public:
     // mouthPoint() for mask m alone (every mask has one, not only the ones a
     // hop leaves from -- the green markers want all of them).
     bool maskMouthPoint(int m, float out[3]) const;
+
+    // Re-point the mouth (SimParams::faceMouthU/V/N) after reset(). The face
+    // a mask wears is the visitor's own and moves with them through the Face
+    // stage, while reset() fixed the mouth off the neutral basis at replant
+    // -- so the scene measures the drawn mesh and hands the result back here.
+    // With `reseed`, the hop in flight is re-seeded from the new mouth if
+    // nothing has grown yet (its start is set once, at initHop); without it
+    // only the point moves (the markers, and hops not yet started).
+    void setFaceMouth(float u, float v, float n, bool reseed);
+
+    // The room mask m's replayed head sweeps: half-extents in the mesh's
+    // normalised units (FaceTrackPlayer::motionHalfExtents), the same units
+    // as SimParams::faceHalf*. Where they exceed the face's own, the mask's
+    // keep-out ellipsoid and nest ring grow to match (x motionCavity) -- the
+    // drawn face, the mouth and the arrival test keep the face's own radii.
+    // After reset(); re-seeds the hop in flight if nothing has grown yet.
+    void setMaskExtent(int m, float halfW, float halfH, float halfD);
 
     // Diagnostic for the "no shell on hop 1" check: the largest distance any
     // node of hop h's own finished buffer strays from the infinite line

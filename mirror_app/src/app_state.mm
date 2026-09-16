@@ -182,13 +182,11 @@ float g_show_grace[(int)show::Phase::Count][show::kMaxEdges] = {};
 // requiring a restart.
 RootSequenceParams g_root_seq;
 
-// Per-phase fog visibility (world units -- lower is thicker), see
-// MetalRootRenderer::Fog::visibility. Only the Roots renderer ever draws fog,
-// but it is kept one-per-phase as asked rather than one global, so a look
-// dialled in for Roots does not silently apply if fog is ever added to
-// another scene. `fog_fade_seconds` on g_root_seq is not here: it is a Roots
-// stage duration, so it lives with the rest of the timeline.
-float g_phase_fog_intensity[(int)show::Phase::Count] = {45.f, 45.f, 45.f, 45.f};
+// The Roots fog visibility (world units -- lower is thicker), see
+// MetalRootRenderer::Fog::visibility. Only the Roots renderer draws fog.
+// `fog_fade_seconds` on g_root_seq is not here: it is a Roots stage
+// duration, so it lives with the rest of the timeline.
+float g_roots_fog_intensity = 45.f;
 
 // Screen-wide fade to black (0 = clear, 1 = black), applied in present.metal
 // after everything else is composited. Two things drive it, never at once:
@@ -221,6 +219,7 @@ bool g_show_paused = false;
 // main.mm honours it at the top of the next root frame and clears it.
 int g_root_stage = -1;
 int g_root_jump  = -1;
+int g_root_jump_on_entry = -1;
 // Mean landmark error, in pixels, of the one-shot identity/mesh fit.
 // Diagnostic only: nothing about the show is gated on the mesh fit any more
 // (it still runs once, during Fitting, to personalize the Roots-phase mesh --

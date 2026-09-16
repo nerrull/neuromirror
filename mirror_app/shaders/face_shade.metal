@@ -23,28 +23,6 @@ using namespace metal;
 
 constant float kFacePI = 3.14159265359;
 
-// ---- cheap 3-octave value noise, for the marble turbulence -----------------
-
-static float _hash(float3 p) {
-    p = fract(p * float3(443.897, 397.297, 491.187));
-    p += dot(p, p.zyx + 19.19);
-    return fract((p.x + p.y) * p.z);
-}
-static float _noise(float3 p) {
-    float3 i = floor(p), f = fract(p);
-    float3 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(mix(_hash(i),                   _hash(i+float3(1,0,0)), u.x),
-            mix(_hash(i+float3(0,1,0)),     _hash(i+float3(1,1,0)), u.x), u.y),
-        mix(mix(_hash(i+float3(0,0,1)),     _hash(i+float3(1,0,1)), u.x),
-            mix(_hash(i+float3(0,1,1)),     _hash(i+float3(1,1,1)), u.x), u.y), u.z);
-}
-static float _turbulence(float3 p) {
-    return abs(_noise(p) - 0.5) * 0.5000
-         + abs(_noise(p * 2.03) - 0.5) * 0.2500
-         + abs(_noise(p * 4.07) - 0.5) * 0.1250;
-}
-
 // ---- Cook-Torrance ---------------------------------------------------------
 // The same model the roots use. The mask used to run a bare pow(NdotH, 60)
 // lobe, which gives one hard highlight dot of a fixed size no matter how the
@@ -86,11 +64,9 @@ static float3 hemiAmbient(float3 n, float3 sky, float3 ground) {
 
 // ---- the mask's material ---------------------------------------------------
 //
-// `P` is the position the marble is evaluated at. In the root scene that is
-// simply the world position; in the transition the mask sits at a different
-// world size, and a world-space field would print the pattern at the wrong
-// scale on it, so that pass passes a position already scaled into the root
-// scene's terms. Everything else is the same surface.
+// `P` is the shading position (world in the root scene; the transition passes
+// one scaled into the root scene's terms so the light falloff and spot cone
+// keep the size they were tuned at).
 //
 // Returns rgb = linear radiance, a = the fraction of it that is indirect (the
 // fog pass uses that to decide how much of a fragment the atmosphere may take).
@@ -98,44 +74,19 @@ static float4 shadeFace(float3 P, float3 nIn, float3 albedo, float3 lightPos,
                         constant RootFaceU& U) {
     float3 n = normalize(nIn);
     const float3 v = normalize(U.eye.xyz - P);
-
-    const float t = _turbulence(P * U.veinScale);
-    float vein = sin((P.x + P.y * 0.4 + t * 12.0) * U.veinScale * 3.0);
-    vein = smoothstep(0.15, 0.85, vein * 0.5 + 0.5);
-    const float3 baseColor = mix(albedo, U.veinColor.xyz, vein * U.veinStrength);
-
-    // --- surface relief ------------------------------------------------------
-    // Perturb the shading normal by the gradient of a turbulence field, so the
-    // stone has a fine grain instead of being an ideal smooth solid. The mask
-    // mesh is a few thousand triangles and cannot carry this as geometry;
-    // sampling a field three more times can. Finite differences rather than an
-    // analytic gradient because the field is a sum of three value-noise octaves
-    // and its derivative is not worth deriving.
-    //
-    // Sampled at reliefScale times the vein frequency, and NOT at the vein
-    // frequency itself: a mask is around four world units across and veinScale
-    // is 0.6, so a gradient taken at the vein's own scale is very nearly
-    // constant over the whole head -- it tilts the entire face by a fixed amount
-    // and reads as nothing at all. Relief has to run at the scale of the surface
-    // it is meant to roughen, which is one to two orders finer than the pattern.
-    if (U.reliefStrength > 0.0 && U.reliefScale > 0.0) {
-        const float rs = U.veinScale * U.reliefScale;
-        const float rt = _turbulence(P * rs);
-        const float e = 0.25 / max(rs, 1e-3);
-        const float3 g = float3(_turbulence((P + float3(e, 0, 0)) * rs) - rt,
-                                _turbulence((P + float3(0, e, 0)) * rs) - rt,
-                                _turbulence((P + float3(0, 0, e)) * rs) - rt);
-        // Only the component across the surface bends the normal; pushing along
-        // it would just scale the normal and change nothing.
-        const float3 gt = g - n * dot(g, n);
-        n = normalize(n - gt * (U.reliefStrength / max(e, 1e-4)));
+    // See RootFaceU::albedoGamma: the photograph arrives encoded.
+    if (U.albedoGamma > 0.0 && U.albedoGamma != 1.0)
+        albedo = pow(max(albedo, float3(0.0)), U.albedoGamma);
+    if (U.albedoSat != 1.0) {
+        const float luma = dot(albedo, float3(0.2126, 0.7152, 0.0722));
+        albedo = max(mix(float3(luma), albedo, U.albedoSat), float3(0.0));
     }
 
-    // Veined stone is not uniformly polished: the vein mineral takes a different
-    // finish from the matrix, and varying roughness with the same field is what
-    // keeps the highlight from sliding across the face as one unbroken sheet.
-    const float rough = clamp(U.roughness * mix(1.0, 0.55, vein * U.veinStrength),
-                              0.04, 1.0);
+    // The albedo is the visitor's photograph, lit as skin: no pattern, no
+    // relief -- the marble vein/turbulence path that used to sit here mixed
+    // grey into it and bent its normals, which is what washed the masks out.
+    const float3 baseColor = albedo;
+    const float rough = clamp(U.roughness, 0.04, 1.0);
 
     const float3 sky = U.skyColor.xyz, ground = U.groundColor.xyz;
     float3 indirect = baseColor * hemiAmbient(n, sky, ground) * U.hemiStrength;
@@ -181,7 +132,7 @@ static float4 shadeFace(float3 P, float3 nIn, float3 albedo, float3 lightPos,
         atten *= smoothstep(U.spotCosOuter, U.spotCosInner, axisCos);
     }
     float3 direct = ggx(n, v, ldir, baseColor, U.metallic, rough)
-                  * (U.lightIntensity * U.specStrength * atten);
+                  * (U.lightColor.xyz * U.lightIntensity * U.specStrength * atten);
 
     // Skin and stone both pass light a short way through the surface before it
     // comes back out; the wrap term is what stops the terminator from cutting a
@@ -194,7 +145,7 @@ static float4 shadeFace(float3 P, float3 nIn, float3 albedo, float3 lightPos,
         if (U.sssTrans > 0.0)
             sss += baseColor * U.sssTint.xyz
                  * (pow(saturate(dot(v, -ldir)), max(U.sssPower, 1.0)) * U.sssTrans);
-        direct += sss * (U.lightIntensity * atten / kFacePI);
+        direct += sss * (U.lightColor.xyz * U.lightIntensity * atten / kFacePI);
     }
     col += direct;
 

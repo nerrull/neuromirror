@@ -125,28 +125,21 @@ public:
         // lit object. With a tonemap in the chain there is also no longer any
         // need to overdrive it to get the highlights to register.
         float lightIntensity = 1.8f;
+        // The spot's colour; a warm tungsten rather than white, so the skin
+        // reads as lit by a lamp and not by the sky.
+        float lightColor[3]  = {1.0f, 0.82f, 0.62f};
         float lightFalloff   = 0.012f;
         float specStrength   = 1.2f;
-        float veinColor[3]   = {0.55f, 0.53f, 0.50f};
-        float veinScale      = 0.6f;
-        // Off. The mask's albedo is a photograph of the visitor now -- the
-        // mirror's own output, baked per vertex -- and mixing a grey stone
-        // vein into it at half strength does not read as a veined face, it
-        // reads as the face not having arrived. The whole vein/turbulence path
-        // in face_shade.metal is left intact and still driven from the panel,
-        // because it is the mask's material for every use that is *not*
-        // carrying a sitting (the neighbour copies, the test identities); this
-        // is only its default.
-        float veinStrength   = 0.0f;
-        float roughness      = 0.42f;   // polished stone, not a mirror
+        // Skin, not polished stone (0.42): the highlight spreads instead of
+        // sitting as one glazed dot on the nose and brow.
+        float roughness      = 0.55f;
+        // Decode of the vertex albedo before lighting (RootFaceU::albedoGamma).
+        // The mirror's output is display-referred; lit as if linear it came
+        // out pale and low-contrast on every mask.
+        float albedoGamma    = 2.2f;
+        // Saturation of the albedo about its luma (RootFaceU::albedoSat).
+        float albedoSat      = 1.0f;
         float metallic       = 0.0f;
-        // Off. A per-pixel normal perturbation at stone-grain frequency reads as
-        // mottled skin on a face -- the eye is far more sensitive to shading
-        // irregularity on a face than on any other surface, and what looks like
-        // pleasant granite on a slab looks like a skin condition on a cheek. The
-        // knob stays for non-face uses of this pass; the default is smooth.
-        float reliefStrength = 0.0f;
-        float reliefScale    = 9.0f;    // relief frequency, as a multiple of veinScale
         // Area-weighted vertex normals rather than one face normal per triangle.
         // Lives here (rather than being unconditional) so the faceted original
         // is still reachable for comparison; RootScene reads it when it builds

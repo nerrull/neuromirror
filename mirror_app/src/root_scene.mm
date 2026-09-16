@@ -86,6 +86,12 @@ void normalizeMesh(std::vector<float>& v) {
 // jawOpenAmount = 0 (the default) is the old neutral-mouth behaviour.
 // Returns false (offset left at the mesh centroid, i.e. no change from the
 // old centre-of-mask spawn) if the basis cannot be loaded.
+// The render-mesh vertices that are the lips: the neutral vertex nearest each
+// of the same dlib landmarks, found once by mouthOffsetFromBasis's load. Lets
+// any mesh in the basis topology be asked where *its* mouth is -- see
+// mouthFromMesh.
+static std::vector<int> g_lipVerts;
+
 bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
     static bool tried = false, ok = false;
     static mirror::FaceBasis basis;
@@ -108,6 +114,18 @@ bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
                                           std::fabs(neutral[i*3+2] - neutralCz)});
                 }
                 ok = true;
+                const std::vector<float>& lm0 = basis.lmNeutral();
+                for (int i = 48; i < 68; ++i) {
+                    size_t best = 0; double bd = 1e30;
+                    for (size_t v = 0; v < n; ++v) {
+                        const double dx = neutral[v*3]   - lm0[size_t(i)*3];
+                        const double dy = neutral[v*3+1] - lm0[size_t(i)*3+1];
+                        const double dz = neutral[v*3+2] - lm0[size_t(i)*3+2];
+                        const double d = dx*dx + dy*dy + dz*dz;
+                        if (d < bd) { bd = d; best = v; }
+                    }
+                    g_lipVerts.push_back((int)best);
+                }
                 bool usedFallback = false;
                 jawIdx = mirror::jawOpenModeIndex(basis, &usedFallback);
                 fprintf(stderr,
@@ -143,6 +161,24 @@ bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
     out[0] = (float)((mx - neutralCx) / neutralM);
     out[1] = (float)((my - neutralCy) / neutralM);
     out[2] = (float)((mz - neutralCz) / neutralM);
+    return true;
+}
+
+// Where a drawn mesh's own mouth is: the centroid of its lip vertices, in the
+// mesh's own (already normalised, see setFittedFace) coordinates -- which is
+// exactly the frame appendFaceVertexData places it in, so the result is the
+// sim's faceMouthU/V/N for that mesh as it stands this frame. False if the
+// basis never loaded or the mesh is not in its topology.
+bool mouthFromMesh(const std::vector<float>& fv, float out[3]) {
+    float dummy[3];
+    mouthOffsetFromBasis(dummy);   // loads the basis (and g_lipVerts) once
+    if (g_lipVerts.empty()) return false;
+    double m[3] = {0, 0, 0};
+    for (int vi : g_lipVerts) {
+        if (size_t(vi) * 3 + 2 >= fv.size()) return false;
+        for (int c = 0; c < 3; ++c) m[c] += fv[size_t(vi) * 3 + size_t(c)];
+    }
+    for (int c = 0; c < 3; ++c) out[c] = (float)(m[c] / (double)g_lipVerts.size());
     return true;
 }
 
@@ -430,8 +466,19 @@ void RootScene::setSpeciesIndex(int i) {
     if (i >= 0 && i < (int)sp.size()) simParams_.speciesXml = sp[size_t(i)].second;
 }
 
+void RootScene::syncMouthToFace(bool reseed) {
+    if (!useSim_ || !sim_ || !fitted_face_ || faceVerts_.empty()) return;
+    float m[3];
+    if (!mouthFromMesh(faceVerts_, m)) return;
+    simParams_.faceMouthU = m[0];
+    simParams_.faceMouthV = m[1];
+    simParams_.faceMouthN = m[2];
+    sim_->setFaceMouth(m[0], m[1], m[2], reseed);
+}
+
 void RootScene::syncFaceParams() {
     simParams_.faceScale = faceScale;
+    simParams_.faceRecess = faceRecess;
     // Where the mouth is, in the same normalised frame -- from the basis
     // face, not whatever capture is loaded (see mouthOffsetFromBasis).
     // Independent of faceVerts_/canonVerts_ below, so it is set even before
@@ -467,6 +514,7 @@ void RootScene::regrow() {
     syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
+    mouthSyncPending_ = true;
     simAvailable_ = simAvailable_ || useSim_;
     growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
     variations_.clear();        // ...and so may the plants they were grown from
@@ -481,6 +529,7 @@ void RootScene::replant() {
     syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
     useSim_ = sim_->reset(simParams_);
+    mouthSyncPending_ = true;
     simAvailable_ = simAvailable_ || useSim_;
     // growthStepEstimate_ deliberately kept -- see the header.
     ++growGeneration_;
@@ -2302,6 +2351,9 @@ void RootScene::advance(double dt) {
     // here, since auto-framing runs no sequence at all.
     bool faceEmitted = false;
     if (useSim_ && sim_ && !sim_->done() && !simPaused && !clothActive_) {
+        // The first growth step of a sitting: the root's start is set from
+        // wherever the visitor left the mouth, not where replant() guessed.
+        if (mouthSyncPending_) { syncMouthToFace(true); mouthSyncPending_ = false; }
         for (int i = 0; i < std::max(1, simStepsPerFrame) && !sim_->done(); ++i)
             sim_->step();
         std::vector<float> nodes, radii; std::vector<int> segs;
@@ -2322,8 +2374,10 @@ void RootScene::advance(double dt) {
     // frame -- and whether `simPaused` was left true past Grow's end was a
     // coin toss (stepGrowth's last frame), so the Reveal ran at half rate
     // on some sittings and not others.
-    if (useSim_ && sim_ && ((simPaused && !sim_->done()) || clothActive_))
+    if (useSim_ && sim_ && ((simPaused && !sim_->done()) || clothActive_)) {
         uploadFaceFromMasks();
+        if (mouthSyncPending_) syncMouthToFace(false);   // the marker follows the face
+    }
     // ...and where nothing above re-emitted the mesh, the replayed bank faces
     // that moved this frame (setBankFaceVerts) are patched into place alone.
     else if (useSim_ && sim_ && !faceEmitted)

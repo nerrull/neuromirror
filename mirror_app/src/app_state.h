@@ -150,7 +150,7 @@ extern float g_show_max[(int)show::Phase::Count];
 extern float g_show_hold[(int)show::Phase::Count][show::kMaxEdges];
 extern float g_show_grace[(int)show::Phase::Count][show::kMaxEdges];
 extern RootSequenceParams g_root_seq;
-extern float g_phase_fog_intensity[(int)show::Phase::Count];
+extern float g_roots_fog_intensity;
 extern float g_screen_fade;
 extern float g_idle_intro_seconds;
 extern double g_idle_intro_t0;
@@ -158,6 +158,7 @@ extern int g_view_override;
 extern bool g_show_paused;
 extern int  g_root_stage;   // RootSequence::Stage while it runs, else -1 (readout)
 extern int  g_root_jump;    // RootSequence::Stage the panel asked to jump to, else -1
+extern int  g_root_jump_on_entry;   // ...and one to take as soon as Roots is up (key 5)
 extern float g_show_fit_px;
 extern float g_show_fit_loss_half;
 extern float g_show_fit_score;

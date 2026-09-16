@@ -391,7 +391,6 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "aoInt")      A.intensity = v;
         else if (k == "aoRad")      A.radius = v;
         else if (k == "aoSamples")  A.samples = (int)v;
-        else if (k == "relief")     F.reliefStrength = v;
         else if (k == "faceRough")  F.roughness = v;
         else if (k == "faceLight")  F.lightIntensity = v;
         else if (k == "smooth")     F.smoothNormals = v != 0.f;

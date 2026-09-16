@@ -67,6 +67,15 @@ FacePose Similarity2D(const std::vector<float>& src, const std::vector<float>& d
 // that reconstructs a posed mesh from a basis reconstruction + a stored
 // rotation (e.g. face track playback).
 void RotateAboutCentroid(std::vector<float>& verts, const float rot[9]);
+// The same, about the centroid displaced by `offset` (mesh units) -- a head
+// turns about its neck, not about the middle of its face.
+void RotateAboutCentroidOffset(std::vector<float>& verts, const float rot[9],
+                               const float offset[3]);
+// Turn a mesh already rotated by `rot` about its centroid into the same mesh
+// rotated about centroid + offset instead: a pure translation by
+// (I - rot) * offset. For a mesh the fitter has posed (vertices()) and that
+// is wanted turning about the neck, not the middle of the face.
+void ShiftRotationPivot(std::vector<float>& verts, const float rot[9], const float offset[3]);
 
 class FaceFitter {
 public:

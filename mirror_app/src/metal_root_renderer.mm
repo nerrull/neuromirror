@@ -1025,19 +1025,17 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         ffu.viewProj = vp;
         ffu.eye = gu.eye;
         ffu.lightDir = gu.lightDir;
-        ffu.veinColor = (simd_float4){face.veinColor[0], face.veinColor[1], face.veinColor[2], 0};
         ffu.lightIntensity = face.lightIntensity;
+        ffu.lightColor = (simd_float4){face.lightColor[0], face.lightColor[1], face.lightColor[2], 0};
         ffu.lightFalloff = face.lightFalloff;
         ffu.specStrength = face.specStrength;
-        ffu.veinScale = face.veinScale;
-        ffu.veinStrength = face.veinStrength;
         ffu.roughness = face.roughness;
         ffu.metallic = face.metallic;
-        ffu.reliefStrength = face.reliefStrength;
-        ffu.reliefScale = face.reliefScale;
         ffu.keyColor = gu.keyColor;
         ffu.spotLightDist = face.spotLightDist;
         ffu.unlitLevel = std::max(0.f, env.unlitLevel);
+        ffu.albedoGamma = face.albedoGamma;
+        ffu.albedoSat = face.albedoSat;
         // 90 degrees or wider means "no cone"; the shader takes < -1 as the
         // disable sentinel so it can skip the work entirely.
         if (face.spotOuterDeg >= 89.9f) {
@@ -1071,7 +1069,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         // buffer. Vertex colour already carries the marker's flat colour and
         // lit is always 1 -- see RootScene::rebuildDebugMarkers/
         // appendDebugMarker -- so this reads the mask pass's own lighting
-        // uniforms but never the mask's own lightPos/vein terms.
+        // uniforms but never the mask's own lightPos.
         if (debugMarkerVertCount_ > 0 && debugMarkerBuf_) {
             [ge setVertexBuffer:debugMarkerBuf_ offset:0 atIndex:0];
             [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0

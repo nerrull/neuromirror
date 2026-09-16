@@ -584,9 +584,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                 }
                             }
                         }
-                        ui::SliderFloat("fog intensity (visibility, world u)",
-                                        &g_phase_fog_intensity[pi], 8.f, 600.f, "%.0f",
-                                        ImGuiSliderFlags_Logarithmic);
+                        if (p == show::Phase::Roots)
+                            ui::SliderFloat("fog intensity (visibility, world u)",
+                                            &g_roots_fog_intensity, 8.f, 600.f, "%.0f",
+                                            ImGuiSliderFlags_Logarithmic);
                         g_show.setTiming(p, g_show_min[pi], g_show_max[pi]);
                         for (int e = 0; e < g.edge_count; ++e) {
                             g_show.setHold(p, e, g_show_hold[pi][e]);
@@ -752,6 +753,23 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "The ease-in. Held open through Grow/Turn/Orbit\n"
                                         "once reached -- the root is coming out of the\n"
                                         "mouth the whole time.");
+                                }
+                                ui::SliderFloat("track smoothing (s)", &S.track_smooth_seconds, 0.f, 1.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Temporal filter over a recorded head track\n"
+                                        "before replay (mask 0 and the hood alike):\n"
+                                        "takes the fit's frame-to-frame jitter out.\n"
+                                        "0 = raw. Applies to the next sitting.");
+                                }
+                                ui::SliderFloat("head pivot back (cm)", &S.head_pivot_back_cm, 0.f, 20.f, "%.1f");
+                                ui::SliderFloat("head pivot down (cm)", &S.head_pivot_down_cm, 0.f, 20.f, "%.1f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "Where a replayed head turns about: behind and\n"
+                                        "below the middle of the face, at the neck, so a\n"
+                                        "turn swings the nose and a nod the chin. 0/0 is\n"
+                                        "the old pin through the face. Next sitting.");
                                 }
                                 ui::SliderFloat("mouth open lead (s)", &S.mouth_open_lead, 0.f, 5.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
@@ -3207,18 +3225,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "regrow to apply.");
                     }
                     ImGui::SameLine();
-                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, -3.f, 6.f, "%.2f cm");
+                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, 0.f, 6.f, "%.2f cm");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "How far behind the anchor mask's centre (under the\n"
-                            "mouth) the first root starts; it grows out through\n"
-                            "the mouth hole along the normal. Negative is toward\n"
-                            "the face. Takes effect at the next regrow.");
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "How far past the front of the first face, along its\n"
-                            "normal, the root leaves it.");
+                            "How far behind the anchor mask's mouth the first\n"
+                            "root starts; it grows out through the mouth hole\n"
+                            "along the normal. Takes effect at the next regrow.");
                     }
                     ImGui::PopItemWidth();
                     ui::EndGate();
@@ -3396,11 +3408,19 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SameLine();
                         ui::SliderFloat("target lift", &SP.targetLift, -10.f, 10.f,
                                         "%.2f cm");
-                        ui::SliderFloat("spawn behind", &SP.spawnBehind, -10.f, 10.f,
+                        ui::SliderFloat("spawn behind", &SP.spawnBehind, 0.f, 10.f,
                                         "%.2f cm");
                         ImGui::SameLine();
                         ui::SliderFloat("nest behind", &SP.nestBehind, -5.f, 15.f,
                                         "%.2f cm");
+                        ui::SliderFloat("motion cavity", &SP.motionCavity, 0.f, 1.5f, "%.2f");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "How much of a replayed head's swing is added to\n"
+                                "its mask's keep-out and nest ring, so the roots\n"
+                                "grow around the motion instead of through it.\n"
+                                "1 = the whole swing, 0 = ignore it. Next sitting.");
+                        }
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip(
                                 "Where the dwell's ring of attractors sits: this far\n"
@@ -3897,17 +3917,17 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::TextDisabled("cavity half-depths back along the normal;\n"
                                         "negative stands the face proud of the nest");
                     ui::SliderFloat("face light", &R.face.lightIntensity, 0.0f, 8.0f);
+                    ui::ColorEdit3("face light color", R.face.lightColor);
                     ui::SliderFloat("face falloff", &R.face.lightFalloff, 0.001f, 0.1f);
                     ui::SliderFloat("spot outer angle", &R.face.spotOuterDeg, 5.0f, 90.0f);
                     ui::SliderFloat("spot inner angle", &R.face.spotInnerDeg, 1.0f, 89.0f);
                     ImGui::TextDisabled("90 outer = no cone (bare point light)");
                     ui::SliderFloat("face spec", &R.face.specStrength, 0.0f, 3.0f);
-                    ui::ColorEdit3("vein color", R.face.veinColor);
-                    ui::SliderFloat("vein scale", &R.face.veinScale, 0.1f, 2.0f);
-                    ui::SliderFloat("vein strength", &R.face.veinStrength, 0.0f, 1.0f);
                     ui::SliderFloat("mask roughness", &R.face.roughness, 0.04f, 1.0f);
-                    ui::SliderFloat("mask relief", &R.face.reliefStrength, 0.0f, 1.5f);
-                    ui::SliderFloat("relief scale", &R.face.reliefScale, 1.0f, 30.0f);
+                    ui::SliderFloat("albedo gamma", &R.face.albedoGamma, 1.0f, 3.0f);
+                    ui::SliderFloat("albedo saturation", &R.face.albedoSat, 0.0f, 3.0f);
+                    ImGui::TextDisabled("decode of the photograph before lighting;\n"
+                                        "gamma 1 = as-is (pale), 2.2 = sRGB; sat 1 = as-is");
                     if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
                         pf.roots.rebuildFace();
                 }

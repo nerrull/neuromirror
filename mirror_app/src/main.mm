@@ -1688,8 +1688,20 @@ int main(int argc, char** argv) {
             }
         }
         roots.setBankPlants(std::move(dealt));
-        if (g_fitter.valid()) bankFaceSeq.begin(tracks, g_fitter.basis());
+        if (g_fitter.valid())
+            bankFaceSeq.begin(tracks, g_fitter.basis(), g_root_seq.replayConfig());
         else bankFaceSeq.reset();
+        // The room each chain mask's head sweeps as it replays, into the
+        // sim's keep-out, so the roots grow around the swing and not through
+        // it. Chain mask i wears bank chainFaces()[i]. After replant(), which
+        // is where the caller puts this.
+        {
+            const std::vector<int>& cf = roots.chainFaces();
+            float half[3];
+            for (size_t i = 1; i < cf.size(); ++i)
+                if (cf[i] >= 0 && bankFaceSeq.motionHalfExtents(cf[i], half))
+                    roots.setMaskExtent((int)i, half);
+        }
         int withTrack = 0, withPlant = 0;
         for (const auto& t : tracks) withTrack += t.valid() ? 1 : 0;
         for (const auto* pl : plants) withPlant += pl->valid() ? 1 : 0;
@@ -2616,7 +2628,7 @@ int main(int argc, char** argv) {
                         const bool ownTrack = !thisSittingCaptureId.empty() &&
                                               pendingFaceTrack.id == thisSittingCaptureId;
                         rootFaceSeq.begin(ownTrack ? pendingFaceTrack : mirror::FaceTrack{},
-                                          g_fitter.basis());
+                                          g_fitter.basis(), g_root_seq.replayConfig());
                     }
                     // The sound follows the same edge as the scene, from the
                     // same place, so there is no second notion of "which phase
@@ -3131,7 +3143,7 @@ int main(int argc, char** argv) {
             auto applyFogFade = [&](double clock) {
                 const float fadeSecs = std::max(1e-3f, g_root_seq.fog_fade_seconds);
                 const float ft = std::clamp((float)(clock / fadeSecs), 0.f, 1.f);
-                const float target = g_phase_fog_intensity[(int)show::Phase::Roots];
+                const float target = g_roots_fog_intensity;
                 roots.renderer().fog.visibility =
                     kFogClearVisibility + (target - kFogClearVisibility) * ft;
             };
@@ -3151,6 +3163,13 @@ int main(int argc, char** argv) {
             // panel greys the row out otherwise, but the request is cleared
             // regardless so a click from an inactive phase cannot fire later.
             auto honourRootJump = [&]() {
+                // Key 5 (below) asks for Grow from *outside* Roots: the
+                // request waits here until the sequence is up, then rides
+                // the same path as the panel's row.
+                if (g_root_jump_on_entry >= 0 && rootSeqActive && rootSeq.valid()) {
+                    g_root_jump = g_root_jump_on_entry;
+                    g_root_jump_on_entry = -1;
+                }
                 const int want = g_root_jump;
                 g_root_jump = -1;
                 if (want < 0 || want >= (int)RootSequence::Stage::Done) return;
@@ -3228,7 +3247,7 @@ int main(int argc, char** argv) {
                 // trip to disk.
                 bankCache[track.id].track = track;
                 pendingFaceTrack = std::move(track);
-                rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis());
+                rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis(), g_root_seq.replayConfig());
                 rootFaceSeqBegunForSitting = true;
             };
             // The plant, at the Grow -> Turn edge (by the sequence's clock or
@@ -3312,20 +3331,27 @@ int main(int argc, char** argv) {
                 const bool needOverride =
                     jawIdx >= 0 && target > 0.f &&
                     (jawIdx >= (int)liveExpr.size() || liveExpr[size_t(jawIdx)] < target);
+                // The fitter poses its mesh about the centroid (the middle
+                // of the face); on the mask it turns about the neck, the
+                // same pivot the replay uses (FaceReplayConfig), or the live
+                // head and the replayed one would move differently.
+                std::vector<float> verts;
                 if (needOverride) {
                     std::vector<float> expr = liveExpr;
                     if ((int)expr.size() <= jawIdx) expr.resize(size_t(jawIdx) + 1, 0.f);
                     expr[size_t(jawIdx)] = std::max(expr[size_t(jawIdx)], target);
-                    std::vector<float> verts;
                     g_fitter.basis().reconstruct(g_fitter.alpha(), expr, verts);
                     mirror::RotateAboutCentroid(verts, g_fitter.rotation());
-                    roots.setFittedFace(verts, rootFaceTrisUploaded ? std::vector<int>()
-                                                                    : g_fitter.basis().triangles());
                 } else {
-                    roots.setFittedFace(g_fitter.vertices(),
-                                        rootFaceTrisUploaded ? std::vector<int>()
-                                                             : g_fitter.basis().triangles());
+                    verts = g_fitter.vertices();
                 }
+                {
+                    const float pivot[3] = {0.f, -g_root_seq.head_pivot_down_cm,
+                                            -g_root_seq.head_pivot_back_cm};
+                    mirror::ShiftRotationPivot(verts, g_fitter.rotation(), pivot);
+                }
+                roots.setFittedFace(verts, rootFaceTrisUploaded ? std::vector<int>()
+                                                                : g_fitter.basis().triangles());
                 rootFaceTrisUploaded = true;
             };
             auto uploadFaceColorsIfFresh = [&]() {
@@ -3648,13 +3674,18 @@ int main(int argc, char** argv) {
             ImGui::NewFrame();
 
             // Keyboard cues, for rehearsal without a controller: 1-4 force a
-            // phase, space fires the "go" cue. Guarded on WantCaptureKeyboard,
-            // or typing a caption into the text field would jump the show
+            // phase, 5 is Roots straight into Grow (skipping the Face stage),
+            // space fires the "go" cue. Guarded on WantCaptureKeyboard, or
+            // typing a caption into the text field would jump the show
             // around. Read after NewFrame so the key state is this frame's.
             if (g_show_on && !ImGui::GetIO().WantCaptureKeyboard) {
                 for (int p = 0; p < (int)show::Phase::Count; ++p) {
                     if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + p), false))
                         g_show.goTo((show::Phase)p);
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_5, false)) {
+                    g_root_jump_on_entry = (int)RootSequence::Stage::Grow;
+                    if (g_show.phase() != show::Phase::Roots) g_show.goTo(show::Phase::Roots);
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
                     g_show.go();

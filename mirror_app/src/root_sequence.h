@@ -63,6 +63,7 @@
 #error "root_sequence.h is ObjC++ only"
 #endif
 
+#include "root_face_sequence.h"   // FaceReplayConfig
 #include "root_scene.h"
 #include "root_sim.h"
 
@@ -261,6 +262,22 @@ struct RootSequenceParams {
     float mouth_open_amount  = 0.8f;   // the jawOpen coefficient at full open
     float mouth_open_seconds = 1.2f;   // the ease-in
     float mouth_open_lead    = 0.5f;   // seconds before Grow the ease starts
+    // Width, seconds, of the temporal filter run over a recorded head track
+    // before it is replayed (FaceTrackPlayer::smoothTrack) -- takes the
+    // fit's per-frame jitter out of the masks. 0 replays the recording raw.
+    float track_smooth_seconds = 0.25f;
+    // Where a replayed head turns about: this far behind and below the face
+    // mesh's centroid, cm (FaceReplayConfig::pivotBackCm/DownCm).
+    float head_pivot_back_cm = 8.f;
+    float head_pivot_down_cm = 5.f;
+
+    FaceReplayConfig replayConfig() const {
+        FaceReplayConfig c;
+        c.smoothSeconds = track_smooth_seconds;
+        c.pivotBackCm = head_pivot_back_cm;
+        c.pivotDownCm = head_pivot_down_cm;
+        return c;
+    }
 
     // --- Outro -------------------------------------------------------------
     float datamosh_seconds = 3.0f;

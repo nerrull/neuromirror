@@ -231,6 +231,9 @@ struct RootSim::Impl {
 
     std::vector<MaskNode> masks;      // grow space
     std::vector<MaskNode> revealed;   // grow space
+    // Per mask, what setMaskExtent adds to r_width/r_height/r_depth (x, y, z;
+    // grow units) for the keep-out and the nest ring only -- see padded().
+    std::vector<Vector3d> swing;
     std::vector<SimMask>  revealedRender;
     std::vector<SimMask>  plannedRender;    // every mask, from reset
     std::vector<SimMask>  plannedGrow;      // ...and the same in grow space
@@ -300,9 +303,12 @@ struct RootSim::Impl {
     // the mouth's normalised-mesh-frame position (SimParams::faceMouthU/V/N),
     // scaled the same way the cavity radii are (faceScale x faceUnit == fs,
     // see reset()'s cavity-sizing block).
+    // The face itself is drawn recessed into the cavity (p.faceRecess of the
+    // half-depth behind pos), so the mouth starts from there, not from pos.
     Vector3d mouthPoint(const MaskNode& m) const {
         const double fs = std::max(0.05, (double)p.faceScale) * maskR;
-        return m.pos.plus(m.tangent.times((double)p.faceMouthU * fs))
+        return m.pos.minus(m.normal.times(m.r_depth * (double)p.faceRecess))
+                    .plus(m.tangent.times((double)p.faceMouthU * fs))
                     .plus(m.bitangent.times((double)p.faceMouthV * fs))
                     .plus(m.normal.times((double)p.faceMouthN * fs));
     }
@@ -331,19 +337,13 @@ struct RootSim::Impl {
         }
         const MaskNode& m = masks[from];
         const Vector3d mouth = mouthPoint(m);
-        // The on-axis anchor faces down the axis, and the chain runs that
-        // way: the root starts *inside* the head -- at the mask's own centre
-        // depth, under the mouth (the mouth's tangent/bitangent offset with
-        // its normal component dropped), anchorSpawn further back -- and
-        // grows out through the mouth hole along the normal.
-        if (from == 0 && anchorAxis)
-            return mouth.minus(m.normal.times((double)p.faceMouthN *
-                                              std::max(0.05, (double)p.faceScale) * maskR
-                                              + (double)p.anchorSpawn));
-        // Just behind the surface at the mouth: emerging from the mouth is
-        // what makes it read as growing out of this face, rather than out of
-        // its centre or its chin.
-        return mouth.minus(m.normal.times((double)p.spawnBehind));
+        // Behind the mouth, inside the head. The on-axis anchor's root grows
+        // out through the mouth hole along the normal (initHop); every other
+        // hop's heads off toward its target from back here, so the face it
+        // leaves is never crossed in front.
+        const double behind = (from == 0 && anchorAxis) ? (double)p.anchorSpawn
+                                                        : (double)p.spawnBehind;
+        return mouth.minus(m.normal.times(std::max(0.0, behind)));
     }
 
     // Which mask a hop leaves from -- the same choice as hopStart, for the
@@ -454,7 +454,7 @@ struct RootSim::Impl {
             double reach = std::max((double)p.travelPullReach * hopLen, (double)p.R0);
             attrs.push_back(Attractor{localTarget, 1.0, reach});
         } else {
-            attrs = nestAttractors(localTargetNode, p.nestRings, p.nestPerRing,
+            attrs = nestAttractors(padded(hop, localTargetNode), p.nestRings, p.nestPerRing,
                                    (double)p.nestBehind, 1.0, 3.0, 1.15);
         }
         hopAttrs = maskcav::makeAttractorSet(std::move(attrs));
@@ -499,6 +499,19 @@ struct RootSim::Impl {
 
     void pushRevealedRender(const MaskNode& m) { revealedRender.push_back(toSimMask(m)); }
 
+    // Mask `idx`'s node with its motion swing added to the radii: what the
+    // roots are kept out of and the nest is rung around. Everything that is
+    // about the face itself (drawing, the mouth, arrival) uses the bare node.
+    MaskNode padded(int idx, const MaskNode& base) const {
+        MaskNode m = base;
+        if (idx >= 0 && idx < (int)swing.size()) {
+            m.r_width  += swing[size_t(idx)].x;
+            m.r_height += swing[size_t(idx)].y;
+            m.r_depth  += swing[size_t(idx)].z;
+        }
+        return m;
+    }
+
     void initHop(int h) {
         Vector3d maskGlobal = masks[h].pos;
         // The travel target sits a little above the mask so the main root
@@ -511,15 +524,21 @@ struct RootSim::Impl {
         rs->readParameters(paramPath, "plant", true, false);
         rs->setSeed(p.seed + (unsigned)h);
         rs->initialize(false);
-        // The seed's root leaves along the source mask's normal -- out
-        // through the mouth -- rather than CPlantBox's default straight down,
-        // which had the first segments heading for the floor before the
-        // tropism could turn them. The on-axis anchor's normal is the chain
-        // axis itself (see hopStart).
+        // The seed's initial heading, rather than CPlantBox's default straight
+        // down (which had the first segments heading for the floor before the
+        // tropism could turn them). The on-axis anchor's root leaves along
+        // its normal -- out through the mouth, which is the chain axis (see
+        // hopStart). Every other hop starts behind the face it leaves and
+        // heads straight for its target from there: along the normal it
+        // would burst out the front of a face whose next mask is behind it.
         {
             const int from = hopFrom(h);
-            const Vector3d out = (from >= 0 && from < (int)masks.size()) ? masks[size_t(from)].normal
-                                                                          : chainAxis();
+            Vector3d out = chainAxis();
+            if (from == 0 && anchorAxis) out = masks[0].normal;
+            else {
+                const Vector3d d = targetGlobal.minus(hopStart(h));
+                if (d.length() > 1e-6) out = d.normalized();
+            }
             for (auto& o : rs->getBaseRoots()) OrganHeading::set(*o, out);
         }
         auto seedNodes = rs->getNodes();
@@ -535,9 +554,10 @@ struct RootSim::Impl {
         offset = hopStart(h).minus(localSeed);
         localTarget = targetGlobal.minus(offset);
 
+        // Masks are revealed in index order, so revealed[k] is masks[k].
         localRevealed.clear();
-        for (const auto& m : revealed) {
-            MaskNode lm = m; lm.pos = m.pos.minus(offset);
+        for (size_t k = 0; k < revealed.size(); ++k) {
+            MaskNode lm = padded((int)k, revealed[k]); lm.pos = revealed[k].pos.minus(offset);
             localRevealed.push_back(lm);
         }
         localTargetNode = masks[h];
@@ -653,7 +673,7 @@ struct RootSim::Impl {
                 reached = true; reachedDay = day;
                 report.forced = (k >= 1.0);
                 report.travelDays = (float)day;
-                localRevealed.push_back(localTargetNode);
+                localRevealed.push_back(padded(hop, localTargetNode));
                 revealed.push_back(masks[hop]);
                 pushRevealedRender(masks[hop]);
                 rebuildTropism(p.dwellWeightFor(hop), p.dwellLateralFor(hop), false, reachedDay);
@@ -761,6 +781,7 @@ bool RootSim::reset(const SimParams& p) {
             mn.r_height = std::max(0.2, fs * (double)p.faceHalfH * m);
             mn.r_depth  = std::max(0.2, fs * (double)p.faceHalfD * m);
         }
+        impl_->swing.assign(impl_->masks.size(), Vector3d(0, 0, 0));
     }
 
     // Anchor-first placement.
@@ -958,6 +979,29 @@ bool RootSim::maskMouthPoint(int m, float out[3]) const {
     const Vector3d y = impl_->toRender(impl_->mouthPoint(impl_->masks[size_t(m)]));
     out[0] = (float)y.x; out[1] = (float)y.y; out[2] = (float)y.z;
     return true;
+}
+
+void RootSim::setFaceMouth(float u, float v, float n, bool reseed) {
+    if (!impl_->ok) return;
+    impl_->p.faceMouthU = u; impl_->p.faceMouthV = v; impl_->p.faceMouthN = n;
+    // day is 0 until the first step(): the seed is all that exists.
+    if (reseed && !impl_->doneFlag && impl_->day <= 0.0) impl_->initHop(impl_->hop);
+}
+
+void RootSim::setMaskExtent(int m, float halfW, float halfH, float halfD) {
+    if (!impl_->ok || m < 0 || m >= (int)impl_->masks.size()) return;
+    if (impl_->swing.size() != impl_->masks.size())
+        impl_->swing.assign(impl_->masks.size(), Vector3d(0, 0, 0));
+    const SimParams& p = impl_->p;
+    const double fs = std::max(0.05, (double)p.faceScale) * impl_->maskR;
+    const double mg = 1.0 + std::max(0.0, (double)p.cavityMargin);
+    const double k = std::max(0.0, (double)p.motionCavity);
+    const MaskNode& mn = impl_->masks[size_t(m)];
+    impl_->swing[size_t(m)] = Vector3d(
+        k * std::max(0.0, fs * (double)halfW * mg - mn.r_width),
+        k * std::max(0.0, fs * (double)halfH * mg - mn.r_height),
+        k * std::max(0.0, fs * (double)halfD * mg - mn.r_depth));
+    if (!impl_->doneFlag && impl_->day <= 0.0) impl_->initHop(impl_->hop);
 }
 
 RootSim::HopSpawn RootSim::hopSpawn(int h) const {

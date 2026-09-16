@@ -175,10 +175,9 @@ fragment float4 f_face(MOut in [[stage_in]],
     constexpr sampler smp(coord::normalized, address::clamp_to_edge, filter::linear);
     // The albedo is the film the mask is wearing, sampled at the projection that
     // placed the vertex -- so the mask carries away exactly the pixels that were
-    // covering it. Taken as-is rather than linearised, because the root scene's
-    // mask albedo (FaceFitter::sampleTexture, off the same mirror output) is
-    // taken as-is too, and agreeing with the scene we hand over to matters more
-    // here than the missing decode does.
+    // covering it. Encoded, like the root scene's mask albedo (FaceFitter::
+    // sampleTexture, off the same mirror output); shadeFace decodes both the
+    // same way (RootFaceU::albedoGamma), so the two scenes agree.
     const float3 albedo = film.sample(smp, in.uv).rgb;
 
     // Into the shading space: the mask is about four world units across in the

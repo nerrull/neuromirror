@@ -128,15 +128,11 @@ struct RootFaceU {
     RS_F4X4 viewProj;
     RS_F4   eye;          // xyz
     RS_F4   lightDir;     // xyz
-    RS_F4   veinColor;    // xyz
     float   lightIntensity;
     float   lightFalloff;
     float   specStrength;
-    float   veinScale;
-    float   veinStrength;
-    float   roughness;    // base GGX roughness; the vein field modulates it
+    float   roughness;    // GGX roughness
     float   metallic;
-    float   reliefStrength;   // normal perturbation from the turbulence gradient
     RS_F4   skyColor;
     RS_F4   groundColor;
     RS_F4   sssTint;
@@ -146,7 +142,6 @@ struct RootFaceU {
     float   sssWrap;
     float   sssTrans;
     float   sssPower;
-    float   reliefScale;  // relief frequency, as a multiple of veinScale
     // The mask light as a spotlight rather than a bare point: cosines of the
     // half-angles at which it starts and finishes falling off, aimed along the
     // mask's own facing.
@@ -158,6 +153,16 @@ struct RootFaceU {
     // `lit` per vertex (FaceVertex in root_face.metal), since one mesh holds
     // every structure's masks; same meaning as RootDrawU::unlitLevel.
     float   unlitLevel;
+    // Decode applied to the albedo before lighting: the mask wears the mirror's
+    // output, which is display-referred (the pond is trained on camera pixels
+    // and presented to a non-sRGB layer), so lighting it as if linear and then
+    // encoding again washes it out. 2.2 undoes that; 1 is the old as-is.
+    float   albedoGamma;
+    // Saturation of the decoded albedo about its luma: 1 leaves the
+    // photograph alone, >1 pushes back against what the lighting (a white
+    // spot, the env sheen, the ACES shoulder) washes out of it.
+    float   albedoSat;
+    RS_F4   lightColor;   // xyz, the mask's own spotlight's colour (x lightIntensity)
     RS_F4   keyColor;     // xyz, the directional key's colour x intensity
 };
 

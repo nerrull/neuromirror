@@ -270,6 +270,11 @@ public:
     // the frustum. A flag never clears on its own; replant() drops them all
     // with the rest of the last visitor.
     void setMaskVisible(int i);
+    // The room mask m's replayed head sweeps (FaceTrackPlayer::
+    // motionHalfExtents), into the sim's keep-out -- RootSim::setMaskExtent.
+    void setMaskExtent(int m, const float half[3]) {
+        if (useSim_ && sim_) sim_->setMaskExtent(m, half[0], half[1], half[2]);
+    }
     bool maskVisible(int i) const;   // reached *or* flagged
 
     // --- the other structures (Reveal) ---------------------------------------
@@ -659,6 +664,13 @@ private:
     // Called before every sim reset and by rebuildFace(), so the probes that
     // copy simParams_ (growthStepEstimate, ensureVariations) see them too.
     void syncFaceParams();
+    // The mouth measured off the face mask 0 is wearing *now* (mouthFromMesh
+    // on faceVerts_), into the sim: syncFaceParams' basis mouth is only where
+    // the mouth was before the visitor moved it. Every held frame while the
+    // sync is pending (marker only), then once with `reseed` at the first
+    // growth step, so the root starts from the mouth as it stands.
+    void syncMouthToFace(bool reseed);
+    bool mouthSyncPending_ = false;
 
     // --- cloth internals (see the public section above) --------------------
     void refreshClothAnchor();       // cache the anchor mask's frame for this frame

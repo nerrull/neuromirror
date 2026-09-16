@@ -3,7 +3,7 @@
 // The mask-mesh mid-geometry pass: triangle meshes (the face masks) rasterized
 // into the SAME colour + depth targets as the root capsules, between the capsule
 // pass and the fog pass, so they depth-composite against the sphere-traced roots
-// and are included in the fog. Marble veining + a per-face point light. Vertices
+// and are included in the fog. Lit skin + a per-face spotlight. Vertices
 // arrive interleaved (pos3, normal3, color3, lightPos3, lit) -- the GL VBO's
 // layout plus one float: whether the mask is lit (1) or standing dark (0). One
 // mesh holds every structure's masks, so a per-structure state has to ride on
@@ -54,9 +54,6 @@ vertex FaceVOut root_face_vs(uint vid [[vertex_id]],
 
 fragment float4 root_face_fs(FaceVOut in [[stage_in]],
                              constant RootFaceU& U [[buffer(1)]]) {
-    // World position doubles as the marble's coordinate here: the root scene is
-    // where veinScale was tuned, so it is the scene that defines what the
-    // pattern's world size means.
     float4 c = shadeFace(in.worldPos, in.normal, in.color, in.lightPos, U);
     // A dark mask keeps a sliver of its radiance and nothing else -- the same
     // rule as the capsules' RootDrawU::lit, and like there the alpha (the

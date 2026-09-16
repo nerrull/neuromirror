@@ -934,18 +934,16 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
         fu.keyColor = simd_make_float4(env.keyColor[0] * env.keyIntensity,
                                        env.keyColor[1] * env.keyIntensity,
                                        env.keyColor[2] * env.keyIntensity, 0);
-        fu.veinColor = simd_make_float4(faceMat.veinColor[0], faceMat.veinColor[1],
-                                        faceMat.veinColor[2], 0);
         fu.lightIntensity = faceMat.lightIntensity;
+        fu.lightColor     = simd_make_float4(faceMat.lightColor[0], faceMat.lightColor[1],
+                                             faceMat.lightColor[2], 0);
         fu.lightFalloff   = faceMat.lightFalloff;
         fu.specStrength   = faceMat.specStrength;
-        fu.veinScale      = faceMat.veinScale;
-        fu.veinStrength   = 0.0f;
         fu.roughness      = faceMat.roughness;
         fu.metallic       = faceMat.metallic;
-        fu.reliefStrength = faceMat.reliefStrength;
-        fu.reliefScale    = faceMat.reliefScale;
         fu.spotLightDist  = faceMat.spotLightDist;
+        fu.albedoGamma    = faceMat.albedoGamma;
+        fu.albedoSat      = faceMat.albedoSat;
         // Same convention as the root renderer: 90 degrees outer means no cone.
         if (faceMat.spotOuterDeg >= 89.9f) {
             fu.spotCosOuter = -2.0f; fu.spotCosInner = -2.0f;

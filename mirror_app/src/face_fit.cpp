@@ -395,18 +395,36 @@ bool FaceFitter::fitIdentity(float* residual_px) {
 // ---------------------------------------------------------------------------
 
 void RotateAboutCentroid(std::vector<float>& verts, const float rot[9]) {
+    const float zero[3] = {0.f, 0.f, 0.f};
+    RotateAboutCentroidOffset(verts, rot, zero);
+}
+
+void RotateAboutCentroidOffset(std::vector<float>& verts, const float rot[9],
+                               const float offset[3]) {
     float cx = 0, cy = 0, cz = 0;
     const size_t n = verts.size() / 3;
     if (n == 0) return;
     for (size_t i = 0; i < n; ++i) {
         cx += verts[i * 3]; cy += verts[i * 3 + 1]; cz += verts[i * 3 + 2];
     }
-    cx /= float(n); cy /= float(n); cz /= float(n);
+    cx = cx / float(n) + offset[0];
+    cy = cy / float(n) + offset[1];
+    cz = cz / float(n) + offset[2];
     for (size_t i = 0; i < n; ++i) {
         const float x = verts[i * 3] - cx, y = verts[i * 3 + 1] - cy, z = verts[i * 3 + 2] - cz;
         verts[i * 3]     = rot[0] * x + rot[1] * y + rot[2] * z + cx;
         verts[i * 3 + 1] = rot[3] * x + rot[4] * y + rot[5] * z + cy;
         verts[i * 3 + 2] = rot[6] * x + rot[7] * y + rot[8] * z + cz;
+    }
+}
+
+void ShiftRotationPivot(std::vector<float>& verts, const float rot[9], const float offset[3]) {
+    float t[3];
+    for (int i = 0; i < 3; ++i)
+        t[i] = offset[i] - (rot[i * 3] * offset[0] + rot[i * 3 + 1] * offset[1] +
+                            rot[i * 3 + 2] * offset[2]);
+    for (size_t i = 0; i + 2 < verts.size(); i += 3) {
+        verts[i] += t[0]; verts[i + 1] += t[1]; verts[i + 2] += t[2];
     }
 }
 

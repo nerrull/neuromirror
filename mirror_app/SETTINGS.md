@@ -100,13 +100,11 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/fitting` | int | 0 .. 4 | 0 |
 | `show/fitting/absent_hold` | float | 0 .. 30 | 9.9 |
 | `show/fitting/fit_hold` | float | 0 .. 30 | 1.5 |
-| `show/fitting/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 61.2 |
 | `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
 | `show/idle/face drop grace s` | float | 0 .. 3 | 0.5 |
 | `show/idle/face hold s` | float | 0 .. 30 | 15 |
-| `show/idle/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/idle/intro fade-in (s)` | float | 0 .. 8 | 1.5 |
 | `show/idle/max (0 - no ceiling)` | float | 0 .. 120 | 0 |
 | `show/idle/min` | float | 0 .. 120 | 0 |
@@ -141,6 +139,9 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/min` | float | 0 .. 120 | 40 |
 | `show/roots/mouth open amount` | float | 0 .. 1.5 | 0.8 |
 | `show/roots/mouth open lead (s)` | float | 0 .. 5 | 0.72 |
+| `show/roots/track smoothing (s)` | float | 0 .. 1 | 0.25 |
+| `show/roots/head pivot back (cm)` | float | 0 .. 20 | 8 |
+| `show/roots/head pivot down (cm)` | float | 0 .. 20 | 5 |
 | `show/roots/mouth open seconds` | float | 0.1 .. 5 | 1.2 |
 | `show/roots/other structures` | bool | -- | 0 | (off: no hood; a slow pull-back to the whole plant instead)
 | `show/roots/zoom out seconds` | float | 1 .. 120 | 20 |
@@ -164,7 +165,6 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/run the show` | bool | -- | 1 |
 | `show/transition` | int | 0 .. 4 | 2 |
 | `show/transition/done_hold` | float | 0 .. 30 | 0 |
-| `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
 | `show/transition/min` | float | 0 .. 120 | 0 |
 | `sound/checkpoint hysteresis` | float | 0 .. 0.15 | 0.03 |
@@ -315,7 +315,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
-## roots (203 parameters)
+## roots (202 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -371,19 +371,17 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/unlit level` | float | 0 .. 0.3 | 0.035 |
 | `roots/face masks/face falloff` | float | 0.001 .. 0.1 | 0.022 |
 | `roots/face masks/face light` | float | 0 .. 8 | 1.8 |
+| `roots/face masks/face light color` | rgb | -- | 1 0.82 0.62 |
 | `roots/face masks/face recess` | float | -2 .. 1.5 | -0.849 |
 | `roots/face masks/face scale` | float | 0.3 .. 1.5 | 1.351 |
 | `roots/face masks/face spec` | float | 0 .. 3 | 1.2 |
-| `roots/face masks/mask relief` | float | 0 .. 1.5 | 0 |
-| `roots/face masks/mask roughness` | float | 0.04 .. 1 | 0.42 |
-| `roots/face masks/relief scale` | float | 1 .. 30 | 9 |
+| `roots/face masks/mask roughness` | float | 0.04 .. 1 | 0.55 |
+| `roots/face masks/albedo gamma` | float | 1 .. 3 | 2.2 |
+| `roots/face masks/albedo saturation` | float | 0 .. 3 | 1 |
 | `roots/face masks/show faces` | bool | -- | 1 |
 | `roots/face masks/smooth normals` | bool | -- | 1 |
 | `roots/face masks/spot inner angle` | float | 1 .. 89 | 1 |
 | `roots/face masks/spot outer angle` | float | 5 .. 90 | 83.4 |
-| `roots/face masks/vein color` | rgb | -- | 0.55 0.53 0.5 |
-| `roots/face masks/vein scale` | float | 0.1 .. 2 | 0.6 |
-| `roots/face masks/vein strength` | float | 0 .. 1 | 0 |
 | `roots/fog & atmosphere/anisotropy (fwd <-> back)` | float | -0.9 .. 0.9 | 0.503 |
 | `roots/fog & atmosphere/clear radius follows camera` | bool | -- | 1 |
 | `roots/fog & atmosphere/clear radius x orbit` | float | 0 .. 1.5 | 0.865 |
@@ -419,7 +417,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/glitch/vector gain` | float | 0 .. 6 | 4.399 |
 | `roots/growth/anchor on axis` | bool | -- | 1 |
 | `roots/growth/anchor pitch` | float | 0 .. 85 | 60 |
-| `roots/growth/anchor spawn` | float | -3 .. 6 | 0 |
+| `roots/growth/anchor spawn` | float | 0 .. 6 | 1.5 |
 | `roots/growth/cone height` | float | 24 .. 96 | 65 |
 | `roots/growth/cone radius` | float | 6 .. 24 | 13 |
 | `roots/growth/crawl the cone surface` | bool | -- | 0 |
@@ -446,10 +444,11 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/seed` | int | 0 .. 1.07374e+09 | 2 |
 | `roots/growth/shell` | float | 1 .. 20 | 9 |
 | `roots/growth/nest behind` | float | -5 .. 15 | 0 |
+| `roots/growth/motion cavity` | float | 0 .. 1.5 | 1 |
 | `roots/growth/nest hit radius` | float | 0 .. 6 | 1.5 |
 | `roots/growth/nest per ring` | int | 3 .. 16 | 8 |
 | `roots/growth/nest rings` | int | 1 .. 6 | 3 |
-| `roots/growth/spawn behind` | float | -10 .. 10 | -1.06 |
+| `roots/growth/spawn behind` | float | 0 .. 10 | 1.5 |
 | `roots/growth/species` | string | -- | Brassica_oleracea_Vansteenkiste_2014.xml |
 | `roots/growth/spiral drift` | float | -0.5 .. 0.5 | 0 |
 | `roots/growth/spiral x golden` | float | 0.2 .. 2 | 1 |
