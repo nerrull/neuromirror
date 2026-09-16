@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jardins racine — Materials</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital,wght@0,400;1,400&family=Work+Sans:wght@300;400;500&display=swap">
+<style>
+  :root {
+    --wall: #d9d4cb;        /* a painted gallery wall, warm grey */
+    --wall-deep: #c9c3b8;
+    --paper: #f7f4ee;       /* the label card */
+    --ink: #1d1b18;
+    --ink-soft: #5b5750;
+    --ink-faint: #8f8a80;
+    --rule: #dcd6cb;
+    --root: #6b4f2e;        /* one accent: root-brown */
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --wall: #2a2825;
+      --wall-deep: #1f1d1b;
+      --paper: #efeae1;
+      --ink: #1d1b18;
+      --ink-soft: #5b5750;
+      --ink-faint: #8f8a80;
+      --rule: #d5cfc3;
+      --root: #6b4f2e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --wall: #2a2825;
+    --wall-deep: #1f1d1b;
+    --paper: #efeae1;
+    --ink: #1d1b18;
+    --ink-soft: #5b5750;
+    --ink-faint: #8f8a80;
+    --rule: #d5cfc3;
+    --root: #6b4f2e;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--wall);
+    background-image: radial-gradient(ellipse at 50% 30%, var(--wall) 0%, var(--wall-deep) 100%);
+    color: var(--ink);
+    font-family: "Work Sans", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 300;
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 6vh 16px 8vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .label {
+    background: var(--paper);
+    width: 100%;
+    max-width: 560px;
+    padding: 44px 48px 40px;
+    box-shadow:
+      0 1px 0 rgba(0,0,0,.08),
+      0 10px 30px -12px rgba(0,0,0,.35);
+  }
+  @media (max-width: 480px) {
+    .label { padding: 32px 24px 28px; }
+  }
+
+  /* --- the tombstone: title / artist / year / medium ---------------------- */
+  h1 {
+    font-family: "Libre Caslon Text", Georgia, "Times New Roman", serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.85rem;
+    line-height: 1.15;
+    margin: 0 0 6px;
+    letter-spacing: -0.005em;
+    text-wrap: balance;
+  }
+  .artist {
+    font-weight: 500;
+    font-size: 0.95rem;
+    margin: 0;
+  }
+  .year { color: var(--ink-soft); font-weight: 300; }
+  .medium {
+    font-family: "Libre Caslon Text", Georgia, serif;
+    font-style: italic;
+    color: var(--ink-soft);
+    margin: 10px 0 0;
+    max-width: 44ch;
+  }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 28px 0 24px;
+  }
+
+  /* --- materials -------------------------------------------------------- */
+  .eyebrow {
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    margin: 0 0 8px;
+  }
+  .group + .group { margin-top: 22px; }
+
+  dl { margin: 0; display: grid; grid-template-columns: 1fr; gap: 9px 0; }
+  .item { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: baseline; }
+  dt { font-weight: 500; }
+  dt .role { font-weight: 300; color: var(--ink-soft); }
+  dd {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  @media (max-width: 480px) {
+    .item { grid-template-columns: 1fr; row-gap: 1px; }
+    dd { white-space: normal; }
+  }
+  a { color: inherit; text-decoration: none; }
+  a:hover, a:focus-visible { color: var(--root); text-decoration: underline; text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--root); outline-offset: 2px; }
+
+  /* --- footer ----------------------------------------------------------- */
+  .note {
+    margin: 26px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    max-width: 52ch;
+  }
+  .note a { color: var(--root); }
+  .note + .note { margin-top: 10px; padding-top: 0; border-top: 0; }
+</style>
+</head>
+<body>
+<main class="label">
+  <h1>Jardins racine</h1>
+  <p class="artist">Etienne Richan <span class="year">— 2026</span></p>
+  <p class="medium">Neural mirror, simulated root growth, Kinect, sound. Software written in C++ and Metal.</p>
+
+  <hr>
+
+  <section class="group">
+    <p class="eyebrow">Seeing</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker">MediaPipe Face Landmarker</a> <span class="role">— 478 landmarks, 52 blendshapes, a head pose</span></dt>
+        <dd>Google · Apache-2.0</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://github.com/ICT-VGL/ICT-FaceKit">ICT-FaceKit</a> <span class="role">— morphable face model fitted to the visitor</span></dt>
+        <dd>USC Institute for Creative Technologies · MIT</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://github.com/OpenKinect/libfreenect2">libfreenect2</a> <span class="role">— Kinect v2 depth and colour</span></dt>
+        <dd>OpenKinect · Apache-2.0 / GPL-2</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Mirroring</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://github.com/ml-explore/mlx">MLX</a> <span class="role">— a small coordinate network trained live on the face, on the GPU</span></dt>
+        <dd>Apple · MIT</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://link.springer.com/article/10.1007/s10710-007-9028-8">Compositional pattern-producing networks</a> <span class="role">— the idea of a network that draws an image from its coordinates</span></dt>
+        <dd>Kenneth O. Stanley, 2007</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://blog.otoro.net/2016/03/25/generating-abstract-patterns-with-tensorflow/">Generating Abstract Patterns with TensorFlow</a> <span class="role">— the blog post the mirror's look comes from</span></dt>
+        <dd>David Ha, otoro.net, 2016</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://www.vincentsitzmann.com/siren/">SIREN</a> <span class="role">— sinusoidal activations that let the network hold fine detail</span></dt>
+        <dd>Sitzmann et al., NeurIPS 2020</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Growing</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://github.com/Plant-Root-Soil-Interactions-Modelling/CPlantBox">CPlantBox</a> <span class="role">— functional–structural root growth, day by day</span></dt>
+        <dd>Forschungszentrum Jülich · GPL-3</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Sounding</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://github.com/pichenettes/eurorack">Mutable Instruments DSP</a> <span class="role">— Rings, Clouds, Elements, Plaits and Peaks, run as plug-ins</span></dt>
+        <dd>Émilie Gillet · MIT</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Framing</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://github.com/ocornut/imgui">Dear ImGui</a> <span class="role">— the control panel</span></dt>
+        <dd>Omar Cornut · MIT</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://www.glfw.org/">GLFW</a> <span class="role">— the window</span></dt>
+        <dd>zlib</dd>
+      </div>
+    </dl>
+  </section>
+
+  <p class="note">Runs on Apple Metal, with sound through Audiokinetic Wwise. The Mutable Instruments name and module names are trademarks; only the code is borrowed.</p>
+  <p class="note">Source: <a href="https://github.com/nerrull/roots">github.com/nerrull/roots</a></p>
+</main>
+</body>
+</html>
