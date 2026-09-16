@@ -145,8 +145,20 @@ static float4 marchFog(float3 ro, float3 rd, float t0, float t1, float jitter,
         // the scatter slider only adds the directional component on top. Scaling
         // both would make the scatter control double as a brightness control for
         // the whole background, which is not what anyone reaches for it to do.
-        scat += T * (1.0 - dT)
-              * (U.fogColor.xyz + U.fogScatter * ph * U.keyColor.xyz);
+        float3 inscat = U.fogColor.xyz + U.fogScatter * ph * U.keyColor.xyz;
+        // The pluck flash, as a point source in the medium: inverse-square
+        // from its position, through the same phase function (the direction
+        // to the light varies per sample, unlike the key's). This is the
+        // volumetric part of the flash -- the glow around the mask.
+        if (any(U.flashColor.xyz > 0.0)) {
+            const float3 toL = U.flashPos.xyz - p;
+            const float d2 = dot(toL, toL);
+            const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+            const float phL = phaseHG(dot(rd, toL * rsqrt(max(d2, 1e-6))),
+                                      clamp(U.fogAnisotropy, -0.95, 0.95)) * 12.566370;
+            inscat += U.fogScatter * phL * U.flashColor.xyz / (1.0 + d2 / r2);
+        }
+        scat += T * (1.0 - dT) * inscat;
         T *= dT;
         if (T < 0.002) break;
     }

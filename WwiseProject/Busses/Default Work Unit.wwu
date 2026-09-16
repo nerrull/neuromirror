@@ -31,14 +31,23 @@
 									</ObjectLists>
 								</AuxBus>
 							</ChildrenList>
+							<ObjectLists>
+								<ObjectList Name="Effects">
+									<EffectSlot Name="" ID="{DE383941-3791-43F1-AA86-8D0239E55485}" ShortID="1034179259">
+										<ReferenceList>
+											<Reference Name="Effect" PluginName="Wwise Compressor" CompanyID="0" PluginID="108" PluginType="3">
+												<ObjectRef Name="Roots_Glue" ID="{9D26587C-A284-469E-9653-73D8A8B7851D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+											</Reference>
+										</ReferenceList>
+									</EffectSlot>
+								</ObjectList>
+							</ObjectLists>
 						</Bus>
 						<Bus Name="Transition" ID="{B39C741D-0E18-4EC3-A893-06EAABCF5C6E}"/>
 					</ChildrenList>
 					<ObjectLists>
 						<ObjectList Name="Effects">
-							<EffectSlot Name="" ID="{0D43FA9B-ABDC-4E71-9571-BA70604EBB79}" ShortID="890582008">
-								<ReferenceList/>
-							</EffectSlot>
+							<EffectSlot Name="" ID="{0D43FA9B-ABDC-4E71-9571-BA70604EBB79}" ShortID="890582008"/>
 							<EffectSlot Name="" ID="{37CB7765-2D13-45A7-86AE-9501E1E71618}" ShortID="1029425536">
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
@@ -119,9 +128,7 @@
 									</Reference>
 								</ReferenceList>
 							</EffectSlot>
-							<EffectSlot Name="" ID="{01BB8E03-49C6-4A91-A0B0-A032813F7E81}" ShortID="947526762">
-								<ReferenceList/>
-							</EffectSlot>
+							<EffectSlot Name="" ID="{01BB8E03-49C6-4A91-A0B0-A032813F7E81}" ShortID="947526762"/>
 							<EffectSlot Name="" ID="{27843C48-7463-4BE6-9ED0-380BA84B6CEB}" ShortID="346178048">
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">

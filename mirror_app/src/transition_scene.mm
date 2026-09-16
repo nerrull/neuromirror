@@ -955,13 +955,13 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
         fu.skyColor    = simd_make_float4(env.skyColor[0], env.skyColor[1], env.skyColor[2], 0);
         fu.groundColor = simd_make_float4(env.groundColor[0], env.groundColor[1],
                                           env.groundColor[2], 0);
-        fu.sssTint     = simd_make_float4(env.sssTint[0], env.sssTint[1], env.sssTint[2], 0);
+        fu.sssTint     = simd_make_float4(faceMat.sssTint[0], faceMat.sssTint[1], faceMat.sssTint[2], 0);
         fu.hemiStrength = env.hemiStrength;
         fu.envSpec      = env.envSpec;
         fu.rimStrength  = env.rimStrength;
-        fu.sssWrap      = env.sssWrap;
-        fu.sssTrans     = env.sssTrans;
-        fu.sssPower     = env.sssPower;
+        fu.sssWrap      = faceMat.sssWrap;
+        fu.sssTrans     = faceMat.sssTrans;
+        fu.sssPower     = faceMat.sssPower;
 
         TransFaceX x = {};
         x.centre = simd_make_float4(I.faceCentre, 0);

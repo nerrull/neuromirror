@@ -153,7 +153,29 @@ public:
         float spotInnerDeg   = 20.0f;
         // Must match the lightDist RootScene passes to appendFaceVertexData.
         float spotLightDist  = 3.0f;
+        // The mask's own subsurface terms, separate from the roots'
+        // (EnvParams::sss*): skin over a face is not the same tissue as a
+        // root, and the pluck flash reads through these (see face_shade.metal)
+        // so they want to be tunable on their own.
+        float sssWrap        = 0.55f;
+        float sssTrans       = 0.35f;
+        float sssPower       = 5.0f;
+        float sssTint[3]     = {0.90f, 0.45f, 0.22f};
     };
+    // The pluck flash: a bare point light the host places inside one mask
+    // for a moment on a pluck marker (RootScene::triggerFlash, Orbit only).
+    // The host sets pos/level every frame; the rest is the look.
+    struct Flash {
+        float pos[3]       = {0.f, 0.f, 0.f};
+        float level        = 0.f;    // this frame's envelope, 0..1
+        float intensity    = 12.f;   // colour x this x level reaches the shaders
+        float color[3]     = {1.0f, 0.93f, 0.80f};
+        float radius       = 3.f;    // inverse-square falloff's reference distance
+        float decaySeconds = 0.7f;   // the envelope's e-fold time after the hit
+        float depth        = 0.6f;   // where inside the head, x the mask's r_depth
+        bool  nearest      = false;  // pick the mask nearest the camera, else random
+    };
+    Flash flash;
     // Shading for the meshed leaves. Separate from FaceParams because a leaf is
     // a matte, thin, translucent sheet and a mask is polished stone; they share
     // the pass slot and the environment, not the material.

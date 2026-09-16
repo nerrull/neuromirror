@@ -361,6 +361,12 @@ public:
     void setStructurePulseStart(int k, float t);
     float pulseClock() const;
 
+    // The pluck flash (MetalRootRenderer::flash): pick a mask -- nearest the
+    // camera or at random, per flash.nearest -- and light it from inside for
+    // a moment. Position is re-read from the mask every frame in advance(),
+    // so it follows the mask wherever the placement puts it.
+    void triggerFlash();
+
     // --- debug: spawn-point markers ------------------------------------------
     // Small coloured spheres at every mask's spawn point (RootSim::hopSpawn,
     // red for mask 0's hop, orange for the rest), mouth point (green), first
@@ -809,6 +815,11 @@ private:
         size_t offset, count;         // floats into the mesh
     };
     std::vector<FaceBlock> faceBlocks_;
+    // The flash's mask (a faceBlocks_ structure/slot, -2 = none) and its
+    // envelope, decayed in advance().
+    int   flashStructure_ = -2, flashSlot_ = -1;
+    float flashLevel_ = 0.f;
+    void stepFlash(double dt);
     void patchBankFaces();
     int bankIndexFor(int structure, int slot) const;
     // Which bank face each planned mask draws; see chainFaces().

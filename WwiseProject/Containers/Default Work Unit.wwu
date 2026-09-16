@@ -10100,20 +10100,20 @@
 																	</Reference>
 																	<Reference Name="Curve">
 																		<Custom>
-																			<Curve Name="" ID="{05DD74E9-9447-44B8-9304-62FC2DD12B66}">
+																			<Curve Name="" ID="{2D6FBC84-71F5-482A-8A31-4FB73C226AD2}">
 																				<PropertyList>
 																					<Property Name="Flags" Type="int32" Value="1"/>
 																				</PropertyList>
 																				<PointList>
 																					<Point>
 																						<XPos>0</XPos>
-																						<YPos>0.35</YPos>
+																						<YPos>0.4</YPos>
 																						<Flags>5</Flags>
 																						<SegmentShape>SCurve</SegmentShape>
 																					</Point>
 																					<Point>
 																						<XPos>1</XPos>
-																						<YPos>0.7</YPos>
+																						<YPos>0.52</YPos>
 																						<Flags>37</Flags>
 																					</Point>
 																				</PointList>
@@ -10159,6 +10159,15 @@
 												</SourcePlugin>
 											</ChildrenList>
 											<ObjectLists>
+												<ObjectList Name="Effects">
+													<EffectSlot Name="" ID="{FA311A0B-B9BD-4806-A5FA-74AFC21C7060}" ShortID="744478867">
+														<ReferenceList>
+															<Reference Name="Effect" PluginName="Wwise Guitar Distortion" CompanyID="0" PluginID="126" PluginType="3">
+																<ObjectRef Name="Roots_Drone_Grit" ID="{99A250AF-3048-4FD5-BC39-14C5E5EF7E3E}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+															</Reference>
+														</ReferenceList>
+													</EffectSlot>
+												</ObjectList>
 												<ObjectList Name="RTPC">
 													<RTPC Name="" ID="{EE227F13-7643-444C-8ED3-1FD201AB5364}" ShortID="745530893">
 														<PropertyList>
@@ -10342,6 +10351,454 @@
 												</ObjectList>
 											</ObjectLists>
 										</RandomSequenceContainer>
+										<Sound Name="Roots_Drone_B" ID="{9D3A68DE-8030-4AA4-9651-DE71682C6C2C}" ShortID="644239018">
+											<PropertyList>
+												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
+												<Property Name="Pitch" Type="int32">
+													<ValueList>
+														<Value>7</Value>
+													</ValueList>
+												</Property>
+												<Property Name="UserAuxSendVolume0" Type="Real64">
+													<ValueList>
+														<Value>-12</Value>
+													</ValueList>
+												</Property>
+												<Property Name="Volume" Type="Real64">
+													<ValueList>
+														<Value>-3</Value>
+													</ValueList>
+												</Property>
+											</PropertyList>
+											<ReferenceList>
+												<Reference Name="Conversion">
+													<ObjectRef Name="Default Conversion Settings" ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}" WorkUnitID="{DB8B02E1-803B-4014-9350-4FA69AC3C862}"/>
+												</Reference>
+												<Reference Name="OutputBus">
+													<ObjectRef Name="Roots" ID="{D3557D67-7B30-4654-9CD9-38ED5B1D022A}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+												</Reference>
+												<Reference Name="UserAuxSend0">
+													<ObjectRef Name="Roots_Verb" ID="{D9B23565-D004-48C3-B43D-51A53AFD0CA6}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+												</Reference>
+											</ReferenceList>
+											<ChildrenList>
+												<SourcePlugin Name="Roots_Drone_Osc" ID="{CE44AAA8-7E43-4A48-9B47-CC31AF630FF7}" ShortID="37138419" PluginName="Macro Oscillator" CompanyID="64" PluginID="31225">
+													<PropertyList>
+														<Property Name="AuxMix" Type="Real32" Value="0.2"/>
+														<Property Name="Decay" Type="Real32" Value="0.95"/>
+														<Property Name="Duration" Type="Real32" Value="60"/>
+														<Property Name="Engine" Type="int32" Value="5"/>
+														<Property Name="Harmonics" Type="Real32" Value="0.4"/>
+														<Property Name="Level" Type="Real32" Value="-6"/>
+														<Property Name="LpgColour" Type="Real32" Value="0.6"/>
+														<Property Name="Morph" Type="Real32" Value="0.35"/>
+														<Property Name="Pitch" Type="Real32" Value="36"/>
+														<Property Name="Timbre" Type="Real32" Value="0.55"/>
+														<Property Name="Triggered" Type="bool" Value="False"/>
+													</PropertyList>
+													<ObjectLists>
+														<ObjectList Name="RTPC">
+															<RTPC Name="" ID="{C3CD146E-189A-4DE2-A10B-6068611CE7C7}" ShortID="779606171">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{772DB2FF-FA93-4309-A527-DE62AEC2165F}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>24</XPos>
+																						<YPos>12</YPos>
+																						<Flags>5</Flags>
+																					</Point>
+																					<Point>
+																						<XPos>84</XPos>
+																						<YPos>72</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{7976F9D8-3150-4DEB-86F2-86A4F1B60E26}" ShortID="197647543">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Harmonics"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="SceneProgress" ID="{BF250C41-367A-4D76-8E52-6336AA85760D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{F3B2D7BF-9616-4BC3-83A5-5576BF36BEDC}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>0</XPos>
+																						<YPos>0.25</YPos>
+																						<Flags>5</Flags>
+																						<SegmentShape>SCurve</SegmentShape>
+																					</Point>
+																					<Point>
+																						<XPos>1</XPos>
+																						<YPos>0.75</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{DC26897C-5A8A-4BBC-8254-D1E98BF607DD}" ShortID="584306771">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Timbre"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="Movement" ID="{8B8E8DDD-D331-4736-9C06-93D35A3225E3}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{65A7409A-DB23-4F68-9AD2-5630D4F2F9CD}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>0</XPos>
+																						<YPos>0.45</YPos>
+																						<Flags>5</Flags>
+																						<SegmentShape>SCurve</SegmentShape>
+																					</Point>
+																					<Point>
+																						<XPos>1</XPos>
+																						<YPos>0.55</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{ACFB9E75-5B6F-42E0-A532-6ECDE4766867}" ShortID="875954265">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Morph"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="HeadTilt" ID="{640E989A-93A4-4DBD-8C80-B34D8A602F1C}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{473620F7-D5EF-423B-B8B1-E907CF951E12}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>-45</XPos>
+																						<YPos>0.2</YPos>
+																						<Flags>5</Flags>
+																					</Point>
+																					<Point>
+																						<XPos>45</XPos>
+																						<YPos>0.65</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+														</ObjectList>
+													</ObjectLists>
+													<Language>SFX</Language>
+												</SourcePlugin>
+											</ChildrenList>
+											<ObjectLists>
+												<ObjectList Name="Effects">
+													<EffectSlot Name="" ID="{F24794F6-2110-45D5-9F18-B8403DF6F862}" ShortID="320651478">
+														<ReferenceList>
+															<Reference Name="Effect" PluginName="Wwise Guitar Distortion" CompanyID="0" PluginID="126" PluginType="3">
+																<ObjectRef Name="Roots_Drone_Grit" ID="{99A250AF-3048-4FD5-BC39-14C5E5EF7E3E}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+															</Reference>
+														</ReferenceList>
+													</EffectSlot>
+												</ObjectList>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{4B74D2A5-DED7-41B1-8DBC-466F77DF52D0}" ShortID="575032334">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Volume"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Drone_Env" ID="{0FB796DD-92A3-4749-A71C-F6598FEAD6CD}" WorkUnitID="{0CF0EFC1-D71F-4ED7-9631-29961E0CE861}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{957E0F54-C189-4766-AF5D-54867A7E0C8C}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="3"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>0</XPos>
+																				<YPos>-96</YPos>
+																				<Flags>21</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>1</XPos>
+																				<YPos>0</YPos>
+																				<Flags>53</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
+											<ActiveSourceList>
+												<ActiveSource Name="Roots_Drone_Osc" ID="{CE44AAA8-7E43-4A48-9B47-CC31AF630FF7}" Platform="Linked"/>
+											</ActiveSourceList>
+										</Sound>
+										<Sound Name="Roots_Sub" ID="{9096EAE9-0A81-499B-AA83-83434C19DCAD}" ShortID="595674985">
+											<PropertyList>
+												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
+												<Property Name="Lowpass" Type="int16">
+													<ValueList>
+														<Value>60</Value>
+													</ValueList>
+												</Property>
+												<Property Name="UserAuxSendVolume0" Type="Real64">
+													<ValueList>
+														<Value>-12</Value>
+													</ValueList>
+												</Property>
+												<Property Name="Volume" Type="Real64">
+													<ValueList>
+														<Value>-2</Value>
+													</ValueList>
+												</Property>
+											</PropertyList>
+											<ReferenceList>
+												<Reference Name="Conversion">
+													<ObjectRef Name="Default Conversion Settings" ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}" WorkUnitID="{DB8B02E1-803B-4014-9350-4FA69AC3C862}"/>
+												</Reference>
+												<Reference Name="OutputBus">
+													<ObjectRef Name="Roots" ID="{D3557D67-7B30-4654-9CD9-38ED5B1D022A}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+												</Reference>
+												<Reference Name="UserAuxSend0">
+													<ObjectRef Name="Roots_Verb" ID="{D9B23565-D004-48C3-B43D-51A53AFD0CA6}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+												</Reference>
+											</ReferenceList>
+											<ChildrenList>
+												<SourcePlugin Name="Roots_Sub_Osc" ID="{1C35F681-76E1-4ED8-ADF6-0E5B266AC5B9}" ShortID="706547014" PluginName="Macro Oscillator" CompanyID="64" PluginID="31225">
+													<PropertyList>
+														<Property Name="AuxMix" Type="Real32" Value="0.2"/>
+														<Property Name="Decay" Type="Real32" Value="0.95"/>
+														<Property Name="Duration" Type="Real32" Value="60"/>
+														<Property Name="Engine" Type="int32" Value="3"/>
+														<Property Name="Harmonics" Type="Real32" Value="0.4"/>
+														<Property Name="Level" Type="Real32" Value="-6"/>
+														<Property Name="LpgColour" Type="Real32" Value="0.6"/>
+														<Property Name="Morph" Type="Real32" Value="0.35"/>
+														<Property Name="Pitch" Type="Real32" Value="36"/>
+														<Property Name="Timbre" Type="Real32" Value="0"/>
+														<Property Name="Triggered" Type="bool" Value="False"/>
+													</PropertyList>
+													<ObjectLists>
+														<ObjectList Name="RTPC">
+															<RTPC Name="" ID="{D88D8636-CF1F-4A59-95A8-B1F0458EEB0D}" ShortID="472098173">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Pitch"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="Key" ID="{253C0E8A-D65C-414B-A3D9-D4FAEBD5A840}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{FE0FB936-4333-4203-ABE3-6C5F9454086C}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>24</XPos>
+																						<YPos>12</YPos>
+																						<Flags>5</Flags>
+																					</Point>
+																					<Point>
+																						<XPos>36</XPos>
+																						<YPos>12</YPos>
+																						<Flags>0</Flags>
+																					</Point>
+																					<Point>
+																						<XPos>84</XPos>
+																						<YPos>60</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{EAACD07E-8244-4D3C-A57D-A3781FDE1222}" ShortID="1031283336">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Harmonics"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="SceneProgress" ID="{BF250C41-367A-4D76-8E52-6336AA85760D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{5AD3F45D-76F5-4BB3-86B4-B105A814BC1D}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>0</XPos>
+																						<YPos>0.25</YPos>
+																						<Flags>5</Flags>
+																						<SegmentShape>SCurve</SegmentShape>
+																					</Point>
+																					<Point>
+																						<XPos>1</XPos>
+																						<YPos>0.75</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{0DEFF09A-3DB4-48A6-BD3A-40D608669A3A}" ShortID="129136989">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Timbre"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="Movement" ID="{8B8E8DDD-D331-4736-9C06-93D35A3225E3}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{955429F9-BC72-4A81-A5CA-5373AD9B102D}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>0</XPos>
+																						<YPos>0</YPos>
+																						<Flags>5</Flags>
+																						<SegmentShape>SCurve</SegmentShape>
+																					</Point>
+																					<Point>
+																						<XPos>1</XPos>
+																						<YPos>0.12</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+															<RTPC Name="" ID="{EB0D3DB1-5863-4518-AC31-1075F4F92A86}" ShortID="981219366">
+																<PropertyList>
+																	<Property Name="PropertyName" Type="string" Value="Morph"/>
+																</PropertyList>
+																<ReferenceList>
+																	<Reference Name="ControlInput">
+																		<ObjectRef Name="HeadTilt" ID="{640E989A-93A4-4DBD-8C80-B34D8A602F1C}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+																	</Reference>
+																	<Reference Name="Curve">
+																		<Custom>
+																			<Curve Name="" ID="{963F59A4-8A76-4C43-98FC-2B508B198250}">
+																				<PropertyList>
+																					<Property Name="Flags" Type="int32" Value="1"/>
+																				</PropertyList>
+																				<PointList>
+																					<Point>
+																						<XPos>-45</XPos>
+																						<YPos>0.2</YPos>
+																						<Flags>5</Flags>
+																					</Point>
+																					<Point>
+																						<XPos>45</XPos>
+																						<YPos>0.65</YPos>
+																						<Flags>37</Flags>
+																					</Point>
+																				</PointList>
+																			</Curve>
+																		</Custom>
+																	</Reference>
+																</ReferenceList>
+															</RTPC>
+														</ObjectList>
+													</ObjectLists>
+													<Language>SFX</Language>
+												</SourcePlugin>
+											</ChildrenList>
+											<ObjectLists>
+												<ObjectList Name="RTPC">
+													<RTPC Name="" ID="{F4B6D980-F920-4913-8A99-727DBA8E1A25}" ShortID="327636140">
+														<PropertyList>
+															<Property Name="PropertyName" Type="string" Value="Volume"/>
+														</PropertyList>
+														<ReferenceList>
+															<Reference Name="ControlInput">
+																<ObjectRef Name="Drone_Env" ID="{0FB796DD-92A3-4749-A71C-F6598FEAD6CD}" WorkUnitID="{0CF0EFC1-D71F-4ED7-9631-29961E0CE861}"/>
+															</Reference>
+															<Reference Name="Curve">
+																<Custom>
+																	<Curve Name="" ID="{BBC841B7-AFDD-41A3-B157-C4E82B408226}">
+																		<PropertyList>
+																			<Property Name="Flags" Type="int32" Value="3"/>
+																		</PropertyList>
+																		<PointList>
+																			<Point>
+																				<XPos>0</XPos>
+																				<YPos>-96</YPos>
+																				<Flags>21</Flags>
+																			</Point>
+																			<Point>
+																				<XPos>1</XPos>
+																				<YPos>0</YPos>
+																				<Flags>53</Flags>
+																			</Point>
+																		</PointList>
+																	</Curve>
+																</Custom>
+															</Reference>
+														</ReferenceList>
+													</RTPC>
+												</ObjectList>
+											</ObjectLists>
+											<ActiveSourceList>
+												<ActiveSource Name="Roots_Sub_Osc" ID="{1C35F681-76E1-4ED8-ADF6-0E5B266AC5B9}" Platform="Linked"/>
+											</ActiveSourceList>
+										</Sound>
 									</ChildrenList>
 									<BlendTrackList>
 										<BlendTrack Name="Drone" ID="{67D5D1C0-276A-4283-B42B-B31FD83F8DEF}" ShortID="192017826">

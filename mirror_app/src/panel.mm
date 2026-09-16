@@ -3930,6 +3930,30 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "gamma 1 = as-is (pale), 2.2 = sRGB; sat 1 = as-is");
                     if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
                         pf.roots.rebuildFace();
+                    ui::SliderFloat("mask sss wrap", &R.face.sssWrap, 0.0f, 1.5f);
+                    ui::SliderFloat("mask sss transmit", &R.face.sssTrans, 0.0f, 2.0f);
+                    ui::SliderFloat("mask sss power", &R.face.sssPower, 1.0f, 16.0f);
+                    ui::ColorEdit3("mask sss tint", R.face.sssTint);
+                    ImGui::TextDisabled("the mask's own subsurface terms (the roots'\n"
+                                        "are under environment); transmit is also\n"
+                                        "how much of the pluck flash shows through");
+                }
+                ui::EndHeader();
+                ui::PopSection();
+                ui::PushSection("pluck flash");
+                ui::BeginHeader("pluck flash", /*default_open=*/false);
+                {
+                    ImGui::TextDisabled("a point light inside one mask on each pluck\n"
+                                        "marker, orbit only; 0 intensity = off");
+                    ui::SliderFloat("flash intensity", &R.flash.intensity, 0.0f, 60.0f);
+                    ui::ColorEdit3("flash color", R.flash.color);
+                    ui::SliderFloat("flash radius", &R.flash.radius, 0.2f, 12.0f);
+                    ui::SliderFloat("flash decay (s)", &R.flash.decaySeconds, 0.05f, 4.0f);
+                    ui::SliderFloat("flash depth", &R.flash.depth, -1.0f, 2.0f);
+                    ImGui::TextDisabled("x the mask's cavity half-depth, back along\n"
+                                        "its facing; negative is in front of the face");
+                    ui::Checkbox("flash nearest mask", &R.flash.nearest);
+                    if (ImGui::Button("fire flash")) pf.roots.triggerFlash();
                 }
                 ui::EndHeader();
                 ui::PopSection();

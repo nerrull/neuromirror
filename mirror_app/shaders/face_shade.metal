@@ -149,6 +149,23 @@ static float4 shadeFace(float3 P, float3 nIn, float3 albedo, float3 lightPos,
     }
     col += direct;
 
+    // The pluck flash (RootFaceU::flashPos): a point light behind one mask's
+    // face. From the front the mask is back-lit -- what shows is the light
+    // through the skin (the transmission lobe, tinted) and whatever the eye
+    // and mouth holes let straight through; the back and the rim take it
+    // directly.
+    if (any(U.flashColor.xyz > 0.0)) {
+        const float3 toF = U.flashPos.xyz - P;
+        const float d2 = dot(toF, toF);
+        const float3 fl = toF * rsqrt(max(d2, 1e-6));
+        const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+        const float fat = 1.0 / (1.0 + d2 / r2);
+        float3 f = baseColor * max(dot(n, fl), 0.0) / kFacePI;
+        f += baseColor * U.sssTint.xyz
+           * (pow(saturate(dot(v, -fl)), max(U.sssPower, 1.0)) * U.sssTrans);
+        col += U.flashColor.xyz * f * fat;
+    }
+
     const float lumT = dot(col,      float3(0.2126, 0.7152, 0.0722));
     const float lumI = dot(indirect, float3(0.2126, 0.7152, 0.0722));
     return float4(col, saturate(lumI / max(lumT, 1e-5)));

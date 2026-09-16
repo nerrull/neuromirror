@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <random>
 #include <sstream>
@@ -1117,6 +1118,55 @@ void RootScene::uploadFaceFromMasks() {
         }
     }
     rr_->uploadFaceMesh(data);
+}
+
+void RootScene::triggerFlash() {
+    if (!rr_ || faceBlocks_.empty()) return;
+    int pick = -1;
+    if (rr_->flash.nearest) {
+        // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz), the
+        // convention applyFraming and the renderer share.
+        const float ce = std::cos(elevation), se = std::sin(elevation);
+        const float eye[3] = {target[0] + radius * ce * std::sin(azimuth),
+                              target[1] + radius * se,
+                              target[2] + radius * ce * std::cos(azimuth)};
+        float best = 1e30f;
+        for (int i = 0; i < (int)faceBlocks_.size(); ++i) {
+            const auto& m = faceBlocks_[size_t(i)].mask;
+            const float d[3] = {m.pos[0] - eye[0], m.pos[1] - eye[1], m.pos[2] - eye[2]};
+            const float d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            if (d2 < best) { best = d2; pick = i; }
+        }
+    } else {
+        pick = int(std::rand() % faceBlocks_.size());
+    }
+    flashStructure_ = faceBlocks_[size_t(pick)].structure;
+    flashSlot_      = faceBlocks_[size_t(pick)].slot;
+    flashLevel_     = 1.f;
+}
+
+// The flash's envelope and position, once a frame. The position is looked
+// up by (structure, slot) rather than kept from the trigger, so a rebuilt
+// face mesh (a re-placed structure, a rebuildFace) moves the light with it.
+void RootScene::stepFlash(double dt) {
+    if (!rr_) return;
+    if (flashLevel_ > 0.f && dt > 0.0)
+        flashLevel_ *= std::exp(-(float)dt / std::max(rr_->flash.decaySeconds, 1e-3f));
+    if (flashLevel_ < 1e-3f) { flashLevel_ = 0.f; flashStructure_ = -2; }
+    rr_->flash.level = flashLevel_;
+    if (flashLevel_ <= 0.f) return;
+    for (const auto& fb : faceBlocks_) {
+        if (fb.structure != flashStructure_ || fb.slot != flashSlot_) continue;
+        // Inside the head: back from the mask's centre along its facing, a
+        // fraction of its cavity half-depth (the same depth the face plane
+        // is recessed by, in faceRecess terms).
+        const float back = fb.mask.rDepth * rr_->flash.depth;
+        for (int c = 0; c < 3; ++c)
+            rr_->flash.pos[c] = fb.mask.pos[c] - fb.mask.normal[c] * back;
+        return;
+    }
+    flashLevel_ = 0.f;   // its mask is gone
+    rr_->flash.level = 0.f;
 }
 
 // See root_scene.h's debugSpawnMarkers. Every planned mask gets a mouth
@@ -2396,6 +2446,7 @@ void RootScene::advance(double dt) {
     // After the framing, deliberately: CameraTarget focus and CameraRelative
     // aiming both read the camera, so this has to be the thing that runs last.
     updateLighting();
+    stepFlash(dt);
 
     // The sheet is solved and packed *after* the framing, not before it.
     //

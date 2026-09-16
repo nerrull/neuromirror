@@ -882,6 +882,13 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     gu.keyColor = (simd_float4){env.keyColor[0] * env.keyIntensity,
                                 env.keyColor[1] * env.keyIntensity,
                                 env.keyColor[2] * env.keyIntensity, 0};
+    {
+        const float k = std::max(0.f, flash.level) * flash.intensity;
+        gu.flashPos   = (simd_float4){flash.pos[0], flash.pos[1], flash.pos[2],
+                                      std::max(flash.radius, 0.01f)};
+        gu.flashColor = (simd_float4){flash.color[0] * k, flash.color[1] * k,
+                                      flash.color[2] * k, 0};
+    }
     gu.radiusScale = radiusScale; gu.radiusMin = radiusMin; gu.radiusMax = radiusMax;
     gu.ambient = mat.ambient; gu.diffuse = mat.diffuse; gu.shininess = mat.shininess;
     gu.colorNoiseScale = mat.colorNoiseScale; gu.colorNoiseStrength = mat.colorNoiseStrength;
@@ -1048,13 +1055,15 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         }
         ffu.skyColor = gu.skyColor;
         ffu.groundColor = gu.groundColor;
-        ffu.sssTint = gu.sssTint;
+        ffu.sssTint = (simd_float4){face.sssTint[0], face.sssTint[1], face.sssTint[2], 0};
         ffu.hemiStrength = env.hemiStrength;
         ffu.envSpec = env.envSpec;
         ffu.rimStrength = env.rimStrength;
-        ffu.sssWrap = env.sssWrap;
-        ffu.sssTrans = env.sssTrans;
-        ffu.sssPower = env.sssPower;
+        ffu.sssWrap = face.sssWrap;
+        ffu.sssTrans = face.sssTrans;
+        ffu.sssPower = face.sssPower;
+        ffu.flashPos = gu.flashPos;
+        ffu.flashColor = gu.flashColor;
         [ge setRenderPipelineState:facePipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];
@@ -1173,6 +1182,8 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     fu.fogNoiseLod = std::max(0.f, std::min(fog.noiseLod, 6.f));
     fu.lightDir = gu.lightDir;
     fu.keyColor = gu.keyColor;
+    fu.flashPos = gu.flashPos;
+    fu.flashColor = gu.flashColor;
     // Two advection vectors that are deliberately not parallel and not
     // commensurate in speed: with one, or with two that differ only in
     // magnitude, the field still resolves into a single sliding direction.

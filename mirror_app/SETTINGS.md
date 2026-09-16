@@ -315,7 +315,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
-## roots (202 parameters)
+## roots (219 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -376,6 +376,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/face masks/face scale` | float | 0.3 .. 1.5 | 1.351 |
 | `roots/face masks/face spec` | float | 0 .. 3 | 1.2 |
 | `roots/face masks/mask roughness` | float | 0.04 .. 1 | 0.55 |
+| `roots/face masks/mask sss power` | float | 1 .. 16 | 5 |
+| `roots/face masks/mask sss tint` | rgb | -- | 0.9 0.45 0.22 |
+| `roots/face masks/mask sss transmit` | float | 0 .. 2 | 0.35 |
+| `roots/face masks/mask sss wrap` | float | 0 .. 1.5 | 0.55 |
 | `roots/face masks/albedo gamma` | float | 1 .. 3 | 2.2 |
 | `roots/face masks/albedo saturation` | float | 0 .. 3 | 1 |
 | `roots/face masks/show faces` | bool | -- | 1 |
@@ -504,6 +508,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/overlays/axes` | bool | -- | 0 |
 | `roots/overlays/grid` | bool | -- | 0 |
 | `roots/overlays/grid spacing` | float | 1 .. 20 | 5 |
+| `roots/pluck flash/flash color` | rgb | -- | 1 0.93 0.8 |
+| `roots/pluck flash/flash decay (s)` | float | 0.05 .. 4 | 0.7 |
+| `roots/pluck flash/flash depth` | float | -1 .. 2 | 0.6 |
+| `roots/pluck flash/flash intensity` | float | 0 .. 60 | 12 |
+| `roots/pluck flash/flash nearest mask` | bool | -- | 0 |
+| `roots/pluck flash/flash radius` | float | 0.2 .. 12 | 3 |
 | `roots/post/DoF focus (0-auto)` | float | 0 .. 120 | 0 |
 | `roots/post/DoF range` | float | 5 .. 150 | 55 |
 | `roots/post/DoF strength` | float | 0 .. 1 | 0.5 |

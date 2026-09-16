@@ -271,6 +271,10 @@ if(_ak_have_all)
         ${_ak_lib}/libAkPeakLimiterFX.a
         ${_ak_lib}/libAkParametricEQFX.a
         ${_ak_lib}/libAkFlangerFX.a
+        # Roots drone: Guitar Distortion on the two drone voices, Compressor
+        # on the Roots bus.
+        ${_ak_lib}/libAkGuitarDistortionFX.a
+        ${_ak_lib}/libAkCompressorFX.a
         ${_ak_lib}/libAkMemoryMgr.a
         ${_ak_lib}/libAkStreamMgr.a
         ${_ak_lib}/libAkSoundEngine.a

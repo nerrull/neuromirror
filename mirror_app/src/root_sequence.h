@@ -536,6 +536,9 @@ public:
             stepGrowth(roots, fdt);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
+            // The pluck flash, on the same marker the Reveal fires on --
+            // Orbit only; the Outro is the mosh's, not a light show's.
+            if (in.markerHit && stage_ == Stage::Orbit) roots.triggerFlash();
             if (P.hood_enabled) {
                 stepLighting(roots, P, in, clock);
                 easeAngle(curEl_, wantEl, kEase);

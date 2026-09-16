@@ -144,6 +144,59 @@
 						</ObjectList>
 					</ObjectLists>
 				</Effect>
+				<Effect Name="Roots_Glue" ID="{9D26587C-A284-469E-9653-73D8A8B7851D}" PluginName="Wwise Compressor" CompanyID="0" PluginID="108" PluginType="3">
+					<PropertyList>
+						<Property Name="AttackTime" Type="Real32" Value="0.06"/>
+						<Property Name="OutputGain" Type="Real32" Value="2"/>
+						<Property Name="Ratio" Type="Real32" Value="3"/>
+						<Property Name="ReleaseTime" Type="Real32" Value="0.4"/>
+						<Property Name="Threshold" Type="Real32" Value="-18"/>
+					</PropertyList>
+				</Effect>
+				<Effect Name="Roots_Drone_Grit" ID="{99A250AF-3048-4FD5-BC39-14C5E5EF7E3E}" PluginName="Wwise Guitar Distortion" CompanyID="0" PluginID="126" PluginType="3">
+					<PropertyList>
+						<Property Name="DistortionDrive" Type="Real32" Value="15"/>
+						<Property Name="DistortionTone" Type="Real32" Value="30"/>
+						<Property Name="OutputLevel" Type="Real32" Value="-4"/>
+						<Property Name="WetDryMix" Type="Real32" Value="65"/>
+					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{5DE6DBEE-5A71-44DA-8EEA-9BE535556D4A}" ShortID="841406675">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="DistortionDrive"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Movement" ID="{8B8E8DDD-D331-4736-9C06-93D35A3225E3}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{E21589AD-E10A-4559-92E4-678941E0CA21}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>12</YPos>
+														<Flags>5</Flags>
+														<SegmentShape>SCurve</SegmentShape>
+													</Point>
+													<Point>
+														<XPos>1</XPos>
+														<YPos>26</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
+				</Effect>
 			</ChildrenList>
 		</WorkUnit>
 	</Effects>

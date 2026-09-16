@@ -142,10 +142,14 @@ int rootshot(const char* path, float az, float el, float rad, int mode, bool ove
         roots.renderer().overlay.showAxes = true;
         roots.renderer().overlay.showGrid = true;
     }
+    // ROOTSHOT_FLASH=1: fire the pluck flash (RootScene::triggerFlash) on the
+    // last frame, to see it without a Wwise marker.
+    const bool flash = getenv("ROOTSHOT_FLASH") && atoi(getenv("ROOTSHOT_FLASH")) != 0;
     id<MTLTexture> tex = nil;
     for (int i = 0; i < 3; ++i) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+            if (flash && i == 2) roots.triggerFlash();
             roots.advance(1.0 / 60.0);
             tex = roots.render(cb);
             [cb commit];

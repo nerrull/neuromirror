@@ -96,6 +96,12 @@ struct RootGeomU {
     float   _padD1;
     float   _padD2;
     RS_F4   keyColor;        // xyz, directional key colour x intensity
+    // The pluck flash (MetalRootRenderer::Flash): a bare point light inside
+    // one mask, fired on a pluck marker during the Orbit. xyz = position,
+    // w = the radius its inverse-square falloff is normalised to; colour is
+    // colour x intensity, and all-zero means no flash this frame.
+    RS_F4   flashPos;
+    RS_F4   flashColor;
     RS_F4   palette[ROOT_MAX_GROUPS];
     RS_F4   paletteTip[ROOT_MAX_GROUPS];
 };
@@ -164,6 +170,12 @@ struct RootFaceU {
     float   albedoSat;
     RS_F4   lightColor;   // xyz, the mask's own spotlight's colour (x lightIntensity)
     RS_F4   keyColor;     // xyz, the directional key's colour x intensity
+    // The pluck flash (MetalRootRenderer::Flash): a bare point light inside
+    // one mask, fired on a pluck marker during the Orbit. xyz = position,
+    // w = the radius its inverse-square falloff is normalised to; colour is
+    // colour x intensity, and all-zero means no flash this frame.
+    RS_F4   flashPos;
+    RS_F4   flashColor;
 };
 
 // Cloth mid-geometry pass (root_cloth.metal): the pond -> face draped sheet,
@@ -247,6 +259,12 @@ struct RootFogU {
     float   _padF1;
     RS_F4   lightDir;     // xyz, the key's direction (surface -> light)
     RS_F4   keyColor;     // xyz, key colour x intensity
+    // The pluck flash (MetalRootRenderer::Flash): a bare point light inside
+    // one mask, fired on a pluck marker during the Orbit. xyz = position,
+    // w = the radius its inverse-square falloff is normalised to; colour is
+    // colour x intensity, and all-zero means no flash this frame.
+    RS_F4   flashPos;
+    RS_F4   flashColor;
 };
 
 // Screen-space ambient occlusion (root_ao.metal), run on the geometry pass's

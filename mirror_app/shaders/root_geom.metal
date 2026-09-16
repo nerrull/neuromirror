@@ -617,6 +617,22 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
     color    *= litScale * coverage;
     indirect *= litScale * coverage;
 
+    // The pluck flash (RootGeomU::flashPos): a point light inside one mask.
+    // Added after the lit scale on purpose -- it is a light in the room, not
+    // part of a structure's own reveal, so it lands on dark roots as hard as
+    // on lit ones; that is what makes it read as a flash.
+    if (any(U.flashColor.xyz > 0.0)) {
+        const float3 toL = U.flashPos.xyz - p;
+        const float d2 = dot(toL, toL);
+        const float3 L = toL * rsqrt(max(d2, 1e-6));
+        const float r2 = max(U.flashPos.w * U.flashPos.w, 1e-4);
+        const float atten = 1.0 / (1.0 + d2 / r2);
+        const float3 h = normalize(L + V);
+        const float spec = pow(max(dot(n, h), 0.0), U.shininess) * 0.5;
+        color += U.flashColor.xyz * atten * coverage
+               * (albedo * max(dot(n, L), 0.0) + U.specColor.xyz * spec);
+    }
+
     // Alpha carries the fraction of this pixel's radiance that came from the
     // environment rather than from a light. The fog pass multiplies exactly
     // that share by the screen-space AO, so occlusion darkens the sky term and

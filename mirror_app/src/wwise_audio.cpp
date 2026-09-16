@@ -63,6 +63,8 @@ void WwiseAudio::stopCapture() {}
 #include <AK/Plugin/AkPeakLimiterFXFactory.h>
 #include <AK/Plugin/AkParametricEQFXFactory.h>
 #include <AK/Plugin/AkFlangerFXFactory.h>
+#include <AK/Plugin/AkGuitarDistortionFXFactory.h>
+#include <AK/Plugin/AkCompressorFXFactory.h>
 #include "MacroOscillatorSourceFactory.h"
 #include "DrumSynthSourceFactory.h"
 #include "ModalVoiceFXFactory.h"
