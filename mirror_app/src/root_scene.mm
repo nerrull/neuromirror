@@ -550,11 +550,18 @@ int RootScene::growthStepEstimate() const {
     int simSteps = 0;
     rootsim::SimParams probe = simParams_;
     probe.paramDir = ROOTSIM_PARAM_DIR;
+    // Probed at a coarse step and scaled: the run's length in sim *days* is
+    // what the parameters fix (a hop ends on arrival plus the dwell, both in
+    // days), so the step count is days / growthDt, and the fine step the
+    // live grow uses for smoothness (see `days / step`) would only make this
+    // throwaway grow that much slower for the same answer.
+    const float liveDt = std::max(0.02f, simParams_.growthDt);
+    probe.growthDt = std::max(liveDt, 1.f);
     rootsim::RootSim sim;
     if (sim.reset(probe))
         while (!sim.done() && simSteps < 200000) { sim.step(); ++simSteps; }
-    growthStepEstimate_ = simSteps;
-    return simSteps;
+    growthStepEstimate_ = int(std::lround(double(simSteps) * probe.growthDt / liveDt));
+    return growthStepEstimate_;
 }
 
 bool RootScene::simDone() const { return sim_ && sim_->done(); }
@@ -921,7 +928,19 @@ void RootScene::setStructureMaskLit(int k, int j, bool lit) {
     if (j < 0 || j >= (int)np.maskLit.size()) return;
     if ((np.maskLit[size_t(j)] != 0) == lit) return;
     np.maskLit[size_t(j)] = lit ? 1 : 0;
-    rebuildFace();
+    // The Reveal lights masks one at a time for the rest of the phase, and
+    // a full rebuildFace() per mask was a dropped frame each (see
+    // FaceBlock's comment). The lit flag is part of the mask's own run, so
+    // re-emit just that run, through the same patch path a replayed face
+    // takes: flip the recorded flag and mark its bank face dirty. Only a
+    // mask wearing no bank face (test identities) still needs the rebuild.
+    bool patched = false;
+    for (FaceBlock& fb : faceBlocks_) {
+        if (fb.structure != k || fb.slot != j) continue;
+        fb.lit = lit ? 1.f : 0.f;
+        if (fb.bankIdx >= 0) { fb.relit = true; patched = true; }
+    }
+    if (!patched) rebuildFace();
 }
 
 bool RootScene::growthTip(float out[3]) const {
@@ -949,13 +968,17 @@ void RootScene::uploadFaceFromMasks() {
     if (!rr_ || !sim_) return;
     faceBlocks_.clear();
     std::fill(bankFaceDirty_.begin(), bankFaceDirty_.end(), 0);
+    liveFaceDirty_ = false;
     if (!showFace || faceVerts_.empty() || faceTris_.empty()) { rr_->uploadFaceMesh({}); return; }
     const float maskColor[3] = {0.86f, 0.83f, 0.78f};
     std::vector<float> data;
     // One record per emitted mask, for patchBankFaces().
-    auto record = [&](int bankIdx, const Mask& m, float lit, size_t offset) {
+    auto record = [&](int structure, int slot, const Mask& m, float lit, size_t offset) {
         FaceBlock fb;
-        fb.bankIdx = bankIdx;
+        fb.bankIdx = bankIndexFor(structure, slot);
+        fb.structure = structure;
+        fb.slot = slot;
+        fb.relit = false;
         for (int c = 0; c < 3; ++c) {
             fb.mask.pos[c] = (&m.pos.x)[c];
             fb.mask.normal[c] = (&m.normal.x)[c];
@@ -995,7 +1018,7 @@ void RootScene::uploadFaceFromMasks() {
         const size_t off = data.size();
         appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                              maskColor, *face.colors, rr_->face.smoothNormals);
-        record(bankIndexFor(-1, mi), m, 1.f, off);
+        record(-1, mi, m, 1.f, off);
     }
 
     // Each placed structure's own masks -- its variation's planned layout,
@@ -1041,7 +1064,7 @@ void RootScene::uploadFaceFromMasks() {
             appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                                  maskColor, *face.colors, rr_->face.smoothNormals,
                                  litMask ? 1.f : 0.f);
-            record(bankIndexFor(k, ni), m, litMask ? 1.f : 0.f, off);
+            record(k, ni, m, litMask ? 1.f : 0.f, off);
         }
     }
     rr_->uploadFaceMesh(data);
@@ -1765,11 +1788,22 @@ void RootScene::patchBankFaces() {
     if (!rr_ || faceBlocks_.empty()) return;
     const float maskColor[3] = {0.86f, 0.83f, 0.78f};
     std::vector<float> data;
-    for (const FaceBlock& fb : faceBlocks_) {
-        if (fb.bankIdx < 0 || fb.bankIdx >= (int)bankFaceDirty_.size() ||
-            !bankFaceDirty_[size_t(fb.bankIdx)])
-            continue;
-        const BankFace& b = bankFaces_[size_t(fb.bankIdx)];
+    for (FaceBlock& fb : faceBlocks_) {
+        // A moved face reaches every mask wearing it -- except a hood's seed
+        // mask, which holds still (drawnBankFaces) even when the same
+        // capture is replaying further down; that one is re-emitted only
+        // to light. bankIdx -1 is the live face (mask 0, and any mask the
+        // bank ran out for -- see faceFor), moved by setFittedFace.
+        const bool live  = fb.bankIdx < 0;
+        if (!live && fb.bankIdx >= (int)bankFaceDirty_.size()) continue;
+        const bool seed  = fb.structure >= 0 && fb.slot == 0;
+        const bool moved = (live ? liveFaceDirty_ : bankFaceDirty_[size_t(fb.bankIdx)] != 0) && !seed;
+        if (!moved && !fb.relit) continue;
+        fb.relit = false;
+        const FaceRef face = live ? FaceRef{&faceVerts_, &faceTris_, &faceColors_}
+                                  : FaceRef{&bankFaces_[size_t(fb.bankIdx)].verts,
+                                            &bankFaces_[size_t(fb.bankIdx)].tris,
+                                            &bankFaces_[size_t(fb.bankIdx)].colors};
         Mask m;
         m.pos = {fb.mask.pos[0], fb.mask.pos[1], fb.mask.pos[2]};
         m.normal = {fb.mask.normal[0], fb.mask.normal[1], fb.mask.normal[2]};
@@ -1778,11 +1812,12 @@ void RootScene::patchBankFaces() {
         m.rDepth = fb.mask.rDepth; m.rWidth = fb.mask.rWidth; m.rHeight = fb.mask.rHeight;
         m.faceUnit = fb.mask.faceUnit;
         data.clear();
-        appendFaceVertexData(data, m, b.verts, b.tris, faceScale, faceRecess, 3.0f,
-                             maskColor, b.colors, rr_->face.smoothNormals, fb.lit);
+        appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
+                             maskColor, *face.colors, rr_->face.smoothNormals, fb.lit);
         if (data.size() == fb.count) rr_->patchFaceMesh(fb.offset, data);
     }
     std::fill(bankFaceDirty_.begin(), bankFaceDirty_.end(), 0);
+    liveFaceDirty_ = false;
 }
 
 void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
@@ -1875,12 +1910,14 @@ void RootScene::drawnBankFaces(std::vector<char>& out) const {
     for (int i = 1; i < planned && i < (int)chainFaces_.size(); ++i)
         if (maskVisible(i)) mark(chainFaces_[size_t(i)]);
     // The hood: a visible structure's lit masks (the dark ones show nothing
-    // of the face; they take the update when they light).
+    // of the face; they take the update when they light). Not its seed mask
+    // (slot 0, the face its roots grow out of): that one holds still, like
+    // a thing the roots have already taken -- only the chain below it moves.
     for (size_t k = 0; k < neighbours.size() && k < structureFaces_.size(); ++k) {
         const NeighbourPlacement& pl = neighbours[k];
         if (!pl.visible) continue;
         const auto& idxs = structureFaces_[k].captureIdx;
-        for (size_t j = 0; j < idxs.size(); ++j) {
+        for (size_t j = 1; j < idxs.size(); ++j) {
             const bool litMask = j < pl.maskLit.size() ? pl.maskLit[j] != 0 : pl.lit;
             if (litMask) mark(idxs[j]);
         }
@@ -2014,6 +2051,17 @@ void RootScene::setFittedFace(const std::vector<float>& verts,
         faceVerts_[i * 3 + 2] = (verts[i * 3 + 2] - fit_centre_[2]) * fit_scale_;
     }
     fitted_face_ = true;
+    // Per frame from Grow on (the sitting's own replay on mask 0), and by
+    // then the hood may be standing: a full rebuild for every frame of it
+    // was the frame. Same mesh topology, same masks -- the live face's own
+    // runs are patched in place instead (patchBankFaces), the way a
+    // replayed bank face is. A new topology, or no runs recorded yet, still
+    // needs the rebuild.
+    if (useSim_ && tris.empty() && !faceBlocks_.empty()) {
+        measureClothFaceDepth();
+        liveFaceDirty_ = true;
+        return;
+    }
     rebuildFace();
 }
 
@@ -2268,8 +2316,13 @@ void RootScene::advance(double dt) {
     // (which moves the anchor without growing anything) never updates.
     // Rebuilt every frame rather than once: it is a handful of masks, and the
     // alternative is a one-shot flag that has to know about every reason a
-    // mask might move.
-    if (useSim_ && sim_ && (simPaused || clothActive_))
+    // mask might move. Only while the plant is still growing, though: once
+    // it is done nothing moves a mask but the setters (which rebuild
+    // themselves), and the hood standing by then makes this the whole
+    // frame -- and whether `simPaused` was left true past Grow's end was a
+    // coin toss (stepGrowth's last frame), so the Reveal ran at half rate
+    // on some sittings and not others.
+    if (useSim_ && sim_ && ((simPaused && !sim_->done()) || clothActive_))
         uploadFaceFromMasks();
     // ...and where nothing above re-emitted the mesh, the replayed bank faces
     // that moved this frame (setBankFaceVerts) are patched into place alone.

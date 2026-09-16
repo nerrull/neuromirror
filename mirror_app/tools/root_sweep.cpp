@@ -183,6 +183,15 @@ void probe(const SimParams& p, int steps) {
         near = std::min(near, d); far = std::max(far, d);
     }
     if (n) printf("node distance from mask0: nearest %.2f, furthest %.2f\n", near, far);
+    // The first segment's heading against mask 0's normal (out through the
+    // mouth): 1 is dead along it.
+    if (n >= 2) {
+        float d[3], l = 0.f;
+        for (int k = 0; k < 3; ++k) { d[k] = nodes[3 + k] - nodes[k]; l += d[k] * d[k]; }
+        l = std::sqrt(l);
+        const float dot = l > 0.f ? (d[0] * m0.normal[0] + d[1] * m0.normal[1] + d[2] * m0.normal[2]) / l : 0.f;
+        printf("first segment . mask0 normal = %.3f (start %.2f %.2f %.2f)\n", dot, nodes[0], nodes[1], nodes[2]);
+    }
     for (int i = 0; i < std::min(n, 6); ++i)
         printf("  node %d (%.2f %.2f %.2f)\n", i,
                nodes[(size_t)i * 3], nodes[(size_t)i * 3 + 1], nodes[(size_t)i * 3 + 2]);

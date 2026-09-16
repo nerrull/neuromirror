@@ -90,6 +90,12 @@
 // whole feed ever could, and a face is where the detail has to go.
 
 // 0..1 through the ramp; 1 when it is done or not running.
+// The colour's own ease (see the "colour follows the fit" block in the
+// render loop): where it started, where it is going, and when it began;
+// t0 < 0 is "not easing". Reset wherever g_colour_now is.
+static double g_colour_ease_t0 = -1.0;
+static float  g_colour_ease_a = 0.f, g_colour_ease_b = 0.f;
+
 float W0RampT(double now) {
     if (g_w0_t0 < 0.0) return 1.f;
     if (g_w0_ramp_secs <= 0.f) return 1.f;
@@ -286,7 +292,9 @@ static bool SourceAdvance() {
 //   stabilised  Fit the subject where it is, but shift the network's *input*
 //               coordinates by the head's displacement. The subject stays put
 //               in the network's own frame while staying put on screen too --
-//               the picture of "track" with the weights of "centred".
+//               the picture of "track" with the weights of "centred". The
+//               shift is a latch (UpdateInputShift below), with its own gain
+//               per phase and a size multiplier of its own.
 //
 // The cost sits in different places: centred resamples the image once a frame,
 // stabilised rebuilds the fit features once a frame, track does neither.
@@ -309,9 +317,10 @@ static void UpdateHeadBox() {
     g_head_hy += a * (hy - g_head_hy);
 }
 
-// Defined below, next to the placement it describes: the mask and the region
-// both need it, and both are built before it.
+// Defined below, next to the placement they describe: the mask, the region
+// and the input shift all need them, and all are built before them.
 static void PinTransform(float& scale, float& u, float& v);
+static bool HeadPlacement(float& s, float& dcx, float& dcy);
 
 // --- the show's two derived signals -----------------------------------------
 //
@@ -430,7 +439,40 @@ static bool g_mask_held = false;
 // holds the last mask and region as they are, and g_mask_held tells the
 // training path to sit out until the face is back. Idle's clearFit() (or the
 // panel's) ends the hold, because there is no longer a fit to protect.
+// The input shift, for the stabilised mode: a latch, not a position. Each
+// frame the field moves by the head's displacement since the last one, scaled
+// by the gain for the phase (a fraction in Idle, so a passer-by nudges the
+// field rather than dragging it; full during the fit, where a face has to
+// land at the same network input wherever the person stands -- and only the
+// displacement matters for that, not where the shift started). A lost face
+// holds the shift where it is; a new one picks up from there. Snapping back
+// to zero on every loss was a visible jump in Idle, with nothing to justify
+// it. It is zeroed once per cycle, at the Idle entry (see the phase switch).
+static float g_shift_x = 0.f, g_shift_y = 0.f;
+static void UpdateInputShift(float asp, bool fit_live) {
+    static bool  prev_valid = false;
+    static float prev_cx = 0.5f, prev_cy = 0.5f;
+    if (g_head_mode != (int)HeadMode::Stabilised || !HaveCrop()) {
+        prev_valid = false;
+        return;
+    }
+    // Where the face lands on screen -- the same centre the placement uses,
+    // so a subject clamped at the frame's edge stops moving the field too.
+    float s = 1.f, cx = 0.5f, cy = 0.5f;
+    if (!HeadPlacement(s, cx, cy)) { cx = g_head_cx; cy = g_head_cy; }
+    if (prev_valid) {
+        const bool idle = g_show_on ? (g_show.phase() == show::Phase::Idle) : !fit_live;
+        const float gain = idle ? g_shift_gain_idle : g_shift_gain_fit;
+        // Coord space spans (-asp, asp) x (-1, 1) over the frame, so a
+        // normalised displacement doubles going in.
+        g_shift_x += (cx - prev_cx) * 2.f * asp * gain;
+        g_shift_y += (cy - prev_cy) * 2.f * gain;
+    }
+    prev_cx = cx; prev_cy = cy; prev_valid = true;
+}
+
 static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh, bool fit_live) {
+    UpdateInputShift(fw > 0 && fh > 0 ? float(fw) / float(fh) : 1.f, fit_live);
     if (fit_live && g_have_mask && !HaveCrop() && fw > 0 && fh > 0 &&
         g_fit_mask.size() == size_t(fw) * fh) {
         g_mask_held = true;
@@ -438,6 +480,10 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh, bool fit_live) 
     }
     g_mask_held = false;
     P.coord_off_x = P.coord_off_y = 0.f;
+    if (g_head_mode == (int)HeadMode::Stabilised) {
+        P.coord_off_x = g_shift_x;
+        P.coord_off_y = g_shift_y;
+    }
     P.region.on = false;
     P.region.use_field = false;
     P.z_free_outside = g_z_free;
@@ -447,12 +493,6 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh, bool fit_live) 
     if (!HaveCrop() || fw <= 0 || fh <= 0) return;
 
     const float asp = float(fw) / float(fh);
-    if (g_head_mode == (int)HeadMode::Stabilised) {
-        // Coord space spans (-asp, asp) x (-1, 1) over the frame, so a
-        // normalised displacement doubles going in.
-        P.coord_off_x = (g_head_cx - 0.5f) * 2.f * asp;
-        P.coord_off_y = (g_head_cy - 0.5f) * 2.f;
-    }
 
     // Built here rather than at the point of use so the render's soft edge and
     // the training mask are the same shape by construction -- the edge is
@@ -510,15 +550,18 @@ static bool HeadPlacement(float& s, float& dcx, float& dcy) {
     dcx = dcy = 0.5f;
     if (!HaveCrop()) return false;
     const bool centred = (g_head_mode == (int)HeadMode::Centred);
-    // Not in the input-shift mode: that one moves the network's coordinates and
-    // the render undoes it again, so resampling the pixels underneath would be
-    // two placements arguing.
-    const bool resize = g_face_size_on &&
-                        g_head_mode != (int)HeadMode::Stabilised;
+    // The input-shift mode does not take the distance-driven size: the size
+    // following the person's distance is what makes it read as a mirror. It
+    // takes a plain multiple of the camera's size instead, so that mirror can
+    // be made a little larger or smaller than life.
+    const bool stabilised = (g_head_mode == (int)HeadMode::Stabilised);
+    const bool resize = stabilised ? std::fabs(g_stab_size_mul - 1.f) > 1e-3f
+                                   : g_face_size_on;
     if (!centred && !resize) return false;
 
     if (resize)
-        s = std::min(6.f, std::max(0.1f, FaceSizeTarget() / std::max(g_head_hy, 1e-3f)));
+        s = stabilised ? std::min(6.f, std::max(0.1f, g_stab_size_mul))
+                       : std::min(6.f, std::max(0.1f, FaceSizeTarget() / std::max(g_head_hy, 1e-3f)));
 
     if (!centred) {
         // Stay where they are -- but a scaled crop can run off the edge, and a
@@ -1604,6 +1647,11 @@ int main(int argc, char** argv) {
                 e.cap.film.clear();
                 e.cap.film.shrink_to_fit();
                 e.cap.filmW = e.cap.filmH = 0;
+                // A capture saved before the basis punched its eye and mouth
+                // holes carries the closed skin; same vertices, so the
+                // basis's own triangles apply.
+                if (g_fitter.valid() && e.cap.verts.size() == g_fitter.basis().neutral().size())
+                    e.cap.tris = g_fitter.basis().triangles();
                 // Square of its sitter's head pose (see autoCaptureAtCut):
                 // captures from before that was saved out carry 10-40
                 // degrees of it, and a face that tilted on its mask read as
@@ -2244,6 +2292,11 @@ int main(int argc, char** argv) {
                             // Forget the last person. Without this the next one
                             // walks into a converged fit of somebody else's
                             // face and the fitting phase ends instantly.
+                            // The input shift too: the latch holds across
+                            // lost faces within a cycle, but a new cycle
+                            // starts the field from zero (the mirror is not
+                            // on screen at this cut, so nothing jumps).
+                            g_shift_x = g_shift_y = 0.f;
                             g_collect_id = false;
                             g_id_residual = -1.f;
                             if (g_fitter.valid()) g_fitter.clearIdentity();
@@ -2282,6 +2335,7 @@ int main(int argc, char** argv) {
                             g_colour_idle = -1.f;
                             g_colour_from = 0.f;
                             g_colour_now = 0.f;
+                            g_colour_ease_t0 = -1.0;
                             // The harmony gets its resolution here too, not
                             // just on a converged fit: a visitor who walks off
                             // mid-fit still gets a chord that closes rather
@@ -2344,6 +2398,7 @@ int main(int argc, char** argv) {
                             g_colour_idle = -1.f;
                             g_colour_from = 0.f;
                             g_colour_now = 0.f;
+                            g_colour_ease_t0 = -1.0;
                             // The harmony forgets the last sitting here, not
                             // on the way into Idle: resolve() (see the Idle
                             // case above) needs to survive at least until
@@ -2412,6 +2467,7 @@ int main(int argc, char** argv) {
                                 g_colour_idle = mirror.params().color_mix;
                                 g_colour_from = mirror.params().color_mix;
                                 g_colour_now  = mirror.params().color_mix;
+                                g_colour_ease_t0 = -1.0;
                             }
                             break;
                         case show::Phase::Transition:
@@ -2505,10 +2561,16 @@ int main(int argc, char** argv) {
                             // the handler below must run its own begin().
                             rootFaceSeqBegunForSitting = false;
                             plantSavedForSitting = false;
+                            // A jump here is a new sitting, whoever is at the
+                            // sensor: the last one's capture id must not
+                            // carry over, or the handler below finds
+                            // pendingFaceTrack still keyed to it and replays
+                            // the *previous* visitor's recording on mask 0
+                            // instead of tracking this one.
+                            thisSittingCaptureId.clear();
                             // The bank on the other masks, as at Transition
-                            // entry; minus this sitting's capture if the
-                            // jump came *back* to Roots after one was saved.
-                            dealBankFaces(thisSittingCaptureId);
+                            // entry; nothing excluded (see above).
+                            dealBankFaces(std::string());
                             rootSeq.begin(roots, g_root_seq);
                         } else {
                             // The cut proper, arrived at through Transition:
@@ -2533,9 +2595,9 @@ int main(int argc, char** argv) {
                     // *previous* visitor's (a recording ends when its visitor
                     // has left, which is after their Roots); playing it here
                     // put the last visitor's identity on this one's mask from
-                    // the first frame of Roots. It is not cleared, so
-                    // re-entering Roots for the same sitting (toggling the
-                    // phase by hand) still replays that sitting.
+                    // the first frame of Roots. The navigator's jump clears
+                    // thisSittingCaptureId (above), so that path never
+                    // matches -- mask 0 stays the live tracker's.
                     //
                     // The usual forward path already fed rootFaceSeq this
                     // sitting's own track the instant it finished, at the
@@ -2715,6 +2777,8 @@ int main(int argc, char** argv) {
                                   (float)dt);
                 const mirror::PresenceSignals& ps = g_presence.signals();
 
+                if (mirror.valid()) mirror.params().movement = ps.movement;
+
                 mirror::AudioParams ap;
                 ap.proximity = ps.proximity;
                 ap.movement  = ps.movement;
@@ -2754,19 +2818,21 @@ int main(int argc, char** argv) {
                 // place that decides what the fit score is this frame, not two.
                 g_fit_level_now = ap.fit_level;
                 ap.scene_progress = g_show.phaseProgress();
-                ap.key = g_audio_key;
                 ap.intensity = g_audio_on ? g_audio_intensity : 0.f;
                 ap.transpose = g_audio_transpose;
 
                 // The harmony, from the fit level that was just computed above
                 // and the same movement signal the room produced. The pad's own
                 // voicing now lives entirely in Wwise's `ChordStage` state (see
-                // chord.h); what crosses here is just the checkpoint gate and
-                // the pluck's comb tuning, which comes out of the same root so
-                // the two elements cannot drift out of tune with each other.
-                g_chord.config().root = g_audio_key;
+                // chord.h); what crosses here is the checkpoint gate, the
+                // pluck's comb tuning, `Key` -- this visitor's note, so the
+                // pluck, the drone and the drops all sit on the note the pluck
+                // has been ringing through the idle wait -- and `PadOctave`,
+                // which drops the pad alone onto the chord's root.
                 g_chord.update(ap.fit_level, ap.movement, (float)dt);
                 ap.comb_hz = g_chord.voicing().comb_hz;
+                ap.key = g_chord.keyNote();
+                ap.pad_octave = g_chord.padOctave();
                 if (g_chord.stageChanged()) {
                     static const char* const kStageNames[mirror::Chord::kStages] = {
                         "Stage0", "Stage1", "Stage2", "Stage3", "Stage4"
@@ -2833,14 +2899,27 @@ int main(int argc, char** argv) {
                 const float target = g_colour_from +
                                      (g_colour_fit_max - g_colour_from) *
                                          (shaped * shaped * (3.f - 2.f * shaped));
-                // One way only, and no faster than the slew: see the note on
-                // g_colour_fit_secs. A converged fit that wobbles must not
-                // take the colour back out with it.
-                const float step = g_colour_fit_secs > 0.f
-                                       ? (float)dt / g_colour_fit_secs
-                                       : 1.f;
-                if (target > g_colour_now)
-                    g_colour_now = std::min(target, g_colour_now + step);
+                // One way only: a converged fit that wobbles must not take
+                // the colour back out with it. And eased, the way the w0
+                // ramp is (smoothstep over g_colour_fit_secs) rather than
+                // the linear slew this used to be, whose onset read as a
+                // step: the colour starts easing the first frame the target
+                // is above it, and a target that keeps rising mid-ease just
+                // moves the end.
+                if (target > g_colour_now + 1e-4f && g_colour_ease_t0 < 0.0) {
+                    g_colour_ease_t0 = nowT;
+                    g_colour_ease_a = g_colour_now;
+                    g_colour_ease_b = target;
+                }
+                if (g_colour_ease_t0 >= 0.0) {
+                    g_colour_ease_b = std::max(g_colour_ease_b, target);
+                    const float t = g_colour_fit_secs > 0.f
+                        ? std::min(1.f, (float)((nowT - g_colour_ease_t0) / g_colour_fit_secs))
+                        : 1.f;
+                    const float e = t * t * (3.f - 2.f * t);
+                    g_colour_now = g_colour_ease_a + (g_colour_ease_b - g_colour_ease_a) * e;
+                    if (t >= 1.f) g_colour_ease_t0 = -1.0;
+                }
                 mirror.params().color_mix = g_colour_now;
             }
 
@@ -3384,7 +3463,8 @@ int main(int argc, char** argv) {
                 // too so mask 0 does not sit frozen on the tracker's last
                 // frame for that gap.
                 if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
+                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget(),
+                                     rootSeq.valid() && rootSeq.mouthOpenRamp(rootsClock, g_root_seq) >= 1.f);
                 if (!rootHold) bankFaceSeq.step(roots, rootsClock, dt);
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
 
@@ -3498,7 +3578,8 @@ int main(int argc, char** argv) {
                 saveSittingPlant(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
                 if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget());
+                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget(),
+                                     rootSeq.valid() && rootSeq.mouthOpenRamp(rootsClock, g_root_seq) >= 1.f);
                 // The bank's masks, on rootsClock rather than phaseTime():
                 // continuous across the Transition -> Roots cut, so a face
                 // that was already moving in the chain does not jump.

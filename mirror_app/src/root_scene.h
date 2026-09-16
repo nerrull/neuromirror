@@ -142,6 +142,8 @@ public:
     // a visible chain mask, or a lit mask of a visible structure -- indexed
     // like the `bank` passed to assignBankFaces. What a per-frame replay
     // should bother sampling: a dark or unrevealed mask shows nothing of it.
+    // The hood's seed masks (slot 0 of each structure) are left out: they
+    // are the faces that do not move -- see the definition.
     void drawnBankFaces(std::vector<char>& out) const;
 
     // A different face on every mask, sampled from the morphable basis.
@@ -776,15 +778,18 @@ private:
     };
     std::vector<BankFace> bankFaces_;
     std::vector<char> bankFaceDirty_;   // per bank face: a setBankFaceVerts since the last emit
+    bool liveFaceDirty_ = false;        // faceVerts_ moved (setFittedFace) since the last emit
     // Where each mask's triangles sit in the last uploadFaceFromMasks(), so
     // a replayed bank face can be re-emitted into its own run alone
     // (patchBankFaces) -- the full rebuild walks some fifty masks and was
     // most of a frame at 60. The mask is kept as placed (world space, the
     // hood's transform applied), with the lit flag it was emitted with.
     struct FaceBlock {
-        int bankIdx;                  // -1 = the live face (never patched)
+        int bankIdx;                  // -1 = the live face (patched on liveFaceDirty_)
+        int structure, slot;          // hood mask (k, j); -1, chain index for the chain
         rootsim::SimMask mask;
         float lit;
+        bool relit;                   // lit changed since the last emit (setStructureMaskLit)
         size_t offset, count;         // floats into the mesh
     };
     std::vector<FaceBlock> faceBlocks_;

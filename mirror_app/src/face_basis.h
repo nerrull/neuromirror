@@ -43,7 +43,8 @@ public:
     // True when the render mesh came from Maxine's .nvf rather than ICT.
     bool nvfTopology() const { return nvf_; }
 
-    // Triangle indices into the render mesh, 3 per triangle.
+    // Triangle indices into the render mesh, 3 per triangle. The eyes and
+    // the inner mouth are holes -- see punchHoles() in face_basis.cpp.
     const std::vector<int>& triangles() const { return tris_; }
     // ARKit-style expression names, in the order the expression modes are
     // stored ("mouthSmile_L", "jawOpen", ...).
@@ -85,6 +86,7 @@ public:
     const std::vector<float>& lmExpression() const { return lm_ex_; }
 
 private:
+    void punchHoles();
     int n_verts_ = 0, n_tris_ = 0, n_id_ = 0, n_ex_ = 0;
     bool nvf_ = false;
     std::vector<float> neutral_, id_, ex_;

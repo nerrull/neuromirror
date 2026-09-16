@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace mirror;
@@ -247,6 +248,61 @@ int main() {
         std::printf("  alpha correlation with ground truth: %.4f "
                     "(python reference at ridge 6.0: 0.7609)\n", corr);
         check(corr > 0.70, "recovered identity correlates with ground truth");
+    }
+
+    // --- identity under a pitched head --------------------------------------
+    // The installation's sensor sits above the screen, so every visitor is
+    // seen from above -- foreshortened. The identity solve is a 2D similarity
+    // per frame, and left to itself it explains the short outline with a
+    // short face; given the tracker's rotation it should recover the same
+    // identity it does head-on. Same ground truth, tipped 25 degrees.
+    std::printf("\nidentity fit under a 25 degree pitch\n");
+    {
+        const float pitch = 25.f * float(M_PI) / 180.f;
+        const float cp = std::cos(pitch), sp = std::sin(pitch);
+        // Row-major rotation about x: y' = c*y - s*z, z' = s*y + c*z.
+        const float R[9] = {1, 0, 0, 0, cp, -sp, 0, sp, cp};
+        std::vector<float> lm_tipped(lm_truth.size());
+        for (size_t i = 0; i < lm_truth.size() / 3; ++i) {
+            const float x = lm_truth[i * 3], y = lm_truth[i * 3 + 1], z = lm_truth[i * 3 + 2];
+            lm_tipped[i * 3]     = R[0] * x + R[1] * y + R[2] * z;
+            lm_tipped[i * 3 + 1] = R[3] * x + R[4] * y + R[5] * z;
+            lm_tipped[i * 3 + 2] = R[6] * x + R[7] * y + R[8] * z;
+        }
+        auto run = [&](bool use_pose) {
+            FaceFitter f;
+            std::string e;
+            f.load(path, e);
+            f.config().min_frontality = 0.0f;
+            f.useTrackerPose(use_pose);
+            for (int k = 0; k < 3; ++k) {
+                FaceResult r = synthesise(lm_tipped, W, H, scales[k], angles[k],
+                                          txs[k], tys[k], bs, names);
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j) r.transform[i * 4 + j] = R[i * 3 + j];
+                f.offerIdentityFrame(r, W, H);
+            }
+            float res = -1.f;
+            f.fitIdentity(&res);
+            const std::vector<float>& got = f.alpha();
+            double dot = 0, na = 0, nb = 0;
+            for (size_t i = 0; i < truth.size() && i < got.size(); ++i) {
+                dot += double(truth[i]) * got[i];
+                na  += double(truth[i]) * truth[i];
+                nb  += double(got[i]) * got[i];
+            }
+            const double corr = dot / (std::sqrt(na * nb) + 1e-12);
+            std::printf("  %s: residual %.3f px, alpha correlation %.4f\n",
+                        use_pose ? "with the tracker's rotation" : "flat 2D only",
+                        res, corr);
+            return std::make_pair(res, corr);
+        };
+        const auto flat = run(false);
+        const auto posed = run(true);
+        check(posed.second > 0.70, "posed fit recovers the head-on identity");
+        check(posed.second > flat.second + 0.1,
+              "and does markedly better than fitting the foreshortened outline flat");
+        check(posed.first < 1.0f, "posed residual under 1 px");
     }
 
     // --- per-frame update --------------------------------------------------

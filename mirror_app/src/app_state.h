@@ -175,7 +175,6 @@ extern mirror::Presence   g_presence;
 extern mirror::Chord      g_chord;
 extern bool  g_audio_on;
 extern bool  g_audio_auto;
-extern float g_audio_key;
 extern float g_audio_intensity;
 extern float g_audio_transpose;
 extern bool  g_shepherd_on;     // the Fitting-phase glissando, on or off
@@ -257,6 +256,13 @@ extern float g_cam_feather;
 // --- head movement ------------------------------------------------------
 extern int   g_head_mode;
 extern float g_head_smooth;
+// The input-shift ("shift the inputs") mode's dials. The shift is a latch:
+// it accumulates the head's displacement, scaled by the gain for the show's
+// current phase, and holds wherever it was when the face is lost -- rather
+// than jumping back to zero (see UpdateInputShift in main.mm).
+extern float g_shift_gain_fit;    // how much of the head's motion the field follows, fitting
+extern float g_shift_gain_idle;   // the same, in Idle -- a small nudge of interactivity
+extern float g_stab_size_mul;     // on-screen face size, as a multiple of the camera's
 extern bool  g_head_valid;
 extern float g_head_cx, g_head_cy;
 extern float g_head_hx, g_head_hy;

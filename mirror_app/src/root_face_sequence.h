@@ -7,7 +7,9 @@
 // alternative -- the head pose and expression stream recorded while the
 // visitor was still in front of the sensor, during Transition. This plays
 // that stream back, looped, so the face on the masks keeps moving after the
-// visitor has left.
+// visitor has left. Mask 0 (RootFaceSequence) only plays through the
+// sequence's mouth-open ramp and then holds, jaw open, for the rest of the
+// sitting; the bank's masks (BankFacePlayback) keep moving.
 //
 // The loop is a ping-pong (forward, then backward, then forward again)
 // rather than a jump back to frame 0: exactly continuous at the turn-around
@@ -199,15 +201,23 @@ public:
         player_.begin(track, basis);
         basis_ = &basis;
         uploadedTris_ = false;
+        held_ = false;
     }
     // Back to "nothing to play", so the live tracker drives mask 0 again.
     void reset() { player_.reset(); }
 
-    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f) {
+    // `mouthOpen` is the sequence's ramp having reached full: the mask is
+    // sampled one last time, jaw open, and then holds that frame for the
+    // rest of the sitting -- the roots leave a face the visitor has left,
+    // not one still moving. The replay only ever runs through the ramp.
+    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f,
+              bool mouthOpen = false) {
         (void)dt;
+        if (held_) return;
         if (!player_.sample(phaseTime, mouthOpenTarget, verts_)) return;
         roots.setFittedFace(verts_, uploadedTris_ ? std::vector<int>() : basis_->triangles());
         uploadedTris_ = true;
+        held_ = mouthOpen;
     }
 
     bool valid() const { return player_.valid(); }
@@ -216,6 +226,7 @@ private:
     FaceTrackPlayer player_;
     const mirror::FaceBasis* basis_ = nullptr;
     bool uploadedTris_ = false;
+    bool held_ = false;
     std::vector<float> verts_;
 };
 

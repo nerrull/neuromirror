@@ -38,7 +38,8 @@ void MirrorScene::advance(double dt) {
         // that.
         pond_.advanceZBoost(dt, params_);
         const float z_rate_eff = params_.z_rate +
-            (params_.drops_on ? pond_.zBoostEnv() : 0.f);
+            (params_.drops_on ? pond_.zBoostEnv() : 0.f) +
+            params_.z_move_boost * params_.movement;
         params_.z += dt * z_rate_eff;
     }
     if (params_.trans_auto)

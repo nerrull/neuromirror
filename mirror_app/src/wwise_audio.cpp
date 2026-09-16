@@ -252,6 +252,8 @@ void WwiseAudio::update(const AudioParams& p) {
         AK::SoundEngine::SetRTPCValue("Intensity", p.intensity);
     if (all || Moved(p.transpose, sent_.transpose))
         AK::SoundEngine::SetRTPCValue("Transpose", p.transpose);
+    if (all || Moved(p.pad_octave, sent_.pad_octave))
+        AK::SoundEngine::SetRTPCValue("PadOctave", p.pad_octave);
 
     // The pluck's pitch, as the comb's centre frequency. Hz rather than a MIDI
     // note because that is the unit the comb's Frequency property is in, and

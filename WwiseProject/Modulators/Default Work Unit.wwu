@@ -27,6 +27,34 @@
 						<Property Name="EnvelopeSustainTime" Type="Real64" Value="1.5"/>
 					</PropertyList>
 				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Pad_Env_V1" ID="{1A92671A-9104-494A-8D02-3FB104C05D25}" ShortID="127574196">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="3"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="8"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Pad_Env_V2" ID="{35E26F9F-4BFF-4117-BAEE-2D09FB7A6C40}" ShortID="969704066">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="5.5"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="8"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Pad_Env_V3" ID="{7155337F-B52E-4BEB-84FF-23F271CDE56D}" ShortID="739505813">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="8"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="8"/>
+					</PropertyList>
+				</ModulatorEnvelope>
+				<ModulatorEnvelope Name="Pad_Env_V4" ID="{FE57AF1A-7A57-4E3E-B733-9C4B14EB0E32}" ShortID="186412331">
+					<PropertyList>
+						<Property Name="EnvelopeAttackTime" Type="Real64" Value="11"/>
+						<Property Name="EnvelopeDecayTime" Type="Real64" Value="0"/>
+						<Property Name="EnvelopeReleaseTime" Type="Real64" Value="8"/>
+					</PropertyList>
+				</ModulatorEnvelope>
 			</ChildrenList>
 		</WorkUnit>
 	</Modulators>

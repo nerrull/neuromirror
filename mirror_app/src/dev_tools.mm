@@ -1648,12 +1648,12 @@ int audiotest(double seconds, const char* wav_out) {
         p.head_tilt      = 45.f * std::sin((float)u * 9.4247780f);
         p.fit_level      = std::min(1.f, (float)u * 2.f);
         p.scene_progress = (float)u;
-        p.key            = 48.f;
         p.intensity      = 1.f;
 
-        chord.config().root = p.key;
         chord.update(p.fit_level, p.movement, 0.016f);
         p.comb_hz = chord.voicing().comb_hz;
+        p.key = chord.keyNote();
+        p.pad_octave = chord.padOctave();
         if (chord.stageChanged()) {
             static const char* const kStageNames[mirror::Chord::kStages] = {
                 "Stage0", "Stage1", "Stage2", "Stage3", "Stage4"

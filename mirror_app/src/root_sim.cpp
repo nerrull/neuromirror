@@ -15,6 +15,80 @@ using namespace maskcav;
 
 namespace rootsim {
 
+// The base tropism every hop blends its attraction with. CPlantBox's own
+// Gravitropism pulls toward grow -z (render down), so a root fresh out of a
+// mask headed for the floor first and only then bent toward its target.
+// Here "down" is the structure's own axis instead: out of the first mask,
+// toward the rest of them -- the direction the whole chain runs -- so the
+// residual pull and the seed heading both already point where the relay is
+// going. Same objective shape as Gravitropism (0 when the candidate heading
+// is along `dir`, 1 when against it).
+class AxisTropism : public Tropism {
+public:
+    AxisTropism(std::shared_ptr<Organism> plant, double n, double sigma, Vector3d dir)
+        : Tropism(plant, n, sigma), dir_(dir.normalized()) {}
+    std::shared_ptr<Tropism> copy(std::shared_ptr<Organism> plant) override {
+        auto nt = std::make_shared<AxisTropism>(*this);
+        nt->plant = plant;
+        return nt;
+    }
+    double tropismObjective(const Vector3d& pos, const Matrix3d& old, double a, double b,
+                            double dx, const std::shared_ptr<Organ> o = nullptr) override {
+        return 0.5 * (1.0 - old.times(Vector3d::rotAB(a, b)).times(dir_));
+    }
+private:
+    Vector3d dir_;
+};
+
+// CPlantBox starts every base root heading straight down (Organ::getiHeading0
+// hard-codes (0,0,-1) for a parentless root, then rotates it by the
+// protected `partialIHeading`), and there is no setter. This is the one way
+// in without patching the submodule: a derived type may name a protected
+// member of its base through a pointer-to-member, and that member is
+// mutable. Used once per hop, right after initialize(), to point the seed's
+// root out through the mouth it is leaving (see initHop).
+struct OrganHeading : CPlantBox::Organ {
+    static void set(CPlantBox::Organ& o, const Vector3d& dir) {
+        // getiHeading0: heading = ons((0,0,-1)) * partial, so partial =
+        // ons^-1 * dir puts the root's first segment along `dir`.
+        Vector3d down(0, 0, -1);
+        o.*(&OrganHeading::partialIHeading) = Matrix3d::ons(down).inverse().times(dir.normalized());
+    }
+};
+
+// The dwell's attractors: a hemisphere behind the mask, not just a ring
+// around it. Ring 0 is the old rim (rimAttractors: the cavity's outline,
+// rim_margin outside it, in the mask's own plane); each ring behind it is
+// smaller and further back along -normal, down to a single point at the
+// pole, so the nest the roots are drawn into is a cup the head sits in.
+// The depth radius is the lateral mean, so the cup is round rather than
+// squashed to the cavity's own (shallow) r_depth. `behind` shifts the whole
+// thing back (SimParams::nestBehind). With attractors consumed on contact
+// (nestHitRadius) there have to be enough of them for the wrap to keep
+// finding somewhere new to go.
+std::vector<Attractor> nestAttractors(const MaskNode& m, int rings, int perRing,
+                                      double behind, double strength, double radius,
+                                      double rim_margin) {
+    std::vector<Attractor> out;
+    rings = std::max(1, rings); perRing = std::max(3, perRing);
+    const double rw = m.r_width * rim_margin, rh = m.r_height * rim_margin;
+    const double rd = 0.5 * (rw + rh);
+    const Vector3d c = m.pos.minus(m.normal.times(behind));
+    for (int i = 0; i < rings; ++i) {
+        const double lat = (M_PI / 2.0) * double(i) / double(rings);   // 0 = rim, -> pole
+        const double cl = std::cos(lat), sl = std::sin(lat);
+        for (int j = 0; j < perRing; ++j) {
+            const double ang = 2.0 * M_PI * (double(j) + 0.5 * (i & 1)) / perRing;
+            Vector3d p = c.plus(m.tangent.times(std::cos(ang) * rw * cl))
+                          .plus(m.bitangent.times(std::sin(ang) * rh * cl))
+                          .minus(m.normal.times(rd * sl));
+            out.push_back(Attractor{p, strength, radius});
+        }
+    }
+    out.push_back(Attractor{c.minus(m.normal.times(rd)), strength, radius});
+    return out;
+}
+
 // CPlantBox grow space -> render space (Y-up).
 //
 // CPlantBox grows roots toward -z, so grow -z is "down" and the mask cone hangs
@@ -170,6 +244,9 @@ struct RootSim::Impl {
     Vector3d localTarget{0, 0, 0};
     MaskNode localTargetNode;
     std::vector<MaskNode> localRevealed;
+    // This hop's attractors, shared with its tropisms so step() can drop
+    // the ones a root has reached (p.nestHitRadius).
+    maskcav::AttractorSet hopAttrs;
     double hopLen = 0.0, hopPath = 0.0, hopTravelDays = 0.0, hopMaxDays = 0.0;
     double evenAgeDays = 0.0;         // commonAge(), which walks every mask
     double day = 0.0, reachedDay = -1.0;
@@ -255,10 +332,14 @@ struct RootSim::Impl {
         const MaskNode& m = masks[from];
         const Vector3d mouth = mouthPoint(m);
         // The on-axis anchor faces down the axis, and the chain runs that
-        // way: the root leaves straight out of the mouth's front, just
-        // anchorSpawn past it.
+        // way: the root starts *inside* the head -- at the mask's own centre
+        // depth, under the mouth (the mouth's tangent/bitangent offset with
+        // its normal component dropped), anchorSpawn further back -- and
+        // grows out through the mouth hole along the normal.
         if (from == 0 && anchorAxis)
-            return mouth.plus(m.normal.times((double)p.anchorSpawn));
+            return mouth.minus(m.normal.times((double)p.faceMouthN *
+                                              std::max(0.05, (double)p.faceScale) * maskR
+                                              + (double)p.anchorSpawn));
         // Just behind the surface at the mouth: emerging from the mouth is
         // what makes it read as growing out of this face, rather than out of
         // its centre or its chin.
@@ -373,15 +454,17 @@ struct RootSim::Impl {
             double reach = std::max((double)p.travelPullReach * hopLen, (double)p.R0);
             attrs.push_back(Attractor{localTarget, 1.0, reach});
         } else {
-            attrs = rimAttractors({localTargetNode}, 6, 1.0, 3.0, 1.15);
+            attrs = nestAttractors(localTargetNode, p.nestRings, p.nestPerRing,
+                                   (double)p.nestBehind, 1.0, 3.0, 1.15);
         }
+        hopAttrs = maskcav::makeAttractorSet(std::move(attrs));
         if (dwellThreshold >= 0.0) {
             rs->setTropism(combinedAttractionSplitTimed(
-                rs, base, attrs, p.mainTravelTrials, 6.0, p.sigma,
+                rs, base, hopAttrs, p.mainTravelTrials, 6.0, p.sigma,
                 mainW, p.lateralWeight, latW, dwellThreshold, growGeom), -1);
         } else {
             rs->setTropism(combinedAttractionSplit(
-                rs, base, attrs, p.mainTravelTrials, 6.0, p.sigma,
+                rs, base, hopAttrs, p.mainTravelTrials, 6.0, p.sigma,
                 mainW, latW, growGeom, growGeom), -1);
         }
     }
@@ -428,6 +511,17 @@ struct RootSim::Impl {
         rs->readParameters(paramPath, "plant", true, false);
         rs->setSeed(p.seed + (unsigned)h);
         rs->initialize(false);
+        // The seed's root leaves along the source mask's normal -- out
+        // through the mouth -- rather than CPlantBox's default straight down,
+        // which had the first segments heading for the floor before the
+        // tropism could turn them. The on-axis anchor's normal is the chain
+        // axis itself (see hopStart).
+        {
+            const int from = hopFrom(h);
+            const Vector3d out = (from >= 0 && from < (int)masks.size()) ? masks[size_t(from)].normal
+                                                                          : chainAxis();
+            for (auto& o : rs->getBaseRoots()) OrganHeading::set(*o, out);
+        }
         auto seedNodes = rs->getNodes();
         Vector3d localSeed = seedNodes.empty() ? Vector3d(0, 0, 0) : seedNodes[0];
         // Where this hop's root actually starts. It used to come from a
@@ -449,7 +543,7 @@ struct RootSim::Impl {
         localTargetNode = masks[h];
         localTargetNode.pos = maskGlobal.minus(offset);
 
-        base = std::make_shared<Gravitropism>(rs, 1.0, p.sigma);
+        base = std::make_shared<AxisTropism>(rs, 1.0, p.sigma, chainAxis());
         hopLen = localTarget.minus(localSeed).length();
         hopPath = hopPathFor(h);
 
@@ -480,6 +574,18 @@ struct RootSim::Impl {
         report.outOfReach = beyondReach(hopPath);
         report.reachDist  = 1e9f;   // normalised mask-volume depth; see maskVolumeK
         snapshotLive();
+    }
+
+    // Where the chain runs: from the first mask toward the centroid of the
+    // others (grow space; a direction, so no offset). The anchor's own
+    // normal when there is nothing else to point at.
+    Vector3d chainAxis() const {
+        if (masks.size() < 2) return masks.empty() ? Vector3d(0, 0, -1) : masks[0].normal;
+        Vector3d c(0, 0, 0);
+        for (size_t i = 1; i < masks.size(); ++i) c = c.plus(masks[i].pos);
+        c = c.times(1.0 / double(masks.size() - 1));
+        Vector3d d = c.minus(masks[0].pos);
+        return d.length() > 1e-6 ? d.normalized() : masks[0].normal;
     }
 
     void snapshotLive() {
@@ -517,6 +623,21 @@ struct RootSim::Impl {
         double dt = std::max(0.02, (double)p.growthDt);
         rs->simulate(dt, false);
         day += dt;
+
+        // A nest attractor is spent once a root has reached it: the pull was
+        // there to bring roots to that spot, and roots already there would
+        // otherwise keep circling it. Travel's single target is left alone
+        // -- arrival is maskVolumeK's business below.
+        if (reached && hopAttrs && !hopAttrs->empty() && p.nestHitRadius > 0.f) {
+            const auto nodes = rs->getNodes();
+            const double r = (double)p.nestHitRadius;
+            auto& at = *hopAttrs;
+            at.erase(std::remove_if(at.begin(), at.end(), [&](const Attractor& a) {
+                for (const auto& n : nodes)
+                    if (a.pos.minus(n).length() <= r) return true;
+                return false;
+            }), at.end());
+        }
 
         // Out of travel budget: reveal the mask and dwell where we are,
         // rather than stall the whole relay on one mask nobody can reach.

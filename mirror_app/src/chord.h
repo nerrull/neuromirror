@@ -31,6 +31,21 @@
 // `SetState("ChordStage", ...)`; Wwise owns the glide between states (its own
 // transition time/curve on the State Group) and the per-voice Pitch table.
 //
+// ## Tuning: one note per visitor
+//
+// Everything is tuned from one note, drawn once per visitor: the pinned
+// pluck's centre (`pluck_center_note`, G5 by default) plus a random offset of
+// up to `pluck_offset_max_semitones` either way. The pluck rings exactly that
+// note through the whole idle wait, and the chord's root is that note
+// `chord_octave` octaves down -- so when Fitting begins the chord starts *on*
+// the note the room has been hearing, and the pluck does not move. From there
+// the pluck climbs the chord: each checkpoint lifts it a step of the way from
+// the base note to `pluck_climb` semitones above it, snapped to a tone of the
+// current chord, so it ends on the resolved chord's top voice. `keyNote()` is
+// what the caller sends Wwise as `Key` (the visitor's note, chord octave
+// excluded -- `Key` reaches the pluck too); `padOctave()` is what shifts the
+// pad alone onto the chord's root.
+//
 // ## Why four separate voices
 //
 // One Macro Oscillator is one pitch, so a chord is four of them, and a chord
@@ -60,11 +75,11 @@ struct ChordVoicing {
     float target[kChordVoices] = {36.f, 46.f, 51.f, 58.f};
     // The comb's centre frequency, Hz -- the pluck's pitch. Derived from the
     // same root as the chord, so the two can never drift out of tune.
-    float comb_hz = 466.16f;
+    float comb_hz = 783.99f;
     // Which checkpoint is current, 0..kStages-1.
     int stage = 0;
     // The pluck's note, MIDI, before the conversion to Hz. Diagnostics.
-    float pluck_note = 70.f;
+    float pluck_note = 79.f;
 };
 
 class Chord {
@@ -79,28 +94,15 @@ public:
     static constexpr int kStages = 5;
 
     struct Config {
-        // The piece's key, MIDI note. Matches the `Key` game parameter's
-        // default; the operator's key slider feeds this.
-        float root = 48.f;
+        // Where the chord's root sits relative to the visitor's note, in
+        // octaves. -1 puts the chord an octave under the pluck, so its
+        // resolved top voice (+28) ends up a major third over the pluck's
+        // base note -- which is where `pluck_climb` = 16 sends the pluck.
+        int chord_octave = -1;
 
-        // Where the pad sits relative to that key, in semitones. The key is the
-        // piece's pitch, not the pad's register: at the key itself the voicing
-        // ran from C3 up to E5, which is squarely where a face and a voice live
-        // and left the chord sounding like a melody instrument playing high
-        // rather than a room being harmonised. An octave down puts the bottom
-        // voice at C2 and, with the final chord spanning 28 semitones, leaves
-        // the stack spread from C2 to E4.
-        //
-        // Deliberately separate from `root` rather than folded into it: the
-        // operator's key slider still means the piece's key, and the pluck
-        // (which reads `root` directly) keeps its own register.
-        //
-        // `root=48, octave=-12, pluck_high=+22, pluck_low=-12` was the config
-        // that shipped before the voicing moved into Wwise -- spreads the final
-        // voicing C2 to E4. That is the register the transition/roots phase
-        // still wants; kept here as a reference. The mirror phase itself now
-        // uses a higher register, set on the Wwise side: see the `Key -> Pitch`
-        // curve on `Pad_V1..V4\Osc` in the WwiseProject.
+        // Where the pad sits relative to the root, in semitones. Diagnostic
+        // `note[]` only -- the mirror phase's register is set on the Wwise
+        // side (the `Key -> Pitch` curve on `Pad_V1..V4\Osc`).
         float octave = -12.f;
 
         // Full-scale movement detune, cents, applied +/- alternately up the
@@ -114,113 +116,44 @@ public:
         float hysteresis = 0.03f;
 
         // The fit level at which each checkpoint becomes current -- tunable
-        // per-instance (rather than the fixed table an earlier version of
-        // this file had) so the panel can dial in where each chord change
-        // lands against how the live fit actually climbs, the same way
-        // `g_show_fit_score` tunes the separate Fitting -> Transition gate.
-        // thresholds[0] is never read (stage 0 is always where a reset
-        // starts); the last one is 0.95, not 1.0, deliberately -- see the
-        // comment this replaced in chord.cpp for why a resolution only
-        // reachable by accident is not a resolution.
+        // per-instance so the panel can dial in where each chord change
+        // lands against how the live fit actually climbs. thresholds[0] is
+        // never read (stage 0 is always where a reset starts); the last one
+        // is 0.95, not 1.0, deliberately -- a resolution only reachable by
+        // accident is not a resolution.
         float thresholds[kStages] = { 0.f, 0.25f, 0.50f, 0.75f, 0.95f };
 
-        // Where the pluck sits, semitones from the root, before the snap to
-        // the nearest chord tone (see Update's pluck section) -- the base it
-        // is pinned to throughout Fitting, at zero intensity. Kept separate
-        // from the stage table because the pluck's register is fixed while
-        // the chord's is stepped. Raised from the old -12 so the pluck stays
-        // above the pad's register (see the `octave` comment above) instead
-        // of dipping under its bass voice.
-        float pluck_high = 34.f;
-
-        // How far above `pluck_high`, semitones, full intensity can push the
-        // pluck before the snap. Intensity is the fit converging and the room
-        // moving (see Update's pluck section) -- it opens the pluck's
-        // register upward without ever taking it out of the chord, since the
-        // snap still lands it on a real tone. The very-low register the
-        // pluck drops to at the Transition handoff is not a note at all and
-        // is not reached through this range -- see main.mm.
-        float pluck_intensity_range = 12.f;
-
-        // --- pinned-pluck exploration ---------------------------------------
-        //
-        // Two ways of keeping the pinned pluck (intensity == 0 -- fit and
-        // movement both flat, which is most of Roots and the start of every
-        // Fitting) from landing on the exact same frequency every visit. Only
-        // meant to be explored one at a time; both read `comb_hz` after the
-        // chord-tone snap, so neither touches which chord tone the pluck
-        // belongs to, only where inside it the comb sits.
-        //
-        // Wander: a slow, continuous drift while pinned, gone the moment
-        // intensity leaves zero. An LFO on the comb's own Frequency in Wwise
-        // would have been simpler, but Wwise won't run an RTPC and an LFO on
-        // the same property at once (see the WwiseProject side), so this
-        // lives here instead, as a sum of two sines rather than noise so it
-        // never repeats on a beat.
-        bool  pluck_wander_enabled = false;
-
-        // Peak wander, as a fraction of the pinned frequency (0.03 = +/-3%).
-        float pluck_wander_depth = 0.03f;
-
-        // The wander's slower component, as a cycle time in seconds (not a
-        // rate, so the panel can dial it down to a barely-moving crawl
-        // without fighting a Hz slider's resolution down there). The faster
-        // component runs at 1/2.17 of this period so the two never fall into
-        // a visible shared cycle.
-        float pluck_wander_period_s = 12.5f;
-
-        // Offset: a single random pick per reset() -- i.e. per visitor --
-        // held fixed for as long as the pluck stays pinned, instead of
-        // drifting. Reads as "this visitor's tuning" rather than motion. A
-        // note step rather than a raw Hz jitter, so what lands is always a
-        // real pitch relative to the pinned one, not an out-of-tune smear.
-        bool  pluck_offset_enabled = false;
+        // The pinned pluck's centre, MIDI note. 79 is G5, 784 Hz. Every
+        // visitor's note is this plus their offset below; the chord's root is
+        // the same pitch class.
+        float pluck_center_note = 79.f;
 
         // How many semitones, at most, the per-visitor draw can land from the
-        // pinned note -- e.g. 3 means uniformly anywhere from -3 to +3
-        // semitones. Redrawn every newVisitor() regardless of whether the
-        // offset is enabled (see newVisitor()'s comment) -- not reset(),
-        // which now keeps the draw the idle wait already made.
+        // centre -- e.g. 3 means uniformly anywhere from -3 to +3 semitones.
+        // Drawn at newVisitor(), held for the whole sitting.
         int pluck_offset_max_semitones = 3;
 
-        // The pinned frequency both behaviours work around is otherwise
-        // whatever `root + pluck_high` converts to -- fine for the chord's
-        // own tuning, but a step removed from the Hz an ear actually judges
-        // wander/offset depth against. When enabled, `pluck_center_hz`
-        // replaces it directly (still only while pinned; still snapped back
-        // to the real chord tone the moment intensity leaves zero).
-        bool  pluck_center_override_enabled = false;
+        // How far above the visitor's note, semitones, the last checkpoint
+        // lifts the pluck -- the top of its climb, before the snap to a chord
+        // tone (see update()). 16 with `chord_octave` -1 is exactly the
+        // resolved chord's top voice. Wwise's Comb_Tuning stops at 2000 Hz
+        // (MIDI ~99): a G5 centre, +5 offset and 16 up brushes that.
+        float pluck_climb = 16.f;
 
-        // Hz. Defaults to what `root=48, pluck_high=34` already produces
-        // (NoteToHz(82)), so switching the override on doesn't jump the pitch.
-        // The panel keeps this on a 400-1600Hz, 5Hz-step slider -- wide enough
-        // to cover the pluck's usual register without a step so coarse it's
-        // audible as a jump.
-        float pluck_center_hz = 932.33f;
-
-        // If true, the panel rounds `pluck_center_hz` to the nearest standard
-        // equal-tempered pitch (A440, see Chord::NearestNoteHz) instead of the
-        // nearest 5 Hz -- a deliberately different reference than the piece's
-        // own `root`/key, since this control is a raw Hz explore, not a
-        // fourth way of picking a chord tone.
-        bool  pluck_center_snap_to_note = false;
-
-        // --- root continuity ------------------------------------------------
-        //
-        // The visitor who just left stood through the whole idle wait hearing
-        // the pinned pluck -- wander folded into the Hz the comb actually
-        // rang, the center override (when enabled) standing in as the chosen
-        // centre itself, per-visitor offset folded into the note on top of
-        // that. If true, the next visitor's chord does not start over on the
-        // plain configured `root`: reset() reads the pluck's centre (the
-        // snapped chord tone, or the centre override's note when that was
-        // enabled) plus the per-visitor offset if that was on -- not wander,
-        // which is ear noise around the centre rather than the centre itself
-        // -- as of the instant Fitting took over, and carries that note's
-        // pitch class into the pad's own register (see reset()'s comment).
-        // Off is the old behaviour -- every visitor's chord starts on `root`,
-        // full stop.
-        bool root_follows_idle_tuning = true;
+        // Wander: a slow, continuous drift of the comb Hz while the pluck is
+        // pinned (fit at 0), gone the moment the fit starts moving it. An
+        // LFO on the comb's own Frequency in Wwise would have been simpler,
+        // but Wwise won't run an RTPC and an LFO on the same property at once,
+        // so this lives here instead, as a sum of two sines rather than noise
+        // so it never repeats on a beat. Ear noise around the note, never the
+        // note itself: the chord's root ignores it.
+        bool  pluck_wander_enabled = false;
+        // Peak wander, as a fraction of the pinned frequency (0.03 = +/-3%).
+        float pluck_wander_depth = 0.03f;
+        // The wander's slower component, as a cycle time in seconds. The
+        // faster component runs at 1/2.17 of this period so the two never
+        // fall into a visible shared cycle.
+        float pluck_wander_period_s = 12.5f;
     };
 
     Chord() { newVisitor(); reset(); }
@@ -228,42 +161,24 @@ public:
     Config& config() { return cfg_; }
     const Config& config() const { return cfg_; }
 
-    // Back to the opening checkpoint. Called when the room empties: the next
-    // person gets the piece unresolved, not wearing the last one's ending.
-    //
-    // Deliberately does not redraw `pluck_offset_semitones_` any more -- see
-    // newVisitor() below. reset() is the Idle -> Fitting handoff for a
-    // visitor who has *already* been waiting through Idle with their own
-    // offset fixed; redrawing it here (the old behaviour) meant the note the
-    // pluck had been ringing all through the idle wait was thrown away the
-    // instant Fitting began, which is exactly the audible jump this file was
-    // rewritten to remove. See visitor_pluck_delta_'s comment for the other
-    // half of that fix.
+    // Back to the opening checkpoint, on this visitor's root. The Idle ->
+    // Fitting handoff: the next person gets the piece unresolved, not wearing
+    // the last one's ending. Does not redraw the visitor's note -- see
+    // newVisitor().
     void reset();
 
-    // Draws this visitor's per-visitor pluck offset (see
-    // `pluck_offset_semitones_`/Config::pluck_offset_enabled). Call this once,
-    // at the Roots -> Idle handoff (main.mm's Phase::Idle audio case) -- when
-    // a new visitor is *about* to be waited for, not when their Fitting
-    // starts. The draw then holds fixed through the whole Idle wait and into
-    // the reset() that follows it, so the note the pluck rang while idle is
-    // still the note reset()/update() continue into Fitting; redrawing it at
-    // reset() instead (the old behaviour) is what let the pluck jump the
-    // moment Fitting began -- the visitor had been tuned to one draw and was
-    // handed a different one at the exact instant it mattered most.
-    //
-    // The constructor calls this once before its own reset() so the very
-    // first Chord ever built (before any Idle phase has run) still gets a
-    // draw rather than starting silently at offset 0.
+    // Draws this visitor's note offset. Call once at the Roots -> Idle
+    // handoff, when a new visitor is *about* to be waited for, so the note
+    // the pluck rings through the whole idle wait is the note the chord then
+    // starts on. The constructor calls it once so the very first Chord has a
+    // draw too.
     void newVisitor();
 
     // Jump straight to the final checkpoint (wide, open, done) and hold it
     // there regardless of what `update()` is fed afterwards -- until the next
     // `reset()`. For the two ways a sitting can end without the fit ever
     // earning that chord on its own: the fit timing out before it converges,
-    // and the visitor leaving mid-fit. Either way the piece still closes with
-    // a resolution instead of leaving the harmony stranded wherever the fit
-    // happened to be, or silently forgotten.
+    // and the visitor leaving mid-fit.
     void resolve();
 
     // One frame. `fit` is 0..1 (AudioParams::fit_level), `movement` is 0..1.
@@ -289,29 +204,32 @@ public:
 
     // The stage table, for the panel and the test. Offsets are fixed (the
     // voicing itself is not something a fit level should be able to detune),
-    // but the threshold is `cfg_.thresholds` -- see Config -- so this reads
-    // whatever the panel currently has it set to, not a fixed table.
+    // but the threshold is `cfg_.thresholds` -- see Config.
     static const float* StageOffsets(int stage);
     float StageThreshold(int stage) const;
 
-    // Nearest standard equal-tempered pitch (A440) to `hz` -- for the panel's
-    // "snap to notes" toggle on the pinned pluck's center-frequency override.
-    // Deliberately absolute, not relative to `root`/key: this control is a
-    // raw Hz explore, not another way of picking a chord tone.
-    static float NearestNoteHz(float hz);
+    // This visitor's note: the pinned pluck's centre plus their offset. What
+    // the pluck rings while pinned, and the pitch class the root is built on.
+    float visitorNote() const { return cfg_.pluck_center_note + (float)pluck_offset_semitones_; }
 
-    // This visitor's actual root -- `cfg_.root` when `root_follows_idle_tuning`
-    // is off or no idle note was available to continue, or `cfg_.root` plus
-    // the idle-continuation offset reset() picked when it is on. What the
-    // voicing, the pluck and the comb Hz are all actually built from; see the
-    // comment on `visitor_root_delta_` below. For the panel's diagnostic line.
-    float effectiveRoot() const { return cfg_.root + visitor_root_delta_; }
+    // This visitor's root: visitorNote() dropped by `chord_octave` octaves.
+    // What the voicing and the pluck snap are built from. Read live, so the
+    // octave slider moves the chord mid-sitting.
+    float effectiveRoot() const { return visitorNote() + 12.f * (float)cfg_.chord_octave; }
 
-    // This visitor's pluck continuity correction -- see
-    // `visitor_pluck_delta_`'s comment below. 0 whenever there was no idle
-    // note to continue, or the pinned pluck's center-frequency override is
-    // on. For the panel's diagnostic line, next to effectiveRoot().
-    float pluckDelta() const { return visitor_pluck_delta_; }
+    // What the caller sends Wwise as `Key`. `Key` drives every emitter (the
+    // pluck, the bell, the drops, the sweep, the drone) at the register each
+    // was authored in, so it must NOT carry `chord_octave` -- only the
+    // visitor's note, brought down to the bank's authored register (48 for
+    // the default G5 centre). The chord's own octave rides on `PadOctave`
+    // instead, which reaches only the pad containers.
+    float keyNote() const { return visitorNote() - 36.f; }
+
+    // Semitones the pad containers are pitched away from what `Key` gives
+    // them, so the pad lands on effectiveRoot() while the pluck stays put.
+    // Wwise's `PadOctave` game parameter stops at +/-24 (its Pitch curve),
+    // which is why the panel's chord octave slider runs -5..-1.
+    float padOctave() const { return effectiveRoot() - keyNote(); }
 
 private:
     Config cfg_;
@@ -322,69 +240,8 @@ private:
     // final checkpoint instead of tracking `fit`.
     bool resolved_ = false;
 
-    // The offset, semitones, from `cfg_.root` that this visitor's chord is
-    // actually built from -- everywhere `cfg_.root` used to be read directly
-    // (reset()'s opening voicing, resolve(), update()'s voicing and pluck)
-    // now reads `cfg_.root + visitor_root_delta_` instead (see
-    // effectiveRoot()). A *delta*, not an absolute root, and recombined with
-    // the live `cfg_.root` on every read rather than frozen at reset() --
-    // deliberately, so the operator's key slider still transposes the chord
-    // immediately mid-sitting, exactly as it always has (see chord_test's "a
-    // key change transposes, it does not glide"). Set at every reset(): zero
-    // when `root_follows_idle_tuning` is off or there was no idle note to
-    // continue (see `last_update_was_idle_`), or the octave-corrected
-    // difference between the idle-continuation note and `cfg_.root` at that
-    // moment when there was. Deliberately never written back into `cfg_.root`
-    // itself -- the panel's key still means the piece's key, not "whatever
-    // the last visitor happened to land on".
-    float visitor_root_delta_ = 0.f;
-
-    // The correction, semitones (fractional), added to the pluck's own
-    // pre-wander target note wherever `pluck_high` enters it -- update()'s
-    // general (non-idle) pluck computation -- so that the first note Fitting
-    // rings on is exactly the note idle was just ringing on, offset and all,
-    // instead of the plain chord tone the root-continuity fix alone would
-    // land on. Set at every reset(): 0 when `root_follows_idle_tuning` is off,
-    // there was no idle note to continue (`last_update_was_idle_`), or the
-    // pinned pluck's center-frequency override is on (the override already
-    // fixes the Hz directly -- see Config::pluck_center_override_enabled --
-    // and this correction has no meaningful register to bridge from). When
-    // set, it is `idle_note` (see reset()'s root-continuity comment -- the
-    // centre, override aside, plus this visitor's own kept offset, the exact
-    // note idle was tuned to) minus the snapped chord tone `root + pluck_high`
-    // resolves to under the new, continued root -- the two are normally
-    // already equal by construction (`pluck_high` is chosen so `root +
-    // pluck_high` is always on a stage-0 chord tone; see its comment in
-    // Config), so in practice this is just "the kept offset, as a note delta"
-    // -- but computed from the snap rather than assumed, so a future change
-    // to `pluck_high` or the stage-0 table can't silently reintroduce a gap.
-    // Applied only once fit truly leaves 0 (update()'s `else` branch) --
-    // never inside the `fit <= 0` branch, which keeps applying
-    // `pluck_offset_semitones_` to `comb_hz` itself the whole time fit stays
-    // pinned at 0 (including the first few Fitting frames before the pond
-    // actually starts training, see update()'s comment) -- applying both at
-    // once would double the offset.
-    float visitor_pluck_delta_ = 0.f;
-
-    // True iff the most recent update() call was itself an idle-style one --
-    // fit <= 0, the pinned-pluck branch (see update()). reset()'s
-    // root-continuation only trusts `v_.pluck_note` as "the idle tuning note"
-    // when this is true: a reset() with no idle update() behind it at all
-    // (the very first Chord ever constructed) or one that follows a fit that
-    // was still actively climbing (an abandoned/timed-out sitting -- fit
-    // never dropped to 0 before the next visitor's reset()) has no real idle
-    // note to continue, and falls back to `cfg_.root` regardless of the flag.
-    bool last_update_was_idle_ = false;
-
-    // Pinned-pluck exploration state (see Config). `wander_time_` is the
-    // wander's own clock, zeroed whenever intensity leaves zero so it never
-    // carries a phase into the next pin; `pluck_offset_semitones_` is redrawn
-    // once per newVisitor() (see its comment above) regardless of whether the
-    // offset is enabled, so toggling it on mid-run doesn't play back whatever
-    // was drawn for the visitor before last -- deliberately *not* redrawn in
-    // reset() any more (it used to be), since reset() is mid-visitor (the
-    // Idle -> Fitting handoff) and redrawing there threw away the very draw
-    // the idle wait had just been tuned to.
+    // The wander's own clock, zeroed whenever the fit leaves zero so it never
+    // carries a phase into the next pin.
     float wander_time_ = 0.f;
     int   pluck_offset_semitones_ = 0;
     std::mt19937 rng_{std::random_device{}()};

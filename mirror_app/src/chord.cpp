@@ -28,29 +28,22 @@ float NoteToHz(float midi) {
     return 440.f * std::pow(2.f, (midi - 69.f) / 12.f);
 }
 
-// Exact inverse of NoteToHz -- unrounded, so a Hz that isn't sitting on a
-// standard equal-tempered pitch (e.g. the pluck's raw center-override Hz)
-// still converts to a precise fractional MIDI note rather than snapping.
-float HzToNote(float hz) {
-    return 69.f + 12.f * std::log2(hz / 440.f);
-}
-
-// Snap a linear target to the nearest actual chord tone of `stage`, searching
-// each voice's offset across the octave above and below (never wider -- see
-// the header on `Comb_Tuning`'s range). This is what keeps the pluck sounding
-// like it belongs to the chord instead of sliding across it on its own scale.
+// Snap a linear target to the nearest chord tone of `stage`, in whatever
+// octave the target is in: each voice's offset is folded to the octave
+// nearest the target, and the closest wins. This is what keeps the pluck
+// sounding like it belongs to the chord instead of sliding across it on its
+// own scale. A target that already *is* a chord tone (the visitor's note, an
+// octave-multiple of the root by construction) comes back unchanged.
 float SnapToChordTone(float linear_target, float root, int stage) {
-    static const int kOctaveShift[3] = {-12, 0, 12};
     float best = linear_target;
     float best_dist = 1e9f;
     for (int i = 0; i < kChordVoices; ++i) {
-        for (int shift : kOctaveShift) {
-            const float candidate = root + kOffsets[stage][i] + (float)shift;
-            const float dist = std::fabs(candidate - linear_target);
-            if (dist < best_dist) {
-                best_dist = dist;
-                best = candidate;
-            }
+        const float tone = root + kOffsets[stage][i];
+        const float candidate = tone + 12.f * std::round((linear_target - tone) / 12.f);
+        const float dist = std::fabs(candidate - linear_target);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = candidate;
         }
     }
     return best;
@@ -66,11 +59,6 @@ float Chord::StageThreshold(int stage) const {
     return cfg_.thresholds[std::clamp(stage, 0, kStages - 1)];
 }
 
-float Chord::NearestNoteHz(float hz) {
-    hz = std::max(1.f, hz);
-    return NoteToHz(std::round(HzToNote(hz)));
-}
-
 void Chord::reset() {
     const int prev_stage = stage_;
     stage_ = 0;
@@ -84,100 +72,21 @@ void Chord::reset() {
     stage_changed_ = stage_changed_ || (stage_ != prev_stage);
     resolved_ = false;
 
-    // --- root continuity: pick up the note idle was just sounding ----------
-    //
-    // The room's idle centre is `v_.pluck_note` -- the snapped chord tone
-    // update() computed -- unless the pinned pluck's center-frequency
-    // override was on, in which case the override *is* the chosen centre and
-    // replaces it (`HzToNote(cfg_.pluck_center_hz)`), exactly mirroring the
-    // order update() itself builds `comb_hz` in: the override replaces the
-    // Hz first, and only then does the per-visitor offset apply on top of it
-    // (see update()'s pinned-pluck-exploration block). Wander's continuous
-    // two-sine drift is the one piece left out -- it is a Hz-only detune the
-    // comb rings with, never a note this visitor's chord should continue,
-    // only noise around the centre that already was. So what the room
-    // actually *tuned to* is the centre (override if enabled, else the
-    // snapped chord tone) plus this visitor's own per-visitor offset
-    // (`pluck_offset_semitones_`, semitones, only if `pluck_offset_enabled`
-    // -- that one *is* a real pitch, not noise; see its comment in chord.h).
-    // The offset is added directly in semitones, never by round-tripping
-    // through Hz and back, so a fractional offset survives exactly instead
-    // of picking up floating-point drift. Read before anything here
-    // overwrites it.
-    //
-    // Only trusted when `last_update_was_idle_` -- i.e. the frame that left
-    // this pluck_note behind was itself an idle-style one (fit <= 0). Two
-    // cases where that is false and the fallback below is the right call
-    // instead: the very first reset() a Chord ever runs (nothing has sounded
-    // yet), and a reset() that follows an abandoned or timed-out sitting (fit
-    // was still actively above 0 -- climbing or stalled -- right up to the
-    // handoff, so there was no genuine idle pin to continue).
-    if (cfg_.root_follows_idle_tuning && last_update_was_idle_) {
-        const float centre_note = cfg_.pluck_center_override_enabled
-            ? HzToNote(cfg_.pluck_center_hz)
-            : v_.pluck_note;
-        const float idle_note = centre_note +
-            (cfg_.pluck_offset_enabled ? pluck_offset_semitones_ : 0.f);
-        // Whole octaves only -- the note class continues, the register
-        // stays the pad's designed one (nearest octave to the configured
-        // root). Not rounded to an integer semitone: the per-visitor offset
-        // can be fractional, and the root inherits that exactly. A *delta*
-        // from `cfg_.root`, not the absolute note, so a live key change
-        // afterwards still transposes this visitor's chord along with it --
-        // see the comment on `visitor_root_delta_` in chord.h.
-        const float octaves = std::round((idle_note - cfg_.root) / 12.f);
-        visitor_root_delta_ = (idle_note - octaves * 12.f) - cfg_.root;
-
-        // The pluck's own continuity correction -- see
-        // `visitor_pluck_delta_`'s comment in chord.h. Skipped when the
-        // center-frequency override is on: the override already fixed
-        // comb_hz directly, with no chord-tone register for this correction
-        // to bridge from, and update()'s Fitting path never reads the
-        // override anyway (it is idle-only) -- see Config's comment.
-        if (!cfg_.pluck_center_override_enabled) {
-            const float new_root = cfg_.root + visitor_root_delta_;
-            const float snapped0 =
-                SnapToChordTone(new_root + cfg_.pluck_high, new_root, 0);
-            visitor_pluck_delta_ = idle_note - snapped0;
-        } else {
-            visitor_pluck_delta_ = 0.f;
-        }
-    } else {
-        visitor_root_delta_ = 0.f;
-        visitor_pluck_delta_ = 0.f;
-    }
-    const float root = cfg_.root + visitor_root_delta_;
-
+    const float base = effectiveRoot() + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tgt = root + cfg_.octave + kOffsets[0][i];
+        const float tgt = base + kOffsets[0][i];
         v_.note[i] = tgt;
         v_.target[i] = tgt;
     }
     v_.stage = 0;
-    // `+ visitor_pluck_delta_`: the continuity correction computed above --
-    // see its comment in chord.h. 0 whenever there was nothing to continue,
-    // so this is a no-op in the old (flag off / no idle note) cases.
-    v_.pluck_note = root + cfg_.pluck_high + visitor_pluck_delta_;
-    v_.comb_hz = cfg_.pluck_center_override_enabled ? cfg_.pluck_center_hz
-                                                     : NoteToHz(v_.pluck_note);
-
+    v_.pluck_note = visitorNote();
+    v_.comb_hz = NoteToHz(v_.pluck_note);
     // The wander's clock restarts clean -- nothing about it should carry a
-    // phase from one visitor's pin into the next. The per-visitor offset
-    // itself is deliberately *not* redrawn here any more -- see
-    // newVisitor()'s comment -- reset() is mid-visitor (the Idle -> Fitting
-    // handoff), and this visitor's draw was already made and is still live
-    // in `pluck_offset_semitones_` from the idle wait that just ended; it is
-    // exactly what `idle_note` above and the pluck-continuity correction
-    // just folded in, so leaving it alone here is what keeps that fold-in
-    // meaningful instead of being immediately overwritten.
+    // phase from one visitor's pin into the next.
     wander_time_ = 0.f;
 }
 
 void Chord::newVisitor() {
-    // See the comment in chord.h: called once, at the Roots -> Idle handoff,
-    // when a new visitor is about to be waited for -- not at reset(), which
-    // is mid-visitor (their Idle -> Fitting handoff) and must not throw away
-    // the very draw the idle wait just tuned them to.
     pluck_offset_semitones_ = cfg_.pluck_offset_max_semitones > 0
         ? std::uniform_int_distribution<int>(-cfg_.pluck_offset_max_semitones,
                                               cfg_.pluck_offset_max_semitones)(rng_)
@@ -245,7 +154,8 @@ void Chord::update(float fit, float movement, float dt) {
     // Wwise's `ChordStage` state transition, driven by the `SetState` the
     // caller posts on `stageChanged()`. `note`/`target` exist so the panel can
     // still show the checkpoint's voicing at a glance.
-    const float base = effectiveRoot() + cfg_.octave;
+    const float root = effectiveRoot();
+    const float base = root + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
         const float tgt = base + kOffsets[stage_][i];
         v_.target[i] = tgt;
@@ -255,55 +165,20 @@ void Chord::update(float fit, float movement, float dt) {
 
     // --- the pluck ----------------------------------------------------------
     //
-    // Pinned to the current chord (root + pluck_high, snapped to the nearest
-    // tone of the current stage) rather than travelling with the fit -- the
-    // pluck belongs to the chord throughout Fitting, it does not slide away
-    // from it. What fit and movement drive is "intensity": how far above that
-    // base the pluck rings, so a converging fit and a moving room open the
-    // pluck's register without ever taking it out of key. The drop to a very
-    // low register is not a note at all -- it happens outside Chord, at the
-    // Transition handoff (see main.mm).
-    const float root = effectiveRoot();
-    const float intensity = std::clamp(0.5f * (fit + movement), 0.f, 1.f);
-    const float linear = root + cfg_.pluck_high
-                        + intensity * cfg_.pluck_intensity_range;
-    v_.pluck_note = SnapToChordTone(linear, root, stage_);
-
-    // --- pinned-pluck exploration (see Config), vs. a live Fitting sitting --
-    //
-    // Two genuinely different situations both read `fit <= 0.f`, and they
-    // need different treatment:
-    //
-    //  - Genuinely idle: waiting for a visitor, or holding the just-resolved
-    //    ending through Transition/Roots while the next one is walked in --
-    //    `resolved_` is true throughout all of that (resolve() sets it,
-    //    reset() is the only thing that clears it). Here the pinned-pluck
-    //    exploration tricks below run, shading comb_hz around the pinned
-    //    chord tone.
-    //  - A live Fitting sitting whose fit level just hasn't started climbing
-    //    yet -- `resolved_` is false (reset() already ran) even though `fit`
-    //    itself still reads exactly 0 for a few frames, since it stays there
-    //    until pond.beginFit() is actually training (see the old comment
-    //    this replaced, kept in git history). This is no longer idle, and
-    //    must not be treated as if it were: re-running the snap against the
-    //    live stage/root while pretending nothing has changed is exactly
-    //    what used to make the pluck jump the instant reset() ran, because
-    //    the stage the snap searches (now stage 0, freshly reset) and the
-    //    root (freshly continued, its own pitch class chosen to match the
-    //    idle centre -- see reset()'s comment) do not generally land the
-    //    plain snap back on the exact note idle was just ringing on. The
-    //    continuity correction computed once at reset(), `visitor_pluck_
-    //    delta_`, is what closes that gap, and it has to be applied on every
-    //    frame of the sitting for as long as it lasts, not just the reset()
-    //    instant itself -- see its own comment in chord.h.
-    if (fit <= 0.f && resolved_) {
+    // Pinned on the visitor's note while the fit is at zero -- the whole idle
+    // wait, and the first frames of Fitting before the pond is training --
+    // and, once the fit is moving, lifted by the checkpoint: stage s of the
+    // last one puts it s/4 of the way up `pluck_climb`, snapped to a tone of
+    // the current chord. Stage 0 is the note itself (a chord tone of every
+    // stage: the root, octaves up), so the first frame the fit leaves zero
+    // nothing moves; the last stage lands on the resolved chord's top voice.
+    // Movement is deliberately not in this any more -- the pluck's pitch
+    // says where the fit is, nothing else. The drop to a very low register
+    // at the Transition handoff is not a note at all -- it happens outside
+    // Chord (see main.mm).
+    if (fit <= 0.f) {
+        v_.pluck_note = visitorNote();
         v_.comb_hz = NoteToHz(v_.pluck_note);
-        // Both read `comb_hz` after the snap above, so neither ever moves the
-        // pluck off its chord tone -- they only shade the Hz sent to the comb.
-        if (cfg_.pluck_center_override_enabled)
-            v_.comb_hz = cfg_.pluck_center_hz;
-        if (cfg_.pluck_offset_enabled)
-            v_.comb_hz *= std::pow(2.f, pluck_offset_semitones_ / 12.f);
         if (cfg_.pluck_wander_enabled) {
             wander_time_ += dt;
             const float t = wander_time_;
@@ -314,15 +189,12 @@ void Chord::update(float fit, float movement, float dt) {
             v_.comb_hz *= (1.f + cfg_.pluck_wander_depth * wobble);
         }
     } else {
-        v_.pluck_note += visitor_pluck_delta_;
+        const float climb = (float)stage_ / (float)(kStages - 1);
+        const float linear = visitorNote() + climb * cfg_.pluck_climb;
+        v_.pluck_note = SnapToChordTone(linear, root, stage_);
         v_.comb_hz = NoteToHz(v_.pluck_note);
-        if (fit > 0.f) wander_time_ = 0.f;
+        wander_time_ = 0.f;
     }
-    // This frame's comb_hz is a trustworthy "idle tuning note" for the next
-    // reset() to continue iff fit itself was 0 -- independent of `resolved_`
-    // above, which only decides *how* this frame's note was computed, not
-    // whether it counts as an idle pin. See reset()'s comment.
-    last_update_was_idle_ = (fit <= 0.f);
 }
 
 }  // namespace mirror

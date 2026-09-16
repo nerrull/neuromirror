@@ -6,7 +6,10 @@
 //             pose given shape with a ridge-regularised linear solve for the
 //             identity coefficients given pose. Runs over several collected
 //             frames at once, which averages out landmark noise. Milliseconds,
-//             once per person.
+//             once per person. Each frame's head rotation (from the tracker)
+//             is applied to the model before the similarity, so a face seen
+//             from above or below is fitted as a turned face, not as a short
+//             one -- see fitIdentity().
 //
 //   per frame cheap. Expression comes straight from MediaPipe's blendshapes
 //             (matched to the basis by ARKit name), head rotation straight from
@@ -196,8 +199,17 @@ private:
     struct Sample {
         std::vector<float> target;   // 68 xy, pixels, y-up
         std::vector<float> expr;     // expression weights
+        // Head rotation from the tracker's 4x4 at the frame (identity when
+        // the tracker pose is off) -- see fitIdentity() on why the solve
+        // needs it.
+        float rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         float score = 0.0f;          // frontality * neutrality
     };
+
+    // The tracker's rotation block, validated: identity when the pose is
+    // switched off or the matrix is degenerate. Shared by update() and
+    // offerIdentityFrame() so a sample is posed exactly as a frame would be.
+    void headRotation(const FaceResult& r, float out[9]) const;
 
     // MediaPipe blendshape scores -> basis expression weights, by ARKit name.
     void mapExpression(const std::vector<float>& blendshapes,

@@ -65,11 +65,12 @@ struct SimParams {
     // is level with the structure lying along +z. 60 keeps the chain 30
     // degrees off vertical, leaning toward the camera.
     float anchorPitchDeg = 60.f;
-    // Where the root leaves an on-axis anchor: this far, cm, past the front
-    // of the face along its normal. The keep-clear tube in front of the face
-    // (viewCylLen) is dropped for that one hop, since the root starts inside
-    // it.
-    float anchorSpawn  = 0.5f;
+    // Where the root leaves an on-axis anchor: inside the head, at the
+    // mask's centre depth under the mouth, and this far, cm, further back
+    // along -normal. The keep-clear tube in front of the face (viewCylLen)
+    // and the mask's own cavity are both dropped for that one hop, since the
+    // root starts inside them and grows out through the mouth.
+    float anchorSpawn  = 0.0f;
     float angleStepGoldenMult = 1.0f;
     float distStepFrac = 0.0f;
     float dwellDays    = 18.0f;
@@ -160,6 +161,21 @@ struct SimParams {
     // 0 is right at the mouth's own depth, and this is just enough to read
     // as "coming from inside" rather than floating in front of the face.
     float spawnBehind  = 0.05f;
+    // How far behind the face, cm along -normal, the dwell's rim ring sits.
+    // 0 rings the face in its own plane, so the wrap is around the rim and
+    // the nest reads as a frame; positive pulls it back behind the head,
+    // where the cavity (faceHalfD deep) no longer keeps the roots out, so
+    // they gather into a nest the face sits in front of.
+    float nestBehind   = 0.0f;
+    // A nest attractor is dropped once any root node comes within this of
+    // it, cm, so the wrap moves on instead of circling a spot it has
+    // reached. 0 keeps every attractor for the whole dwell.
+    float nestHitRadius = 1.5f;
+    // The nest's attractor hemisphere behind the mask (see nestAttractors in
+    // root_sim.cpp): how many rings from the rim back to the pole, and how
+    // many points around each. 1 ring is the old rim alone (plus the pole).
+    int   nestRings   = 3;
+    int   nestPerRing = 8;
     // The cavity a mask sits in is the face it will show, not a fixed oval.
     // RootScene draws a mask's face at faceScale x faceUnit (SimMask::
     // faceUnit, the layout's mask size) times a mesh normalised to a largest
@@ -243,6 +259,8 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("coneShellThickness", p.coneShellThickness);
     f("growthDt", p.growthDt);
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
+    f("nestBehind", p.nestBehind); f("nestHitRadius", p.nestHitRadius);
+    f("nestRings", p.nestRings); f("nestPerRing", p.nestPerRing);
     f("cavityMargin", p.cavityMargin);
     f("seed", p.seed);
 }

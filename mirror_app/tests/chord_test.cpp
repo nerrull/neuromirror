@@ -34,14 +34,27 @@ void hold(mirror::Chord& c, float fit, float movement, float secs) {
 }
 
 float NoteToHz(float midi) { return 440.f * std::pow(2.f, (midi - 69.f) / 12.f); }
-float HzToNote(float hz) { return 69.f + 12.f * std::log2(hz / 440.f); }
+
+// A chord with a known tuning: centre on C5 (72) with no per-visitor offset
+// and the chord two octaves under it, so the root is 48 and the pad opens on
+// 36 + offsets.
+// Everything below that isn't about the draw itself uses this.
+mirror::Chord makeChord() {
+    mirror::Chord c;
+    c.config().pluck_center_note = 72.f;
+    c.config().pluck_offset_max_semitones = 0;
+    c.config().chord_octave = -2;
+    c.newVisitor();
+    c.reset();
+    return c;
+}
 
 }  // namespace
 
 int main() {
     // --- the opening voicing ------------------------------------------------
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         const mirror::ChordVoicing& v = c.voicing();
         check(v.stage == 0, "starts at the first checkpoint");
         const float* o = mirror::Chord::StageOffsets(0);
@@ -56,7 +69,7 @@ int main() {
 
     // --- a fit that converges walks the whole arc ---------------------------
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         int seen_stage = 0;
         for (float fit = 0.f; fit <= 1.001f; fit += 0.002f) {
             c.update(fit, 0.f, kDt);
@@ -86,7 +99,7 @@ int main() {
     // room no longer earns. What still has to hold is that a fit sitting near
     // a boundary doesn't chatter -- that's what the hysteresis gap is for.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.80f, 0.f, 2.f);
         check(c.voicing().stage == 3, "0.80 reaches the fourth checkpoint");
         // A small dip that stays above stage 3's retreat threshold (0.75 -
@@ -112,7 +125,7 @@ int main() {
     // --- hysteresis: sitting exactly on a boundary does not chatter, ---------
     // --- either direction ------------------------------------------------
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.25f, 0.f, 1.f);
         check(c.voicing().stage == 0,
               "a fit resting exactly on the 0.25 boundary has not advanced yet");
@@ -133,7 +146,7 @@ int main() {
     // here is that `note`/`target` land on the checkpoint's exact voicing the
     // same frame it fires, with nothing in between.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         // Straight to the last stage in one frame -- the worst case, a fit that
         // lands all at once.
         c.update(1.f, 0.f, kDt);
@@ -151,7 +164,7 @@ int main() {
 
     // --- stageChanged() is the edge, not the level --------------------------
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         check(!c.stageChanged(), "no checkpoint has fired before the first update");
         c.update(0.10f, 0.f, kDt);
         check(!c.stageChanged() && c.stage() == 0,
@@ -166,7 +179,7 @@ int main() {
 
     // --- detune: movement beats, stillness does not -------------------------
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         c.config().detune_cents = 4.f;
         hold(c, 0.f, 0.f, 2.f);
         const float still[4] = {c.voicing().note[0], c.voicing().note[1],
@@ -184,49 +197,51 @@ int main() {
 
     // --- the pluck is pinned to the chord, and intensity opens it upward ----
     {
-        mirror::Chord c;
-        // At zero intensity it rings on the top of the opening voicing, an
-        // octave up -- 48 + 22 (stage 0's top voice) + 12 lands exactly on
-        // pluck_high (34), so the snap is a no-op here by construction.
+        mirror::Chord c = makeChord();
+        // At fit 0 it rings the visitor's note itself -- the root two
+        // octaves up, a chord tone of every stage, so no snap moves it.
         c.update(0.f, 0.f, kDt);
-        check(std::fabs(c.voicing().pluck_note - (48.f + 34.f)) < 1e-3f,
-              "the pluck starts on the chord's top note, an octave up");
-        check(std::fabs(c.voicing().comb_hz - NoteToHz(48.f + 34.f)) < 0.1f,
+        check(std::fabs(c.voicing().pluck_note - 72.f) < 1e-3f,
+              "the pluck starts on the visitor's note");
+        check(std::fabs(c.voicing().comb_hz - NoteToHz(72.f)) < 0.1f,
               "and the comb frequency is that note in Hz");
         // At fit=1 the chord resolves in the same frame (stage jumps straight
-        // to 4, see the checkpoint test above), and intensity is 0.5 (fit and
-        // movement averaged, movement=0 here) -- the raw target, root + 34 +
-        // 0.5*12 = root + 40, lands exactly on stage 4's top voice an octave
-        // up (28 + 12), so the snap is again a no-op by construction. Higher
-        // than the fit=0 case: intensity opens the pluck upward, it does not
-        // glide it down.
+        // to 4, see the checkpoint test above), which is the top of the
+        // climb: 72 + 16 = 88, which is the resolved chord's top voice (48 +
+        // 28 + 12) -- a chord tone already, so the snap leaves it.
         c.update(1.f, 0.f, kDt);
-        check(std::fabs(c.voicing().pluck_note - (48.f + 40.f)) < 1e-3f,
-              "full fit opens the pluck upward, still on a chord tone");
-        check(c.voicing().comb_hz > NoteToHz(48.f + 34.f),
+        check(std::fabs(c.voicing().pluck_note - 88.f) < 1e-3f,
+              "the last checkpoint lifts the pluck to the chord's top voice");
+        check(c.voicing().comb_hz > NoteToHz(72.f),
               "and the comb frequency rises with it, not falls");
-        // Movement alone (fit held at 0, so the checkpoint never advances --
-        // see the checkpoint test above) is the same 0.5 intensity as the
-        // fit=1 case above, just against stage 0's own, narrower voicing:
-        // it must not be lower than the zero-intensity baseline.
-        mirror::Chord cm;
+        // The climb is by checkpoint, monotonic, one chord tone per stage.
+        mirror::Chord cs = makeChord();
+        float prev = 72.f;
+        const float fits[4] = {0.30f, 0.55f, 0.80f, 1.f};
+        for (int s = 0; s < 4; ++s) {
+            cs.update(fits[s], 0.f, kDt);
+            check(cs.voicing().stage == s + 1, "the fit reached the next checkpoint");
+            check(cs.voicing().pluck_note > prev, "each checkpoint lifts the pluck");
+            prev = cs.voicing().pluck_note;
+        }
+        // Movement alone, with the fit at 0, is the pin: the pluck stays on
+        // the visitor's note whatever the room is doing, so the idle wait
+        // rings one note and the handoff into Fitting has nothing to jump to.
+        mirror::Chord cm = makeChord();
         cm.update(0.f, 1.f, kDt);
         check(cm.voicing().stage == 0, "movement alone does not advance the checkpoint");
-        check(cm.voicing().comb_hz >= NoteToHz(48.f + 34.f) - 0.1f,
-              "movement alone never pulls the pluck below the zero-intensity base");
-        // Full fit and full movement together is the same intensity (1.0
-        // averages to 1.0 either way) as full fit alone would be if the
-        // checkpoint gate let intensity exceed what fit alone reaches --
-        // here it must be at least as high as the fit=1-alone case, since
-        // stage and intensity can only add register, never remove it.
-        mirror::Chord cb;
+        check(std::fabs(cm.voicing().pluck_note - 72.f) < 1e-3f,
+              "movement alone never moves the pinned pluck");
+        // Movement does not move the pluck at all any more -- its pitch says
+        // where the fit is, nothing else.
+        mirror::Chord cb = makeChord();
         cb.update(1.f, 1.f, kDt);
-        check(cb.voicing().comb_hz >= c.voicing().comb_hz - 0.1f,
-              "fit and movement together open the pluck at least as far as fit alone");
+        check(std::fabs(cb.voicing().pluck_note - c.voicing().pluck_note) < 1e-3f,
+              "movement adds nothing to the pluck's climb");
         // The comb's range must stay inside the game parameter's 20..2000 Hz.
         for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
             for (float mv = 0.f; mv <= 1.f; mv += 0.5f) {
-                mirror::Chord cr;
+                mirror::Chord cr = makeChord();
                 cr.update(fit, mv, kDt);
                 check(cr.voicing().comb_hz > 20.f && cr.voicing().comb_hz < 2000.f,
                       "the comb frequency stays inside the Comb_Tuning range");
@@ -240,7 +255,7 @@ int main() {
     // match one of that stage's offsets mod 12 -- the snap must never leave a
     // note that is not actually in the chord.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         for (float fit = 0.f; fit <= 1.f; fit += 0.01f) {
             c.update(fit, fit, kDt);
             const float* o = mirror::Chord::StageOffsets(c.voicing().stage);
@@ -254,22 +269,42 @@ int main() {
         }
     }
 
-    // --- a key change transposes, it does not glide -------------------------
+    // --- the chord octave transposes, it does not glide ---------------------
     //
-    // The operator moving the key slider is not a chord change: every voice
-    // should follow immediately, or the pad spends a glide arriving at a key
-    // nobody is listening for any more.
+    // The operator moving the octave slider is not a chord change: every
+    // voice should follow immediately, and the pluck's note is not its
+    // business.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.f, 0.f, 1.f);
-        c.config().root = 55.f;
+        c.config().chord_octave = -1;
         c.update(0.f, 0.f, kDt);
+        check(std::fabs(c.effectiveRoot() - 60.f) < 1e-3f,
+              "the octave slider moves the root by whole octaves");
         const float* o = mirror::Chord::StageOffsets(0);
         for (int i = 0; i < mirror::kChordVoices; ++i)
-            check(std::fabs(c.voicing().note[i] - (55.f - 12.f + o[i])) < 1e-3f,
-                  "a key change moves every voice at once");
-        check(std::fabs(c.voicing().pluck_note - (55.f + 34.f)) < 1e-3f,
-              "the pluck follows the key too");
+            check(std::fabs(c.voicing().note[i] - (60.f - 12.f + o[i])) < 1e-3f,
+                  "and every voice at once");
+        check(std::fabs(c.voicing().pluck_note - 72.f) < 1e-3f,
+              "the pinned pluck stays on the visitor's note");
+        // What Wwise sees: `Key` is the visitor's note in the bank's authored
+        // register, untouched by the slider -- it reaches the pluck, the
+        // drone and the drops -- and the chord's octave rides on `PadOctave`
+        // alone, so the pad still lands on the root.
+        check(std::fabs(c.keyNote() - (72.f - 36.f)) < 1e-3f,
+              "Key is the visitor's note, chord octave excluded");
+        check(std::fabs(c.padOctave() - (60.f - 36.f)) < 1e-3f,
+              "PadOctave carries the pad the rest of the way to the root");
+        c.config().chord_octave = -3;
+        check(std::fabs(c.keyNote() - 36.f) < 1e-3f,
+              "and Key does not move when the slider does");
+        check(std::fabs(c.padOctave() - 0.f) < 1e-3f,
+              "-3 is the bank's own register: no pad offset at all");
+        c.config().chord_octave = -1;
+        // At the default -1 the climb's top is the chord's own top voice.
+        c.update(1.f, 0.f, kDt);
+        check(std::fabs(c.voicing().pluck_note - (60.f + 28.f)) < 1e-3f,
+              "an octave down, the pluck's climb ends on the chord's top voice");
     }
 
     // --- the octave slider transposes the pad, and only the pad -------------
@@ -277,7 +312,7 @@ int main() {
     // It moves the pad's register without moving the piece's key, so the pluck
     // -- which reads the key directly -- must stay exactly where it was.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.f, 0.f, 1.f);
         const float pluck_before = c.voicing().pluck_note;
         c.config().octave = -24.f;
@@ -294,7 +329,7 @@ int main() {
     //
     // Somebody walks off halfway. The next person must get the piece unresolved.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.9f, 0.f, 5.f);
         check(c.voicing().stage == 3, "walked most of the arc");
         c.reset();
@@ -313,7 +348,7 @@ int main() {
     // right afterwards (see main.mm's Idle entry) must not immediately drag
     // the chord back down with it.
     {
-        mirror::Chord c;
+        mirror::Chord c = makeChord();
         hold(c, 0.6f, 0.f, 2.f);
         check(c.voicing().stage == 2, "stalled short of the final checkpoint");
         c.resolve();
@@ -335,205 +370,67 @@ int main() {
         check(c.stage() >= 1, "and the checkpoint tracks the fit again after reset()");
     }
 
-    // --- root follows idle tuning --------------------------------------------
+    // --- one note per visitor: the pluck's pin and the chord's root agree --
     //
-    // Simulate an idle wait: fit held at 0 (idle never trains the pond) with
-    // wander on -- and on with a large amplitude, deliberately, so a bug that
-    // let the root pick up the wander's drift (rather than the pluck's target
-    // note, ignoring it) would show up unmistakably. reset() -- the Idle ->
-    // Fitting handoff for the next visitor -- should carry the pluck's
-    // *target* note (`pluck_note`, the snapped chord tone -- unaffected by
-    // wander, which only shades the Hz the comb rings with), transposed by
-    // whole octaves into the pad's register, as this visitor's root.
+    // The G5 default with a +/-5 draw: whatever newVisitor() lands on, the
+    // pinned pluck rings exactly that note, the root is the same pitch class
+    // in the key's octave, and the first Fitting frame changes nothing.
     {
         mirror::Chord c;
-        check(c.config().root_follows_idle_tuning, "on by default");
-        // resolve() first -- the pinned-pluck exploration below (wander) only
-        // runs while genuinely idle/holding a resolved ending, not on a bare
-        // fresh/just-reset Chord (which counts as a live, if quiet, Fitting
-        // sitting -- see update()'s comment); this is what main.mm's real
-        // Idle-phase entry always does before the wait begins.
-        c.resolve();
-        c.config().pluck_wander_enabled = true;
-        c.config().pluck_wander_period_s = 1.f;
-        c.config().pluck_wander_depth = 0.3f;  // large: up to +/-30% of the pinned Hz
-        hold(c, 0.f, 0.3f, 3.f);
-        const float pluck_note = c.voicing().pluck_note;
-        const float idle_hz = c.voicing().comb_hz;
-        check(std::fabs(idle_hz - NoteToHz(pluck_note)) > 5.f,
-              "the wander actually moved the pinned pluck well off its target note");
-
-        c.reset();
-        const float octaves = std::round((pluck_note - c.config().root) / 12.f);
-        const float want_root = pluck_note - octaves * 12.f;
-        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
-              "with the flag on, reset()'s root voice continues the pluck's target "
-              "note (not the wandered Hz), octave-shifted into the pad's register");
-
-        // With the flag off, the old behaviour: reset() always lands on the
-        // configured root, no matter what the pluck was doing beforehand.
-        mirror::Chord c2;
-        c2.resolve();
-        c2.config().root_follows_idle_tuning = false;
-        c2.config().pluck_wander_enabled = true;
-        c2.config().pluck_wander_period_s = 1.f;
-        hold(c2, 0.f, 0.3f, 3.f);
-        c2.reset();
-        check(std::fabs(c2.voicing().note[0] - (c2.config().root + c2.config().octave)) < 1e-3f,
-              "with the flag off, reset() still uses the configured root");
-    }
-
-    // --- root follows idle tuning: the per-visitor offset IS carried --------
-    //
-    // Unlike wander (above), the per-visitor pluck offset is a real pitch --
-    // "this visitor's tuning" -- not ear noise around the pinned note (see
-    // its comment in chord.h), so reset() should fold it into the continued
-    // root exactly, on top of `pluck_note`. Redraw Chords until the RNG lands
-    // a nonzero offset (bounded -- the +/-3 semitone range makes this settle
-    // in a handful of tries) so the assertion below can't pass by accident on
-    // a 0 draw.
-    {
-        mirror::Chord c;
-        // See the resolve() comment on the wander test above -- the same
-        // applies here: the offset's own Hz-shading only runs while
-        // genuinely idle.
-        c.resolve();
-        c.config().pluck_offset_enabled = true;
-        c.config().pluck_offset_max_semitones = 3;
-        c.config().pluck_wander_enabled = false;
-        float offset = 0.f;
-        float pluck_note = 0.f;
-        for (int tries = 0; tries < 50 && offset == 0.f; ++tries) {
-            // newVisitor(), not reset() -- the offset is drawn at the Roots
-            // -> Idle handoff now, held fixed through the idle wait, and no
-            // longer redrawn at reset() itself (the Idle -> Fitting handoff);
-            // see Chord::newVisitor()'s comment.
+        c.config().pluck_center_note = 79.f;
+        c.config().pluck_offset_max_semitones = 5;
+        bool saw_nonzero = false;
+        for (int visitor = 0; visitor < 40; ++visitor) {
             c.newVisitor();
-            hold(c, 0.f, 0.f, 0.05f);
-            pluck_note = c.voicing().pluck_note;
-            offset = 12.f * std::log2(c.voicing().comb_hz / NoteToHz(pluck_note));
+            const float n = c.visitorNote();
+            check(n >= 74.f && n <= 84.f, "the draw stays inside the offset range");
+            if (n != 79.f) saw_nonzero = true;
+            // Idle: resolved, fit at 0.
+            c.resolve();
+            hold(c, 0.f, 0.3f, 2.f);
+            check(std::fabs(c.voicing().pluck_note - n) < 1e-3f,
+                  "idle rings the visitor's note");
+            check(std::fabs(c.voicing().comb_hz - NoteToHz(n)) < 0.1f,
+                  "as Hz, exactly");
+            // The root: the note itself, an octave down.
+            const float root = c.effectiveRoot();
+            check(std::fabs(root - (n - 12.f)) < 1e-3f,
+                  "the root is the visitor's note an octave down");
+            // The handoff: reset(), then the first frames of Fitting with the
+            // fit still at 0 and the room moving -- nothing moves.
+            c.reset();
+            c.update(0.f, 0.5f, kDt);
+            check(std::fabs(c.voicing().pluck_note - n) < 1e-3f,
+                  "the pluck does not move at the Idle -> Fitting handoff");
+            check(std::fabs(c.effectiveRoot() - root) < 1e-3f,
+                  "nor does the root");
+            // And the moment the fit leaves zero, the snap starts from the
+            // note itself: a tiny fit is a tiny push, snapped back onto it.
+            c.update(0.01f, 0.f, kDt);
+            check(std::fabs(c.voicing().pluck_note - n) < 1e-3f,
+                  "a fit barely off zero leaves the pluck on its note");
         }
-        check(offset != 0.f, "the per-visitor offset draw landed nonzero within a few tries");
-
-        // `offset` and `pluck_note` above are exactly the idle state this
-        // reset() call is about to read -- nothing has run update() since.
-        c.reset();
-        const float idle_note = pluck_note + offset;
-        const float octaves = std::round((idle_note - c.config().root) / 12.f);
-        const float want_root = idle_note - octaves * 12.f;
-        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-2f,
-              "the per-visitor offset -- possibly fractional -- is carried into the "
-              "continued root exactly, unlike wander/override");
+        check(saw_nonzero, "40 draws over +/-5 semitones were not all zero");
     }
 
-    // --- root follows idle tuning: the center override IS the continued -----
-    // centre (not excluded like wander)
-    //
-    // Unlike wander, the pinned pluck's center-frequency override is a
-    // deliberate choice of centre, not ear noise -- see the Config comment on
-    // `pluck_center_override_enabled`. With the override on, offset off, and
-    // wander on (to prove wander really is excluded even when it's the only
-    // other thing shading `comb_hz`), reset()'s continued root should be
-    // `HzToNote(pluck_center_hz)`, transposed by whole octaves into the pad's
-    // register -- not the snapped chord tone `pluck_note` would otherwise
-    // give, and not the wander-shaded Hz either.
+    // --- wander shades the Hz, never the note or the root -------------------
     {
-        mirror::Chord c;
-        c.resolve();
-        c.config().pluck_center_override_enabled = true;
-        c.config().pluck_center_hz = 100.f;  // deliberately not a chord tone
-        c.config().pluck_offset_enabled = false;
+        mirror::Chord c = makeChord();
         c.config().pluck_wander_enabled = true;
         c.config().pluck_wander_period_s = 1.f;
         c.config().pluck_wander_depth = 0.3f;
-        hold(c, 0.f, 0.3f, 3.f);
-        check(std::fabs(c.voicing().comb_hz - 100.f) > 1.f,
-              "wander actually moved comb_hz well off the override's 100 Hz");
-
-        c.reset();
-        const float centre_note = HzToNote(100.f);
-        const float octaves = std::round((centre_note - c.config().root) / 12.f);
-        const float want_root = centre_note - octaves * 12.f;
-        check(std::fabs(c.voicing().note[0] - (want_root + c.config().octave)) < 1e-3f,
-              "with the override on, reset()'s root continues HzToNote(pluck_center_hz) "
-              "-- the override IS the chosen centre -- transposed into the pad's "
-              "register, ignoring wander entirely");
-    }
-
-    // --- the pluck's own target note is continuous across the handoff, ------
-    // not just the root --------------------------------------------------
-    //
-    // The root continuing (the tests above) is necessary but not sufficient:
-    // the stage the pluck's snap searches also changes at reset() (from
-    // whichever stage the resolved ending held, down to stage 0), so even a
-    // perfectly-continued root does not by itself guarantee the plain
-    // chord-tone snap lands back on the exact note idle was ringing on --
-    // that gap is what `visitor_pluck_delta_` closes (see its comment in
-    // chord.h, and update()'s). Wander is off throughout: it is real,
-    // audible motion around the pin by design, not a discontinuity to guard
-    // against, and turning it off is what lets an exact Hz comparison here
-    // mean something.
-    {
-        mirror::Chord c;
         c.resolve();
-        c.config().pluck_wander_enabled = false;
-        hold(c, 0.f, 0.f, 3.f);  // idle settles on its pinned chord tone
-        const float comb_before = c.voicing().comb_hz;
+        hold(c, 0.f, 0.f, 0.37f);
+        check(std::fabs(c.voicing().comb_hz - NoteToHz(72.f)) > 1.f,
+              "the wander actually moved the pinned comb Hz");
+        check(std::fabs(c.voicing().pluck_note - 72.f) < 1e-3f,
+              "but not the note");
+        check(std::fabs(c.effectiveRoot() - 48.f) < 1e-3f, "nor the root");
+        // It stops the moment the fit moves the pluck.
         c.reset();
-        c.update(0.f, 0.f, kDt);
-        check(std::fabs(c.voicing().comb_hz - comb_before) < 0.01f,
-              "the pluck's Hz is continuous across the Idle -> Fitting reset, "
-              "offset off");
-
-        // Same, with the per-visitor offset on -- this is the case that was
-        // actually broken: the offset shaded comb_hz all through idle and
-        // used to vanish the instant update() left the idle branch.
-        mirror::Chord c2;
-        c2.config().pluck_wander_enabled = false;
-        c2.config().pluck_offset_enabled = true;
-        c2.config().pluck_offset_max_semitones = 3;
-        float offset2 = 0.f;
-        for (int tries = 0; tries < 50 && offset2 == 0.f; ++tries) {
-            c2.newVisitor();
-            c2.resolve();
-            hold(c2, 0.f, 0.f, 3.f);
-            offset2 = 12.f * std::log2(c2.voicing().comb_hz / NoteToHz(c2.voicing().pluck_note));
-        }
-        check(offset2 != 0.f, "the offset draw landed nonzero for this test too");
-        const float comb_before2 = c2.voicing().comb_hz;
-        c2.reset();
-        c2.update(0.f, 0.f, kDt);
-        check(std::fabs(c2.voicing().comb_hz - comb_before2) < 0.01f,
-              "with the per-visitor offset on, the pluck's Hz is still "
-              "continuous across the reset() -- this is the bug fixed here");
-        // The pad's root voice continues too, same as the root-continuity
-        // tests above -- confirms the pluck fix did not disturb it.
-        const float* o0 = mirror::Chord::StageOffsets(0);
-        check(std::fabs(c2.voicing().note[0] -
-                        (c2.effectiveRoot() + c2.config().octave + o0[0])) < 1e-3f,
-              "the pad's root voice still matches effectiveRoot() after the fix");
-
-        // With root_follows_idle_tuning off, the old/plain behaviour: no
-        // continuity is attempted, so the pluck is free to move at reset().
-        mirror::Chord c3;
-        c3.config().root_follows_idle_tuning = false;
-        c3.config().pluck_wander_enabled = false;
-        c3.config().pluck_offset_enabled = true;
-        c3.config().pluck_offset_max_semitones = 3;
-        float offset3 = 0.f;
-        for (int tries = 0; tries < 50 && offset3 == 0.f; ++tries) {
-            c3.newVisitor();
-            c3.resolve();
-            hold(c3, 0.f, 0.f, 3.f);
-            offset3 = 12.f * std::log2(c3.voicing().comb_hz / NoteToHz(c3.voicing().pluck_note));
-        }
-        check(offset3 != 0.f, "the offset draw landed nonzero for the flag-off case too");
-        const float comb_before3 = c3.voicing().comb_hz;
-        c3.reset();
-        c3.update(0.f, 0.f, kDt);
-        check(std::fabs(c3.voicing().comb_hz - comb_before3) > 0.01f,
-              "with the flag off, the old behaviour holds -- the pluck may "
-              "move at reset()");
+        c.update(0.5f, 0.f, kDt);
+        check(std::fabs(c.voicing().comb_hz - NoteToHz(c.voicing().pluck_note)) < 0.01f,
+              "a moving fit rings the snapped note with no wander on it");
     }
 
     if (failures == 0) std::printf("chord_test: OK\n");

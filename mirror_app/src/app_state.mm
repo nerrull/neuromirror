@@ -269,7 +269,6 @@ mirror::Presence   g_presence;    // the room, as numbers the synth can use
 mirror::Chord      g_chord;
 bool  g_audio_on   = true;        // send anything at all
 bool  g_audio_auto = true;        // the phases post their own events
-float g_audio_key  = 48.f;        // MIDI note: the piece's base pitch
 float g_audio_intensity = 1.f;    // master, on the main bus
 float g_audio_transpose = 0.f;    // semitones: offsets every emitter, Wwise-side
 bool  g_shepherd_on = true;       // the Fitting-phase glissando, on or off
@@ -478,6 +477,9 @@ float g_cam_x0 = 0.15f, g_cam_y0 = 0.05f, g_cam_x1 = 0.85f, g_cam_y1 = 0.95f;
 float g_cam_feather = 0.03f;   // soft edge, as a fraction of the frame
 int   g_head_mode = (int)HeadMode::Track;
 float g_head_smooth = 0.25f;    // EMA per frame; 1 = no smoothing
+float g_shift_gain_fit  = 1.f;
+float g_shift_gain_idle = 0.25f;
+float g_stab_size_mul   = 1.f;
 
 // The tracked head, smoothed, in normalised frame coords. Smoothed because the
 // landmark box jitters by a pixel or two on a perfectly still head, and every

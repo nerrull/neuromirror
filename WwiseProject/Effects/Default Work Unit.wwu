@@ -99,14 +99,14 @@
 				<Effect Name="Mirror_Pad_Flanger" ID="{900C0C20-B02A-4C3A-BF6B-F9B2C08AFB04}" PluginName="Wwise Flanger" CompanyID="0" PluginID="125" PluginType="3">
 					<PropertyList>
 						<Property Name="DelayTime" Type="Real32" Value="1"/>
-						<Property Name="FeedBackLevel" Type="Real32" Value="0.7"/>
+						<Property Name="FeedBackLevel" Type="Real32" Value="0.35"/>
 						<Property Name="FeedForwardLevel" Type="Real32" Value="0.7"/>
-						<Property Name="ModDepth" Type="Real32" Value="65.1"/>
+						<Property Name="ModDepth" Type="Real32" Value="30"/>
 						<Property Name="ModPWM" Type="Real32" Value="26"/>
 						<Property Name="ModPhaseSpread" Type="Real32" Value="180"/>
-						<Property Name="ModSmoothing" Type="Real32" Value="59"/>
+						<Property Name="ModSmoothing" Type="Real32" Value="85"/>
 						<Property Name="ModWaveform" Type="int32" Value="3"/>
-						<Property Name="WetDryMix" Type="Real32" Value="30"/>
+						<Property Name="WetDryMix" Type="Real32" Value="54"/>
 					</PropertyList>
 					<ObjectLists>
 						<ObjectList Name="RTPC">

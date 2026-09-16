@@ -778,10 +778,12 @@ private:
     // once Orbit is entered (enterOrbit resets the lighting clock).
     void enterTurn(RootScene& roots, const RootSequenceParams& P) {
         if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P);
-        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
-            roots.setStructureVisible(k, true);
+        // Dark first, then visible in one go: setStructureVisible rebuilds
+        // every face each call, and a dozen of those on the pop-in frame
+        // was the Turn-entry hitch.
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k)
             roots.setStructureLit(k, false);
-        }
+        roots.setAllStructuresVisible(true);
         orbitBound(roots, P);
     }
     // Orbit's entry, from the Turn-end pose: the hood placed if it is not
@@ -800,10 +802,12 @@ private:
         if (neighboursGen_ != roots.growGeneration()) placeHood(roots, P);
         // A hood already standing (a jump back into Orbit) starts over: all
         // of it visible and dark.
-        for (int k = 0; k < (int)roots.neighbours.size(); ++k) {
-            roots.setStructureVisible(k, true);
+        // Dark first, then visible in one go: setStructureVisible rebuilds
+        // every face each call, and a dozen of those on the pop-in frame
+        // was the Turn-entry hitch.
+        for (int k = 0; k < (int)roots.neighbours.size(); ++k)
             roots.setStructureLit(k, false);
-        }
+        roots.setAllStructuresVisible(true);
         // The lighting order: nearest structure first, so what lights first
         // is what is in front. Fixed by the placement, so a rerun lights the
         // same structures in the same order.

@@ -225,6 +225,7 @@ bool FaceFitter::offerIdentityFrame(const FaceResult& r, int w, int h) {
         s.target[i * 2 + 1] = -l.y * float(h);   // pixels are y-down; the basis is y-up
     }
     mapExpression(r.blendshapes, r.blendshape_names, s.expr);
+    headRotation(r, s.rot);
     if (worst_at >= 0) frames_[size_t(worst_at)] = std::move(s);
     else frames_.push_back(std::move(s));
     return true;
@@ -243,24 +244,44 @@ bool FaceFitter::fitIdentity(float* residual_px) {
     const std::vector<float>& lm_id = basis_.lmIdentity();
     const std::vector<float>& lm_ex = basis_.lmExpression();
 
-    // Per frame: the expression's landmark contribution, subtracted up front so
-    // identity is fitted to the face rather than to the face's expression.
-    std::vector<std::vector<double>> base(n_frames);   // neutral + expression, xy
+    // Per frame: the model turned by that frame's head rotation, xy only. The
+    // similarity below is 2D, so without this a face seen from above (a
+    // sensor mounted over the screen, a visitor looking down at it) projects
+    // foreshortened and the solve explains the short, wide outline it sees
+    // with a short, wide *identity* -- the same wrong face for everybody,
+    // since the camera geometry is the same for everybody. Rotating about
+    // the origin rather than the mesh centroid is fine here: the difference
+    // is a translation, and the similarity solves translation per frame.
+    //
+    // Rotation is linear, so the identity modes rotate the same way and the
+    // solve stays a linear least squares: per frame, xy of R * mode.
+    auto rotXY = [](const float R[9], const float* v, double& x, double& y) {
+        x = double(R[0]) * v[0] + double(R[1]) * v[1] + double(R[2]) * v[2];
+        y = double(R[3]) * v[0] + double(R[4]) * v[1] + double(R[5]) * v[2];
+    };
+    // The expression's landmark contribution is folded into the base up
+    // front, so identity is fitted to the face rather than to the face's
+    // expression.
+    std::vector<std::vector<double>> base(n_frames);    // R*(neutral + expression), xy
+    std::vector<std::vector<double>> modes(n_frames);   // R*mode, xy, [m][p]
     for (size_t k = 0; k < n_frames; ++k) {
-        base[k].assign(size_t(n_lm) * 2, 0.0);
-        for (int p = 0; p < n_lm; ++p) {
-            base[k][size_t(p) * 2]     = lm_neutral[size_t(p) * 3];
-            base[k][size_t(p) * 2 + 1] = lm_neutral[size_t(p) * 3 + 1];
-        }
+        const float* R = frames_[k].rot;
+        std::vector<float> b3(lm_neutral.begin(), lm_neutral.end());
         const std::vector<float>& w = frames_[k].expr;
         for (size_t m = 0; m < w.size() && m < size_t(basis_.expressionModes()); ++m) {
             if (w[m] == 0.0f) continue;
             const float* src = &lm_ex[m * size_t(n_lm) * 3];
-            for (int p = 0; p < n_lm; ++p) {
-                base[k][size_t(p) * 2]     += double(w[m]) * src[size_t(p) * 3];
-                base[k][size_t(p) * 2 + 1] += double(w[m]) * src[size_t(p) * 3 + 1];
-            }
+            for (size_t i = 0; i < b3.size(); ++i) b3[i] += w[m] * src[i];
         }
+        base[k].assign(size_t(n_lm) * 2, 0.0);
+        for (int p = 0; p < n_lm; ++p)
+            rotXY(R, &b3[size_t(p) * 3], base[k][size_t(p) * 2], base[k][size_t(p) * 2 + 1]);
+        modes[k].assign(size_t(n_id) * n_lm * 2, 0.0);
+        for (int m = 0; m < n_id; ++m)
+            for (int p = 0; p < n_lm; ++p)
+                rotXY(R, &lm_id[size_t(m) * n_lm * 3 + size_t(p) * 3],
+                      modes[k][(size_t(m) * n_lm + p) * 2],
+                      modes[k][(size_t(m) * n_lm + p) * 2 + 1]);
     }
 
     std::vector<double> a(size_t(n_id), 0.0);
@@ -277,7 +298,7 @@ bool FaceFitter::fitIdentity(float* residual_px) {
                 double x = base[k][size_t(p) * 2], y = base[k][size_t(p) * 2 + 1];
                 for (int m = 0; m < n_id; ++m) {
                     if (a[size_t(m)] == 0.0) continue;
-                    const float* src = &lm_id[size_t(m) * n_lm * 3 + size_t(p) * 3];
+                    const double* src = &modes[k][(size_t(m) * n_lm + p) * 2];
                     x += a[size_t(m)] * src[0];
                     y += a[size_t(m)] * src[1];
                 }
@@ -300,9 +321,9 @@ bool FaceFitter::fitIdentity(float* residual_px) {
             // J: each identity mode's landmark offset, rotated and scaled into
             // image space -- i.e. how the projection moves per unit of alpha.
             for (int m = 0; m < n_id; ++m) {
-                const float* src = &lm_id[size_t(m) * n_lm * 3];
+                const double* src = &modes[k][size_t(m) * n_lm * 2];
                 for (int p = 0; p < n_lm; ++p) {
-                    const double vx = src[size_t(p) * 3], vy = src[size_t(p) * 3 + 1];
+                    const double vx = src[size_t(p) * 2], vy = src[size_t(p) * 2 + 1];
                     J[(size_t(p) * 2) * n_id + m]     = s * (r00 * vx + r01 * vy);
                     J[(size_t(p) * 2 + 1) * n_id + m] = s * (r10 * vx + r11 * vy);
                 }
@@ -349,8 +370,10 @@ bool FaceFitter::fitIdentity(float* residual_px) {
         for (size_t k = 0; k < n_frames; ++k) {
             basis_.reconstructLandmarks(alpha_, frames_[k].expr, lm);
             for (int p = 0; p < n_lm; ++p) {
-                cur[size_t(p) * 2]     = lm[size_t(p) * 3];
-                cur[size_t(p) * 2 + 1] = lm[size_t(p) * 3 + 1];
+                double x, y;
+                rotXY(frames_[k].rot, &lm[size_t(p) * 3], x, y);
+                cur[size_t(p) * 2]     = float(x);
+                cur[size_t(p) * 2 + 1] = float(y);
             }
             const FacePose P = Similarity2D(cur, frames_[k].target);
             for (int p = 0; p < n_lm; ++p) {
@@ -387,6 +410,21 @@ void RotateAboutCentroid(std::vector<float>& verts, const float rot[9]) {
     }
 }
 
+void FaceFitter::headRotation(const FaceResult& r, float out[9]) const {
+    for (int i = 0; i < 9; ++i) out[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+    if (!use_tracker_pose_) return;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) out[i * 3 + j] = r.transform[i * 4 + j];
+    // Guard against a degenerate matrix (identity is what the tracker leaves
+    // when it has no pose to report, which is harmless).
+    const float det =
+        out[0] * (out[4] * out[8] - out[5] * out[7]) -
+        out[1] * (out[3] * out[8] - out[5] * out[6]) +
+        out[2] * (out[3] * out[7] - out[4] * out[6]);
+    if (!(det > 0.5f && det < 1.5f))
+        for (int i = 0; i < 9; ++i) out[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+}
+
 bool FaceFitter::update(const FaceResult& r, int w, int h) {
     if (!basis_.valid() || !r.valid) return false;
 
@@ -400,18 +438,8 @@ bool FaceFitter::update(const FaceResult& r, int w, int h) {
     // taken from it: they are in MediaPipe's own metric space, whereas what is
     // wanted here is placement in *this* image, which the 2D similarity below
     // solves directly against the observed landmarks.
+    headRotation(r, rot_);
     if (use_tracker_pose_) {
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j) rot_[i * 3 + j] = r.transform[i * 4 + j];
-        // Guard against a degenerate matrix (identity is what the tracker
-        // leaves when it has no pose to report, which is harmless).
-        const float det =
-            rot_[0] * (rot_[4] * rot_[8] - rot_[5] * rot_[7]) -
-            rot_[1] * (rot_[3] * rot_[8] - rot_[5] * rot_[6]) +
-            rot_[2] * (rot_[3] * rot_[7] - rot_[4] * rot_[6]);
-        if (!(det > 0.5f && det < 1.5f)) {
-            for (int i = 0; i < 9; ++i) rot_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
-        }
         // Rotate about the mesh centroid, so the head turns in place rather
         // than swinging around the model origin. lm_model_ rotates about
         // verts_'s centroid too (not its own), so the similarity solved
@@ -432,8 +460,6 @@ bool FaceFitter::update(const FaceResult& r, int w, int h) {
         };
         rotate(verts_);
         rotate(lm_model_);   // the same rotation, so the similarity below agrees
-    } else {
-        for (int i = 0; i < 9; ++i) rot_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
     }
 
     // Observed landmarks, and the similarity that places the model on them.

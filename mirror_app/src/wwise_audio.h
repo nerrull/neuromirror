@@ -84,6 +84,7 @@ struct AudioParams {
     float key = 48.f;           // MIDI note, 24..84 -- the piece's base pitch
     float intensity = 1.f;      // 0..1 master, on the main bus
     float transpose = 0.f;      // semitones, -24..24 -- offsets every emitter
+    float pad_octave = 0.f;     // semitones, -24..24 -- offsets the pad alone (Chord::padOctave)
 
     // The pluck's pitch, as the comb's centre frequency. The pad's own voicing
     // no longer travels through here: it lives entirely in Wwise now, driven

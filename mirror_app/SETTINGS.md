@@ -44,7 +44,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (38 parameters)
+## fit (41 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -59,6 +59,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/dilate` | int | 0 .. 24 | 6 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0.02 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 1.5 |
+| `fit/face size x` | float | 0.5 .. 2 | 1 | (shift-the-inputs mode only)
 | `fit/far (head height)` | float | 0.02 .. 0.4 | 0.1 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
 | `fit/feed/lr` | float | 0.0001 .. 0.02 | 0.003 |
@@ -82,6 +83,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
 | `fit/set face size` | bool | -- | 1 |
+| `fit/shift gain (fit)` | float | 0 .. 2 | 1 | (shift-the-inputs mode: how far the field follows the head while fitting)
+| `fit/shift gain (idle)` | float | 0 .. 1 | 0.25 | (the same in Idle; the shift latches, never resets)
 | `fit/size when far` | float | 0.05 .. 0.5 | 0.16 |
 | `fit/size when near` | float | 0.05 .. 0.5 | 0.2 |
 | `fit/soft edge` | bool | -- | 1 |
@@ -161,30 +164,25 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/transition/fog intensity (visibility, world u)` | float | 8 .. 600 | 45 |
 | `show/transition/max (0 - no ceiling)` | float | 0 .. 120 | 30 |
 | `show/transition/min` | float | 0 .. 120 | 0 |
-| `sound/center (Hz)` | float | 400 .. 1600 | 785 |
-| `sound/center override` | bool | -- | 1 |
 | `sound/checkpoint hysteresis` | float | 0 .. 0.15 | 0.03 |
+| `sound/chord octave` | int | -5 .. -1 | -1 |
 | `sound/detune (cents)` | float | 0 .. 25 | 2.2 |
 | `sound/fall (s)` | float | 0.05 .. 4 | 0.55 |
 | `sound/far (face height)` | float | 0.02 .. 0.4 | 0.12 |
 | `sound/flanger rate max (Hz)` | float | 0 .. 5 | 4.144 |
 | `sound/flanger rate min (Hz)` | float | 0 .. 5 | 0.1 |
-| `sound/key (MIDI note)` | float | 24 .. 84 | 48 |
 | `sound/level` | float | 0 .. 1 | 1 |
 | `sound/movement full scale` | float | 0.2 .. 4 | 1.2 |
 | `sound/near (face height)` | float | 0.1 .. 0.9 | 0.45 |
 | `sound/offset range (semitones)` | int | 0 .. 7 | 5 |
 | `sound/pad octave (semitones)` | float | -36 .. 12 | -24 |
-| `sound/per-visitor offset` | bool | -- | 1 |
 | `sound/phases post their own events` | bool | -- | 1 |
-| `sound/pluck base` | float | -12 .. 36 | 34 |
-| `sound/pluck intensity range` | float | 0 .. 24 | 12 |
+| `sound/pluck centre (MIDI note)` | float | 60 .. 96 | 79 |
+| `sound/pluck climb (semitones)` | float | 0 .. 36 | 16 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
-| `sound/root follows idle tuning` | bool | -- | 1 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
 | `sound/shepherd rate min (st-s)` | float | 0 .. 3 | 0.15 |
 | `sound/shepherd rise` | bool | -- | 0 |
-| `sound/snap to notes` | bool | -- | 1 |
 | `sound/sound on` | bool | -- | 1 |
 | `sound/stage 1` | float | 0 .. 1 | 0.13 |
 | `sound/stage 2` | float | 0 .. 1 | 0.38 |
@@ -249,7 +247,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `text/x` | float | -2 .. 2 | 0 |
 | `text/y` | float | -1 .. 1 | 0 |
 
-## mirror (59 parameters)
+## mirror (60 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -309,6 +307,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/soft centers (anti-alias)` | bool | -- | 1 |
 | `mirror/z/drop boost decay s` | float | 0.05 .. 5 | 0.25 |
 | `mirror/z/drops add z speed -s` | float | 0 .. 0.5 | 0.1833 |
+| `mirror/z/movement adds z speed -s` | float | 0 .. 0.2 | 0 |
 | `mirror/z/z amplitude` | float | 0 .. 3 | 1 |
 | `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
@@ -417,7 +416,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/glitch/vector gain` | float | 0 .. 6 | 4.399 |
 | `roots/growth/anchor on axis` | bool | -- | 1 |
 | `roots/growth/anchor pitch` | float | 0 .. 85 | 60 |
-| `roots/growth/anchor spawn` | float | 0 .. 6 | 0.5 |
+| `roots/growth/anchor spawn` | float | -3 .. 6 | 0 |
 | `roots/growth/cone height` | float | 24 .. 96 | 65 |
 | `roots/growth/cone radius` | float | 6 .. 24 | 13 |
 | `roots/growth/crawl the cone surface` | bool | -- | 0 |
@@ -443,6 +442,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/root types` | int | 1 .. 3 | 1 |
 | `roots/growth/seed` | int | 0 .. 1.07374e+09 | 2 |
 | `roots/growth/shell` | float | 1 .. 20 | 9 |
+| `roots/growth/nest behind` | float | -5 .. 15 | 0 |
+| `roots/growth/nest hit radius` | float | 0 .. 6 | 1.5 |
+| `roots/growth/nest per ring` | int | 3 .. 16 | 8 |
+| `roots/growth/nest rings` | int | 1 .. 6 | 3 |
 | `roots/growth/spawn behind` | float | -10 .. 10 | -1.06 |
 | `roots/growth/species` | string | -- | Brassica_oleracea_Vansteenkiste_2014.xml |
 | `roots/growth/spiral drift` | float | -0.5 .. 0.5 | 0 |

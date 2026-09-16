@@ -358,10 +358,9 @@ the existing "neighbours emit into the shared face mesh" path.
   back with the defaults. It is in the `look` bank now; `presets/look/
   default.look` carries no `cloth/*` keys until the operator saves it once.
 - `--roundtriptest` still reports `mirror/raindrops` (forced by phase every
-  frame in main.mm) and `sound/center (Hz)` (the slider snaps a loaded value
-  to the nearest note when `snap to notes` is on). Both are by design, not
-  lost keys; the test could special-case them. (Re-checked on 757d590:
-  450/452, the same two misses, both by design.)
+  frame in main.mm) -- by design, not a lost key; the test could
+  special-case it. (`sound/center (Hz)`, the other by-design miss, is gone:
+  the pluck centre is a MIDI note now, `sound/pluck centre (MIDI note)`.)
 - `root_sequence.h`'s `Stage` enum is `Face, Grow, Turn, Orbit, Outro, Done`
   -- Reveal was folded into Orbit (the header says so at the top of its own
   Reveal block) rather than kept as the separate stage this doc's timeline

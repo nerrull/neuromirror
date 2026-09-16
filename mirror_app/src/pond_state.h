@@ -84,6 +84,10 @@ struct PondParams {
     // See Pond::triggerDrop / Pond::advanceZBoost for the smoothing.
     float z_drop_boost = 0.02f;      // /s added per full-strength drop
     float z_drop_boost_tau = 0.8f;   // envelope decay time constant, s
+    // The visitor's movement (presence.h's 0..1 signal, set by main.mm every
+    // frame -- live, never saved) adds z_move_boost * movement to z_rate.
+    float z_move_boost = 0.f;        // /s at full movement
+    float movement = 0.f;
     // --- the fit region, and what it holds still ---------------------------
     //
     // A live fit is a person the network is reproducing surrounded by a field

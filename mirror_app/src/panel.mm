@@ -1036,13 +1036,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "auditioning a scene's sound without moving the piece\n"
                         "through its phases.");
                 }
-                ui::SliderFloat("key (MIDI note)", &g_audio_key, 24.f, 84.f, "%.0f");
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "The base pitch everything is tuned from: the pad plays\n"
-                        "it, the drone an octave below, the drops and plucks in\n"
-                        "the octaves above. 48 is C3.");
-                }
                 ui::SliderFloat("level", &g_audio_intensity, 0.f, 1.f);
                 ui::SliderFloat("transpose (semitones)", &g_audio_transpose, -24.f, 24.f, "%.0f");
                 if (ImGui::IsItemHovered()) {
@@ -1135,9 +1128,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::TextDisabled("(comb %.1f Hz)", cv.comb_hz);
                     ImGui::Text("root  %6.2f", g_chord.effectiveRoot());
                     ImGui::SameLine();
-                    ImGui::TextDisabled("(key %.0f)", g_chord.config().root);
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(pluck delta %+.2f)", g_chord.pluckDelta());
+                    ImGui::TextDisabled("(visitor note %.0f)", g_chord.visitorNote());
                 }
 
                 mirror::Chord::Config& cc = g_chord.config();
@@ -1174,93 +1165,58 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "last one deliberately stops short of 1.0 -- see\n"
                             "chord.h's comment on `thresholds` for why.");
                     }
-                    ui::SliderFloat("pluck base", &cc.pluck_high, -12.f, 36.f, "%.0f");
+                    ui::SliderFloat("pluck centre (MIDI note)", &cc.pluck_center_note,
+                                     60.f, 96.f, "%.0f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Semitones from the key. Where the pluck is pinned,\n"
-                            "snapped to the nearest chord tone, at zero intensity.");
+                            "The note everything is tuned from. The pinned pluck\n"
+                            "rings it (plus this visitor's offset) through the\n"
+                            "idle wait, and the chord's root is it, `chord\n"
+                            "octave` octaves down. 79 is G5, 784 Hz. Currently\n"
+                            "%.1f Hz.",
+                            440.f * std::pow(2.f, (g_chord.visitorNote() - 69.f) / 12.f));
                     }
-                    ui::SliderFloat("pluck intensity range", &cc.pluck_intensity_range,
-                                     0.f, 24.f, "%.0f");
+                    ui::SliderInt("chord octave", &cc.chord_octave, -5, -1);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Semitones above the pluck base that full intensity\n"
-                            "(fit and movement, averaged) can push the pluck to,\n"
-                            "before the snap to the nearest chord tone.");
+                            "Where the chord's root sits relative to the pluck's\n"
+                            "note, in octaves. Moves the pad only, via Wwise's\n"
+                            "`PadOctave` (+/-24 st, hence the range); `Key` stays\n"
+                            "on the pluck's note, so the pluck, drone and drops\n"
+                            "don't follow. -1: the resolved chord's top voice is\n"
+                            "a major third over the pluck's base note.");
                     }
-                    ui::Checkbox("root follows idle tuning", &cc.root_follows_idle_tuning);
+                    ui::SliderInt("offset range (semitones)", &cc.pluck_offset_max_semitones,
+                                   0, 7);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "The next visitor's chord starts on the pinned\n"
-                            "pluck's centre at the end of Idle -- the snapped\n"
-                            "chord tone, or the center-Hz override's note when\n"
-                            "that's enabled -- plus the per-visitor offset if\n"
-                            "that was on, carried into the pad's own register.\n"
-                            "Wander is left out: it only shades the Hz the\n"
-                            "comb rang, not the note itself. Off is the old\n"
-                            "behaviour: every visitor starts on the key.");
+                            "Drawn once per visitor, uniform over -N..+N\n"
+                            "semitones from the centre, so 3 lands anywhere\n"
+                            "within a minor third either way.");
                     }
-                }
-                ui::EndHeader();
-
-                // Not chord tuning -- these never move the pluck off its chord
-                // tone, they only jitter the comb Hz it lands on while pinned.
-                // Kept as its own header for that reason, even though the
-                // state lives on Chord::Config (see chord.h).
-                ui::BeginHeader("pinned pluck exploration", /*default_open=*/false);
-                {
-                    ui::Checkbox("center override", &cc.pluck_center_override_enabled);
+                    ui::SliderFloat("pluck climb (semitones)", &cc.pluck_climb,
+                                     0.f, 36.f, "%.0f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "The pinned frequency wander/offset below work\n"
-                            "around is normally root+pluck_high converted to\n"
-                            "Hz (chord tuning, above). Override it with an\n"
-                            "exact Hz instead -- still only while pinned.");
-                    }
-                    if (ui::SliderFloat("center (Hz)", &cc.pluck_center_hz, 400.f, 1600.f,
-                                         "%.0f")) {
-                        cc.pluck_center_hz = cc.pluck_center_snap_to_note
-                            ? mirror::Chord::NearestNoteHz(cc.pluck_center_hz)
-                            : 5.f * std::round(cc.pluck_center_hz / 5.f);
-                    }
-                    ui::Checkbox("snap to notes", &cc.pluck_center_snap_to_note);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Round the slider above to the nearest standard\n"
-                            "equal-tempered pitch (A440) instead of the\n"
-                            "nearest 5 Hz.");
+                            "How far above the visitor's note the last checkpoint\n"
+                            "lifts the pluck; each checkpoint is a quarter of the\n"
+                            "way, snapped to a tone of the current chord. 16 with\n"
+                            "chord octave -1 ends on the chord's top voice.");
                     }
 
                     ImGui::Separator();
                     ui::Checkbox("wander", &cc.pluck_wander_enabled);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "While the pluck is pinned (intensity 0 -- most of\n"
-                            "Roots, and the start of every Fitting), let its comb\n"
-                            "frequency drift a few percent instead of sitting\n"
-                            "dead still. Stops the instant fitting moves it.");
+                            "While the pluck is pinned (fit at 0 -- the idle\n"
+                            "wait, and Roots), let its comb frequency drift a few\n"
+                            "percent instead of sitting dead still. Stops the\n"
+                            "instant fitting moves it. Never moves the root.");
                     }
                     ui::SliderFloat("wander depth", &cc.pluck_wander_depth, 0.001f, 0.5f,
                                      "%.3f", ImGuiSliderFlags_Logarithmic);
                     ui::SliderFloat("wander cycle (s)", &cc.pluck_wander_period_s,
                                      1.f, 300.f, "%.1f", ImGuiSliderFlags_Logarithmic);
-
-                    ui::Checkbox("per-visitor offset", &cc.pluck_offset_enabled);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Instead of wandering, draw one random note step\n"
-                            "for the pinned comb frequency each time the piece\n"
-                            "resets -- i.e. once per visitor -- and hold it\n"
-                            "fixed for as long as the pluck is pinned.");
-                    }
-                    ui::SliderInt("offset range (semitones)", &cc.pluck_offset_max_semitones,
-                                   0, 7);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The draw is uniform over -N..+N semitones from\n"
-                            "the pinned note, so 3 lands anywhere within a\n"
-                            "minor third either way.");
-                    }
                 }
                 ui::EndHeader();
 
@@ -1667,11 +1623,45 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 // In the other two modes the subject is where the camera
                 // found it, and rescaling would be fighting that.
                 ui::DeclareInt("head mode", &g_head_mode, 0, 2);
-                // Available in every mode but the input-shift one, which
-                // moves the network's coordinates and has the render undo
-                // it -- a pixel placement underneath that would be two
-                // placements arguing. Centring is no longer the price of
-                // choosing a size.
+                // The input-shift mode's own dials. Declared always (see
+                // the declare-is-not-draw rule); shown only in that mode.
+                {
+                    const bool stab = g_head_mode == (int)HeadMode::Stabilised;
+                    if (!stab) ImGui::BeginDisabled();
+                    ImGui::PushItemWidth(110);
+                    ui::SliderFloat("shift gain (fit)", &g_shift_gain_fit, 0.f, 2.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far the field follows the head while\n"
+                            "fitting. 1 is exact: a point on the face lands\n"
+                            "at the same network input wherever the person\n"
+                            "stands, which is the whole idea of this mode.");
+                    }
+                    ui::SliderFloat("shift gain (idle)", &g_shift_gain_idle, 0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The same in Idle, where nothing is being fitted\n"
+                            "and the shift is only a nudge of interactivity.\n"
+                            "The shift is a latch: it holds where it is when\n"
+                            "the face is lost, and the next one picks up\n"
+                            "from there.");
+                    }
+                    ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 2.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The on-screen face as a multiple of its size in\n"
+                            "the camera. The size still follows the person's\n"
+                            "distance, as a mirror's would; this makes the\n"
+                            "mirror a little larger or smaller than life.\n"
+                            "Anything but 1 costs a bilinear resample of the\n"
+                            "frame every frame.");
+                    }
+                    ImGui::PopItemWidth();
+                    if (!stab) ImGui::EndDisabled();
+                }
+                // The distance-driven size is for the other two modes: the
+                // input-shift one takes the multiplier above instead, so its
+                // size keeps following the person's distance.
                 ImGui::BeginDisabled(g_head_mode == (int)HeadMode::Stabilised);
                 ui::Checkbox("set face size", &g_face_size_on);
                 if (ImGui::IsItemHovered()) {
@@ -2242,10 +2232,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                     "%.1fs");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Fastest the mix may cross grey to full colour. The\n"
-                            "loss is noisy frame to frame; this and the one-way\n"
-                            "ratchet are what keep the colour from flickering\n"
-                            "back out on a bad step.");
+                            "How long the colour takes to ease in (smoothstep,\n"
+                            "like the w0 ramp) once the fit level calls for it.\n"
+                            "The loss is noisy frame to frame; this and the\n"
+                            "one-way ratchet are what keep the colour from\n"
+                            "flickering back out on a bad step.");
                     }
                     ImGui::PopItemWidth();
                     if (ui::Visible() && g_colour_idle >= 0.f) {
@@ -2993,6 +2984,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "briefly speeds up the latent travel. Only active\n"
                         "while raindrops are on.");
                 }
+                ui::SliderFloat("movement adds z speed /s", &P.z_move_boost, 0.0f, 0.2f,
+                                "%.4f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Added to the z auto-rate, times the visitor's\n"
+                        "movement (the presence signal, 0..1) -- so the\n"
+                        "latent travels a little faster while someone is\n"
+                        "moving about.");
+                }
                 ui::SliderFloat("drop boost decay s", &P.z_drop_boost_tau, 0.05f,
                                 5.0f, "%.3f");
                 if (ImGui::IsItemHovered()) {
@@ -3158,7 +3158,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "regrow to apply.");
                     }
                     ImGui::SameLine();
-                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, 0.f, 6.f, "%.2f cm");
+                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, -3.f, 6.f, "%.2f cm");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far behind the anchor mask's centre (under the\n"
+                            "mouth) the first root starts; it grows out through\n"
+                            "the mouth hole along the normal. Negative is toward\n"
+                            "the face. Takes effect at the next regrow.");
+                    }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "How far past the front of the first face, along its\n"
@@ -3286,8 +3293,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("days / step", &SP.growthDt, 0.05f, 3.f, "%.2f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Read live, so it takes effect mid-grow. Not a\n"
-                            "structural knob -- it does not need a regrow.");
+                            "How far the plant moves per sim step. The show\n"
+                            "paces steps to the same wall-clock speed whatever\n"
+                            "this is, so smaller only makes the motion finer:\n"
+                            "at 1 a hop is a few steps a second and reads as\n"
+                            "stop motion; 0.2 is ~30 steps/s. Takes effect at\n"
+                            "the next replant (the next visitor) or regrow --\n"
+                            "the sim copies its parameters at reset.");
                     }
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(90);
@@ -3337,6 +3349,36 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "%.2f cm");
                         ui::SliderFloat("spawn behind", &SP.spawnBehind, -10.f, 10.f,
                                         "%.2f cm");
+                        ImGui::SameLine();
+                        ui::SliderFloat("nest behind", &SP.nestBehind, -5.f, 15.f,
+                                        "%.2f cm");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Where the dwell's ring of attractors sits: this far\n"
+                                "behind the face along its normal. 0 rings the face in\n"
+                                "its own plane (the wrap frames it); a few cm back and\n"
+                                "the roots gather behind the head instead, a nest the\n"
+                                "face sits in front of. Takes effect at the next regrow.");
+                        }
+                        ui::SliderInt("nest rings", &SP.nestRings, 1, 6);
+                        ImGui::SameLine();
+                        ui::SliderInt("nest per ring", &SP.nestPerRing, 3, 16);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "The nest's attractors: a hemisphere behind the mask,\n"
+                                "rings from the rim back to a point at the pole. More\n"
+                                "of them, the more places the wrap has left to go once\n"
+                                "the ones it reached are spent (nest hit radius).");
+                        }
+                        ui::SliderFloat("nest hit radius", &SP.nestHitRadius, 0.f, 6.f,
+                                        "%.2f cm");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "A nest attractor is dropped once a root node comes\n"
+                                "within this of it, so the wrap moves on instead of\n"
+                                "circling a spot it has reached. 0 keeps them all for\n"
+                                "the whole dwell. Takes effect at the next regrow.");
+                        }
                         ImGui::PopItemWidth();
 
                         // The seed is part of the look -- a preset that came

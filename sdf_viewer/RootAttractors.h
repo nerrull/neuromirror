@@ -35,10 +35,21 @@ struct Attractor {
     double radius = 6.0;     // cm, Gaussian falloff -- influence ~0 beyond ~2*radius
 };
 
+// A set of attractors shared between every tropism built on it, so the
+// caller can keep editing it after the tropisms are installed -- e.g. drop
+// an attractor once a root has reached it (see mirror_app's RootSim::step).
+using AttractorSet = std::shared_ptr<std::vector<Attractor>>;
+inline AttractorSet makeAttractorSet(std::vector<Attractor> v) {
+    return std::make_shared<std::vector<Attractor>>(std::move(v));
+}
+
 class AttractionTropism : public Tropism {
 public:
     AttractionTropism(std::shared_ptr<Organism> plant, double n, double sigma,
                       std::vector<Attractor> attractors)
+        : Tropism(plant, n, sigma), attractors_(makeAttractorSet(std::move(attractors))) {}
+    AttractionTropism(std::shared_ptr<Organism> plant, double n, double sigma,
+                      AttractorSet attractors)
         : Tropism(plant, n, sigma), attractors_(std::move(attractors)) {}
 
     std::shared_ptr<Tropism> copy(std::shared_ptr<Organism> plant) override {
@@ -51,7 +62,7 @@ public:
                             double dx, const std::shared_ptr<Organ> o = nullptr) override {
         Vector3d pull(0, 0, 0);
         double wsum = 0.0;
-        for (const auto& at : attractors_) {
+        for (const auto& at : *attractors_) {
             Vector3d d = at.pos.minus(pos);
             double dist = d.length();
             if (dist < 1e-6) continue;
@@ -67,7 +78,7 @@ public:
     }
 
 private:
-    std::vector<Attractor> attractors_;
+    AttractorSet attractors_;
 };
 
 // Blend gravitropism + attraction, the usual combination (roots still fall,
@@ -83,12 +94,19 @@ private:
 // silently stop repelling roots the moment a custom tropism is installed.
 inline std::shared_ptr<Tropism> combinedAttraction(
     std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base,
-    std::vector<Attractor> attractors, double n, double sigma, double weight = 0.5,
+    AttractorSet attractors, double n, double sigma, double weight = 0.5,
     std::shared_ptr<SignedDistanceFunction> geometry = nullptr) {
     auto att = std::make_shared<AttractionTropism>(plant, n, sigma, std::move(attractors));
     auto combined = std::make_shared<CPlantBox::CombinedTropism>(plant, n, sigma, base, 1.0 - weight, att, weight);
     if (geometry) combined->setGeometry(geometry);
     return combined;
+}
+inline std::shared_ptr<Tropism> combinedAttraction(
+    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base,
+    std::vector<Attractor> attractors, double n, double sigma, double weight = 0.5,
+    std::shared_ptr<SignedDistanceFunction> geometry = nullptr) {
+    return combinedAttraction(plant, base, makeAttractorSet(std::move(attractors)), n, sigma,
+                              weight, geometry);
 }
 
 // Attractors ringing the rim of each mask cavity, just outside the ellipsoid --
@@ -232,7 +250,7 @@ private:
 // target", so trying more candidates directly improves how well it's
 // followed, not just how much it's preferred.
 inline std::shared_ptr<Tropism> combinedAttractionSplit(
-    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, std::vector<Attractor> attractors,
+    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, AttractorSet attractors,
     double mainN, double lateralN, double sigma, double mainWeight, double lateralWeight,
     std::shared_ptr<SignedDistanceFunction> mainGeometry = nullptr,
     std::shared_ptr<SignedDistanceFunction> lateralGeometry = nullptr) {
@@ -241,6 +259,15 @@ inline std::shared_ptr<Tropism> combinedAttractionSplit(
     auto latT = combinedAttraction(plant, base, attractors, lateralN, sigma, lateralWeight, lateralGeometry);
     return std::make_shared<OrderSplitTropism>(plant, mainN, sigma, mainT, latT);
 }
+inline std::shared_ptr<Tropism> combinedAttractionSplit(
+    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, std::vector<Attractor> attractors,
+    double mainN, double lateralN, double sigma, double mainWeight, double lateralWeight,
+    std::shared_ptr<SignedDistanceFunction> mainGeometry = nullptr,
+    std::shared_ptr<SignedDistanceFunction> lateralGeometry = nullptr) {
+    return combinedAttractionSplit(plant, base, makeAttractorSet(std::move(attractors)), mainN,
+                                   lateralN, sigma, mainWeight, lateralWeight, mainGeometry,
+                                   lateralGeometry);
+}
 
 // Like combinedAttractionSplit, but the lateral/offshoot branch is further
 // split by emergence time (see EmergenceTimeSplitTropism): offshoots that
@@ -248,7 +275,7 @@ inline std::shared_ptr<Tropism> combinedAttractionSplit(
 // with lateLateralWeight. Used for the dwell phase so travel-spawned offshoots
 // keep their loose travel weight while dwell-spawned offshoots wrap tightly.
 inline std::shared_ptr<Tropism> combinedAttractionSplitTimed(
-    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, std::vector<Attractor> attractors,
+    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, AttractorSet attractors,
     double mainN, double lateralN, double sigma, double mainWeight,
     double earlyLateralWeight, double lateLateralWeight, double thresholdTime,
     std::shared_ptr<SignedDistanceFunction> geometry = nullptr) {
@@ -258,6 +285,15 @@ inline std::shared_ptr<Tropism> combinedAttractionSplitTimed(
     auto latSplit  = std::make_shared<EmergenceTimeSplitTropism>(plant, lateralN, sigma, thresholdTime,
                                                                  earlyLatT, lateLatT);
     return std::make_shared<OrderSplitTropism>(plant, mainN, sigma, mainT, latSplit);
+}
+inline std::shared_ptr<Tropism> combinedAttractionSplitTimed(
+    std::shared_ptr<Organism> plant, std::shared_ptr<Tropism> base, std::vector<Attractor> attractors,
+    double mainN, double lateralN, double sigma, double mainWeight,
+    double earlyLateralWeight, double lateLateralWeight, double thresholdTime,
+    std::shared_ptr<SignedDistanceFunction> geometry = nullptr) {
+    return combinedAttractionSplitTimed(plant, base, makeAttractorSet(std::move(attractors)), mainN,
+                                        lateralN, sigma, mainWeight, earlyLateralWeight,
+                                        lateLateralWeight, thresholdTime, geometry);
 }
 
 }  // namespace maskcav
