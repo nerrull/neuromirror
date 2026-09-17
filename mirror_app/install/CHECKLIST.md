@@ -60,8 +60,8 @@ Paths are from the repo root. Two trees live on this machine:
       `/Users/Shared/racine/display.sh` (a displayplacer command captured with
       `racine display save`) before exec'ing mirror_app. macOS forgets the
       per-user rotation across user switches; this does not depend on it.
-- [ ] **At the gallery, with only the show monitor plugged in**: `racine display
-      save` again, so the arrangement names just that screen.
+      Screens are applied one at a time, so the Jump Desktop virtual display
+      (in the saved arrangement, absent outside a session) does not block it.
 
 ### Permissions (a human, once)
 
