@@ -1,54 +1,53 @@
 #!/usr/bin/env python3
-"""Detect crackle onsets in the FirePlucker source and embed them as WAV cue
+"""Find the pops in the FirePlucker source and embed them as WAV cue
 markers, so Wwise picks them up as Markers on re-import and the mirror app
 can react to Play_FirePlucker's AK_Marker notifications.
 
-Onset detector is a Python port of mi::OnsetDetector
-(wwise_plugins/mi_common/onset_detector.h): thr = mean(rise) + sensitivity *
-stddev(rise) over a rolling window of the envelope's per-hop dB rise, with a
-floor and a minimum rise. Ported rather than reused so this script has no
-build dependency.
+What the piece reacts to is the pop -- the literal click of a fibre letting
+go. Measured on this file (NHU05008080.wav) a click is a broadband
+transient a millisecond or two long; the bed around it is a dense crackle
+of smaller clicks sitting on a slow low-frequency rumble (a ~100-200 Hz
+swell of +/-0.05, about -26 dBFS). That rumble is what made the previous
+detectors unreliable: it dominates a full-band peak or envelope, so a bump
+in it read as an onset with no click in it, while a real click on a quiet
+stretch of it fell under the bar, and an envelope's rise put the marker
+anywhere within +/-25 ms of the click.
 
-Departure from the plugin: the plugin gates hits with a fixed refractory
-period counted from the *last accepted hit*, which lets a weak hit block a
-much louder one that follows within the window. Here every hop that clears
-the floor/threshold bar is collected as a candidate first, then
-suppress_neighbors() runs greedy non-max suppression -- take the strongest
-remaining candidate, drop every other candidate within MIN_INTERVAL_MS of
-it, repeat -- so the window is centered on the loudest onset instead of
-whichever one happened to fire first.
+So the detector works above the rumble:
 
-A third gate, transient_ratio(), catches what NMS and MIN_STRENGTH can't:
-the decaying tail of a loud pluck ripples enough to clear the ODF/threshold
-bar again on its way down, and because the ripple happens well outside
-MIN_INTERVAL_MS of the original peak, NMS treats it as an unrelated event.
-These retriggers still have a respectable dB-rise strength (they're riding
-on an already-elevated envelope), so MIN_STRENGTH doesn't catch them either
--- but the raw waveform right after them is quiet relative to what came
-just before, because there's no new percussive click, just noise-floor
-wobble on a decay curve. transient_ratio() measures exactly that: peak
-sample amplitude in the ~30ms after the hit, divided by RMS amplitude in
-the ~50ms before it. A real pluck's click peak dwarfs its own lead-in noise
-(ratio commonly 10-25x in this source); a decay-tail retrigger or ambient
-bump does not (commonly <4x). MIN_TRANSIENT_RATIO below is the cut.
+  1. mono mix, high-passed at HP_HZ (a windowed-sinc FIR, zero phase). In
+     this band the bed's own peaks sit at -35 dBFS and below, and a click's
+     size is simply its peak.
+  2. a 1 ms peak envelope of that, in dBFS.
+  3. a candidate is a local maximum of the envelope over +/-MIN_INTERVAL_MS
+     /2 -- non-max suppression, so a burst of sub-clicks is one pop, and
+     the loudest one in a window wins rather than the first.
+  4. two gates: the click's absolute level, MIN_CLICK_DBFS, and its
+     prominence over the local bed, PROM_DB above the median of the
+     envelope in +/-BED_MS around it. Prominence is what keeps the fade-in
+     and fade-out honest and rejects a click inside a burst of equals.
+  5. the marker goes at the click's first sample above half its peak --
+     the click itself, not an envelope's guess at it.
 
-The onset detector only says *where* something started. What the piece
-reacts to is the pop -- the literal click of a fibre letting go -- and the
-source is full of onsets that are not pops: crackle, decay-tail ripple,
-the bed's own texture. Measured on this file those two populations barely
-overlap: a pop peaks at -20 dBFS or louder in the 20 ms after its onset and
-stands 6x or more over the RMS of the 50 ms before it; the rest sits at
--28..-22 dBFS and 2.8..4x. So each onset is scored by its own peak
-(peak_dbfs) and gated on MIN_PEAK_DBFS and MIN_TRANSIENT_RATIO, which cuts
-the file from ~4.7 hits/s to ~1.1.
+Click level on this file is a continuum, -45..0 dBFS above 2 kHz, with no
+gap between "crackle" and "pop": MIN_CLICK_DBFS is a taste decision about
+how many pops per second the piece should get, not a class boundary. The
+script prints the rate at a few settings so it can be moved with its
+consequence in view. -16 dBFS is ~1.1 pops/s, which is what the old marker
+set delivered, but now the right ones and on the click.
 
 Each cue's label is the hit's 0..1 strength as plain text ("0.734") --
-the pop's peak, STRENGTH_FLOOR_DBFS..0 dBFS mapped to 0..1 -- which
+the click's peak, STRENGTH_FLOOR_DBFS..0 dBFS mapped to 0..1 -- which
 WwiseAudio::MarkerCallback (wwise_audio.cpp) parses back out at runtime;
 this is how a marker hit gets a variable raindrop size instead of a fixed
 one. A hit that made it into the bank was already a pop, so "only the real
 plucks" isn't something the app has to filter live.
+
+    python3 embed_pluck_markers.py            # rewrite the markers in IN_PATH
+    python3 embed_pluck_markers.py --dry-run  # print the stats, touch nothing
+    python3 embed_pluck_markers.py --sheet hits.png   # + a contact sheet of every hit
 """
+import argparse
 import struct
 import sys
 import wave
@@ -57,176 +56,75 @@ import numpy as np
 
 IN_PATH = "/Users/erichan/Documents/Development/jardins_racine/WwiseProject/Originals/SFX/NHU05008080.wav"
 
-HOP = 64
-SENSITIVITY = 2.5
-FLOOR_DB = -50.0       # tighter than the plugin default (-60): this source's
-                       # own noise floor sits close to -60, so -60 fired on it
-MIN_RISE_DB = 2.0
-MIN_INTERVAL_MS = 120.0
-WINDOW_MS = 1000.0
-ATTACK_MS = 1.0
-RELEASE_MS = 60.0
-
-# The pop gate (see the module docstring): an onset is kept only if the
-# waveform's peak in the PEAK_POST_MS after it reaches MIN_PEAK_DBFS *and*
-# that peak is MIN_TRANSIENT_RATIO x the RMS of the TRANSIENT_PRE_MS before
-# it. The detector's own envelope-rise strength is not used for the cut any
-# more: it is a dB rise over a 60 ms release envelope, which the crackle
-# clears about as often as the pops do (its distribution on this file is
-# 0.40..0.56 for both). Run the script to print the peak/ratio distribution
-# and move these if too much or too little gets through.
-MIN_PEAK_DBFS = -20.0
-MIN_TRANSIENT_RATIO = 6.0
-PEAK_POST_MS = 20.0
-TRANSIENT_PRE_MS = 50.0
-TRANSIENT_POST_MS = 20.0
-# The label's 0..1: a pop's peak over this range. -30 puts the quietest
-# kept pop (-20 dBFS) at 0.33, so a drop is never sized from a zero.
+HP_HZ = 2000.0            # the rumble is gone by 1 kHz; 2 kHz leaves margin
+HP_TAPS = 255
+ENV_MS = 1.0              # peak-envelope hop
+MIN_INTERVAL_MS = 120.0   # one pop per window (non-max suppression)
+BED_MS = 150.0            # half-width of the local-median window
+MIN_CLICK_DBFS = -16.0    # the pop bar -- see the module docstring
+PROM_DB = 20.0            # the click over the bed around it (kept pops sit 30+ over it;
+                          # this is the fade-in and fade-out gate)
+# The label's 0..1: the click's peak over this range. -30 puts the quietest
+# kept pop (-16 dBFS) at 0.47, so a drop is never sized from a zero.
 STRENGTH_FLOOR_DBFS = -30.0
 
 
-def coeff(ms, dt):
-    return 0.0 if ms <= 0.0 else np.exp(-dt / (ms * 0.001))
+def highpass(mono, sr, fc=HP_HZ, taps=HP_TAPS):
+    n = np.arange(taps) - (taps - 1) / 2
+    h = -np.sinc(2 * fc / sr * n) * 2 * fc / sr
+    h[(taps - 1) // 2] += 1.0
+    h *= np.hamming(taps)
+    return np.convolve(mono.astype(np.float64), h, mode="same")
 
 
-def transient_ratio(mono, sr, offset, pre_ms=TRANSIENT_PRE_MS, post_ms=TRANSIENT_POST_MS):
-    pre = mono[max(0, offset - int(pre_ms * 0.001 * sr)):offset]
-    post = mono[offset:offset + int(post_ms * 0.001 * sr)]
-    pre_rms = np.sqrt(np.mean(pre.astype(np.float64) ** 2)) if len(pre) else 0.0
-    post_peak = np.max(np.abs(post)) if len(post) else 0.0
-    return float(post_peak / (pre_rms + 1e-9))
+def peak_envelope(y, sr, ms=ENV_MS):
+    hop = max(1, int(sr * ms * 0.001))
+    n = len(y) // hop
+    pk = np.abs(y[:n * hop]).reshape(n, hop).max(axis=1)
+    return 20.0 * np.log10(pk + 1e-9), hop
 
 
-def peak_dbfs(mono, sr, offset, post_ms=PEAK_POST_MS):
-    post = mono[offset:offset + int(post_ms * 0.001 * sr)]
-    return float(20.0 * np.log10(np.max(np.abs(post)) + 1e-9)) if len(post) else -200.0
+def sliding(x, half, pad_value=None):
+    """(len(x), 2*half+1) view of x around each index, edge-padded (or with
+    pad_value at the ends)."""
+    from numpy.lib.stride_tricks import sliding_window_view
+    if pad_value is None:
+        p = np.pad(x, (half, half), mode="edge")
+    else:
+        p = np.pad(x, (half, half), mode="constant", constant_values=pad_value)
+    return sliding_window_view(p, 2 * half + 1)
 
 
-def peak_strength(db, floor_db=STRENGTH_FLOOR_DBFS):
+def click_strength(db, floor_db=STRENGTH_FLOOR_DBFS):
     return float(np.clip((db - floor_db) / max(-floor_db, 1.0), 0.0, 1.0))
 
 
-def detect_onsets(mono, sr, params=None, debug=False):
-    p = dict(
-        sensitivity=SENSITIVITY, floor_db=FLOOR_DB, min_rise_db=MIN_RISE_DB,
-        min_interval_ms=MIN_INTERVAL_MS, window_ms=WINDOW_MS,
-        attack_ms=ATTACK_MS, release_ms=RELEASE_MS,
-        transient_pre_ms=TRANSIENT_PRE_MS, transient_post_ms=TRANSIENT_POST_MS,
-        min_transient_ratio=MIN_TRANSIENT_RATIO,
-        min_peak_dbfs=MIN_PEAK_DBFS, peak_post_ms=PEAK_POST_MS,
-        strength_floor_dbfs=STRENGTH_FLOOR_DBFS,
-    )
-    if params:
-        p.update(params)
+def detect_pops(mono, sr, min_click_dbfs=MIN_CLICK_DBFS, prom_db=PROM_DB,
+                min_interval_ms=MIN_INTERVAL_MS, bed_ms=BED_MS):
+    """All the clicks that clear the bars, as (sample_offset, strength,
+    click_dbfs, prominence_db), time-ordered. Also returns everything the
+    detector looked at, for the sheet and the visualiser."""
+    hp = highpass(mono, sr)
+    env, hop = peak_envelope(hp, sr)
+    half_nms = max(1, int(round(min_interval_ms * 0.5 / ENV_MS)))
+    half_bed = max(1, int(round(bed_ms / ENV_MS)))
+    is_max = env >= sliding(env, half_nms, pad_value=-200.0).max(axis=1)
+    bed = np.median(sliding(env, half_bed), axis=1)
+    prom = env - bed
 
-    n_hops = len(mono) // HOP
-    hop_seconds = HOP / sr
-    atk = coeff(p["attack_ms"], hop_seconds)
-    rel = coeff(p["release_ms"], hop_seconds)
-    hist_len = max(8, min(8192, int(p["window_ms"] * 0.001 * sr / HOP)))
-
-    history = np.zeros(hist_len, dtype=np.float64)
-    hist_pos = 0
-    hist_filled = 0
-    running_sum = 0.0
-    running_sumsq = 0.0
-
-    env = 0.0
-    prev_db = -200.0
-
-    candidates = []  # (sample_offset, strength) -- every hop clearing the bar
-
-    frames = mono[: n_hops * HOP].reshape(n_hops, HOP)
-    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
-
-    if debug:
-        db_trace = np.empty(n_hops)
-        odf_trace = np.empty(n_hops)
-        thr_trace = np.empty(n_hops)
-
-    for i in range(n_hops):
-        r = rms[i]
-        c = atk if r > env else rel
-        env = c * env + (1.0 - c) * r
-        db = 20.0 * np.log10(env + 1e-9)
-        rise = 0.0 if prev_db <= -199.0 else (db - prev_db)
-        prev_db = db
-        odf = rise if rise > 0.0 else 0.0
-
-        mean = running_sum / hist_filled if hist_filled else 0.0
-        if hist_filled >= 2:
-            var = running_sumsq / hist_filled - mean * mean
-            sd = np.sqrt(var) if var > 0.0 else 0.0
-        else:
-            sd = 0.0
-        thr = max(mean + p["sensitivity"] * sd, p["min_rise_db"])
-
-        # push history (fixed-size ring, running sums -- matches PushHistory)
-        old = history[hist_pos]
-        if hist_filled == hist_len:
-            running_sum -= old
-            running_sumsq -= old * old
-        else:
-            hist_filled += 1
-        history[hist_pos] = odf
-        running_sum += odf
-        running_sumsq += odf * odf
-        hist_pos = (hist_pos + 1) % hist_len
-
-        loud_enough = db > p["floor_db"]
-        cleared_bar = odf > thr
-        if loud_enough and cleared_bar:
-            span = max(-p["floor_db"], 1.0)
-            strength = np.clip((db - p["floor_db"]) / span, 0.0, 1.0)
-            candidates.append((i * HOP, float(strength)))
-
-        if debug:
-            db_trace[i] = db
-            odf_trace[i] = odf
-            thr_trace[i] = thr
-
-    survivors = suppress_neighbors(candidates, sr, p["min_interval_ms"])
-    # The pop gate, and the strength re-scored from the pop's own peak.
     hits = []
-    for off, _rise_strength in survivors:
-        db = peak_dbfs(mono, sr, off, p["peak_post_ms"])
-        ratio = transient_ratio(mono, sr, off, p["transient_pre_ms"], p["transient_post_ms"])
-        if db >= p["min_peak_dbfs"] and ratio >= p["min_transient_ratio"]:
-            hits.append((off, peak_strength(db, p["strength_floor_dbfs"])))
-
-    if debug:
-        return hits, {
-            "db": db_trace, "odf": odf_trace, "thr": thr_trace, "hop": HOP,
-            "candidates": candidates, "survivors": survivors,
-        }
-    return hits
-
-
-def suppress_neighbors(candidates, sr, min_interval_ms):
-    """Greedy non-max suppression: repeatedly take the strongest remaining
-    candidate and drop every other candidate within min_interval_ms of it,
-    so a loud onset can no longer be swallowed by a weaker one that happened
-    to fire microseconds earlier (the old fixed refractory-from-last-hit gate
-    did exactly that -- see NHU05008080.wav at 10.169s/10.210s)."""
-    if not candidates:
-        return []
-    min_interval_samples = min_interval_ms * 0.001 * sr
-    remaining = sorted(candidates, key=lambda c: c[0])
-    offsets = np.array([c[0] for c in remaining], dtype=np.float64)
-    strengths = np.array([c[1] for c in remaining], dtype=np.float64)
-    alive = np.ones(len(remaining), dtype=bool)
-
-    order = np.argsort(-strengths)  # strongest first
-    kept = []
-    for idx in order:
-        if not alive[idx]:
+    for i in np.flatnonzero(is_max):
+        if env[i] < min_click_dbfs or prom[i] < prom_db:
             continue
-        kept.append((int(offsets[idx]), float(strengths[idx])))
-        alive &= np.abs(offsets - offsets[idx]) > min_interval_samples
-        alive[idx] = False
-
-    kept.sort(key=lambda h: h[0])
-    return kept
+        # The click's own first sample above half its peak, within its
+        # envelope bin (and one bin of slack before it for a click that
+        # straddles the boundary).
+        a = max(0, (i - 1) * hop)
+        seg = np.abs(hp[a:(i + 1) * hop])
+        first = a + int(np.argmax(seg >= 0.5 * seg.max()))
+        hits.append((first, click_strength(env[i]), float(env[i]), float(prom[i])))
+    state = dict(hp=hp, env=env, hop=hop, bed=bed, is_max=is_max)
+    return hits, state
 
 
 def read_wav_mono(path):
@@ -280,31 +178,76 @@ def build_list_adtl_chunk(hits):
     return chunk
 
 
+def contact_sheet(mono, sr, state, hits, path, rejected=12, cols=8):
+    """One strip per hit -- 40 ms before to 60 ms after, full band over the
+    high-passed band -- sorted loudest first, then the loudest clicks that
+    did NOT make the bar, so the cut can be judged by eye."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    env, hop, hp = state["env"], state["hop"], state["hp"]
+    order = sorted(hits, key=lambda h: -h[2])
+    kept_bins = {h[0] // hop for h in hits}
+    below = [i for i in np.flatnonzero(state["is_max"])
+             if env[i] < MIN_CLICK_DBFS and (env[i] - state["bed"][i]) >= PROM_DB
+             and i not in kept_bins]
+    below = sorted(below, key=lambda i: -env[i])[:rejected]
+    panels = [("kept", h[0], h[2], h[3]) for h in order] + \
+             [("rejected", int(i) * hop, float(env[i]), float(env[i] - state["bed"][i])) for i in below]
+    rows = (len(panels) + cols - 1) // cols
+    fig, axs = plt.subplots(rows, cols, figsize=(3.2 * cols, 2.0 * rows), squeeze=False)
+    pre, post = int(0.040 * sr), int(0.060 * sr)
+    for k, (kind, s, db, pr) in enumerate(panels):
+        ax = axs[k // cols][k % cols]
+        a, b = max(0, s - pre), min(len(mono), s + post)
+        t = (np.arange(a, b) - s) / sr * 1000.0
+        ax.plot(t, mono[a:b], lw=0.3, color="0.6")
+        ax.plot(t, hp[a:b], lw=0.3, color="k" if kind == "kept" else "r")
+        lim = max(0.05, float(np.abs(mono[a:b]).max()) * 1.1)
+        ax.set_ylim(-lim, lim)
+        ax.set_title(f"{kind} {s / sr:.2f}s  {db:.1f} dB  +{pr:.0f}", fontsize=7)
+        ax.tick_params(labelsize=5)
+    for k in range(len(panels), rows * cols):
+        axs[k // cols][k % cols].axis("off")
+    fig.tight_layout()
+    fig.savefig(path, dpi=70)
+    print(f"wrote {path}: {len(order)} kept + {len(below)} loudest rejected")
+
+
 def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true", help="print the stats, leave the file alone")
+    ap.add_argument("--sheet", metavar="PNG", help="write a contact sheet of every hit")
+    ap.add_argument("--min-click-dbfs", type=float, default=MIN_CLICK_DBFS)
+    ap.add_argument("--prom-db", type=float, default=PROM_DB)
+    args = ap.parse_args()
+
     mono, sr = read_wav_mono(IN_PATH)
     dur = len(mono) / sr
-    # The ungated onsets, for the distribution print: where the gate sits
-    # against what the detector found.
-    ungated = detect_onsets(mono, sr, dict(min_peak_dbfs=-200.0, min_transient_ratio=0.0))
-    peaks = np.array([peak_dbfs(mono, sr, off) for off, _s in ungated])
-    ratios = np.array([transient_ratio(mono, sr, off) for off, _s in ungated])
-    print(f"{len(ungated)} onsets detected over {dur:.1f}s ({len(ungated)/dur:.2f}/s)")
-    if len(ungated):
-        pp = np.percentile(peaks, [10, 25, 50, 75, 90])
-        pr = np.percentile(ratios, [10, 25, 50, 75, 90])
-        print("peak dBFS  p10 %.1f  p25 %.1f  median %.1f  p75 %.1f  p90 %.1f" % tuple(pp))
-        print("ratio      p10 %.1f  p25 %.1f  median %.1f  p75 %.1f  p90 %.1f" % tuple(pr))
+    hits, state = detect_pops(mono, sr, args.min_click_dbfs, args.prom_db)
 
-    hits = detect_onsets(mono, sr)
-    print(f"pop gate (peak >= {MIN_PEAK_DBFS} dBFS, ratio >= {MIN_TRANSIENT_RATIO}x): "
-          f"keeping {len(hits)}/{len(ungated)} ({len(hits)/dur:.2f}/s)")
+    env, prom = state["env"], state["env"] - state["bed"]
+    maxima = np.flatnonzero(state["is_max"] & (env > -50.0))
+    print(f"{len(maxima)} clicks over {dur:.1f}s above 2 kHz; per second at a bar of")
+    for bar in (-10.0, -12.0, -14.0, -16.0, -18.0, -20.0):
+        n = int(((env[maxima] >= bar) & (prom[maxima] >= args.prom_db)).sum())
+        print(f"   {bar:6.1f} dBFS: {n:4d}  ({n / dur:.2f}/s)")
+    print(f"gate: click >= {args.min_click_dbfs} dBFS and >= {args.prom_db} dB over the bed: "
+          f"{len(hits)} pops ({len(hits) / dur:.2f}/s)")
+    if hits:
+        s = np.array([h[1] for h in hits])
+        print("strength  min %.2f  median %.2f  max %.2f" % (s.min(), np.median(s), s.max()))
+        gaps = np.diff([h[0] for h in hits]) / sr
+        print("gap (s)   min %.2f  median %.2f  max %.2f" % (gaps.min(), np.median(gaps), gaps.max()))
+    if args.sheet:
+        contact_sheet(mono, sr, state, hits, args.sheet)
+    if args.dry_run:
+        return
     if not hits:
-        print("the gate filtered out everything -- aborting, leaving the file "
-              "untouched; lower MIN_PEAK_DBFS / MIN_TRANSIENT_RATIO and re-run")
+        print("nothing cleared the gate -- leaving the file untouched")
         sys.exit(1)
-    strengths = np.array([s for _off, s in hits])
-    print("strength  min %.2f  median %.2f  max %.2f" %
-          (strengths.min(), np.median(strengths), strengths.max()))
 
     with open(IN_PATH, "rb") as f:
         data = f.read()
@@ -321,8 +264,9 @@ def main():
             out += data[i:chunk_end]
         i = chunk_end
 
-    out += build_cue_chunk(hits, sr)
-    out += build_list_adtl_chunk(hits)
+    cues = [(off, strength) for off, strength, _db, _pr in hits]
+    out += build_cue_chunk(cues, sr)
+    out += build_list_adtl_chunk(cues)
 
     riff_size = len(out) - 8
     out[4:8] = struct.pack("<I", riff_size)
@@ -330,9 +274,8 @@ def main():
     with open(IN_PATH, "wb") as f:
         f.write(out)
 
-    print(f"wrote {len(hits)} cue markers into {IN_PATH}")
-    print("first 10 (sample offset, strength):",
-          [(s, round(st, 2)) for s, st in hits[:10]])
+    print(f"wrote {len(cues)} cue markers into {IN_PATH}")
+    print("first 10 (s, strength):", [(round(o / sr, 3), round(st, 2)) for o, st in cues[:10]])
 
 
 if __name__ == "__main__":
