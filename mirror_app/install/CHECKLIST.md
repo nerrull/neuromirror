@@ -74,6 +74,14 @@ Paths are from the repo root. Two trees live on this machine:
       `/Users/Shared/racine/jardins_racine/build/mirror_app/mirror_app`,
       click **Allow** for camera and microphone, quit, log out.
 
+### Notifications (in the expo session)
+
+- [ ] Focus -> Do Not Disturb, on, no end.
+- [ ] Notifications -> every app off (Jump Desktop Connect, SimpleDisplay, Tips...).
+- [ ] General -> Login Items: only what the show needs.
+- [ ] From the admin account: General -> Software Update -> automatic updates
+      all off (an update rebooting mid-show is the real risk).
+
 ### Remote access
 
 - [x] Jump Desktop Connect, installed *for all users*, signed into your account.
@@ -86,7 +94,7 @@ Paths are from the repo root. Two trees live on this machine:
 The chosen operation: power on = plug in, power off = pull the plug (or a
 mechanical timer on the socket). No schedule, no show-day gate.
 
-- [ ] `sudo pmset -a autorestart 1 autorestartatconnect 1` -- boot when power
+- [x] `sudo pmset -a autorestart 1 autorestartatconnect 1` -- boot when power
       returns after a cut, and when power is connected. (`--launch-only` does
       not set these.)
 - [ ] Test once: unplug while the piece runs, wait 10 s, plug in. Auto-login
