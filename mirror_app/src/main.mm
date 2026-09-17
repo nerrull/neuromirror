@@ -3807,6 +3807,20 @@ int main(int argc, char** argv) {
                  ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)))
                 g_ui_visible = !g_ui_visible;
 
+            // No UI, no cursor: a visitor should not see an arrow parked on
+            // the piece. Followed every frame rather than set where the flag
+            // flips, since the panel's own "hide" button flips it too.
+            // Hidden, not disabled, so the mouse still lands where expected
+            // when the panel comes back.
+            {
+                static bool cursor_shown = true;
+                if (cursor_shown != g_ui_visible) {
+                    glfwSetInputMode(win, GLFW_CURSOR,
+                                     g_ui_visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN);
+                    cursor_shown = g_ui_visible;
+                }
+            }
+
             // The readout is its own key, and deliberately not tied to the
             // panel: the case it exists for is a phase that will not advance
             // with the UI hidden, and having to bring the whole panel up to
