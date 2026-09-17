@@ -45,7 +45,7 @@ Paths are from the repo root. Two trees live on this machine:
 - [ ] `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only --apply`
       (tree perms, `/Users/Shared/racine/logs`, LaunchAgent in
       `~expo/Library/LaunchAgents`, Start/Stop shortcuts on expo's Desktop,
-      no idle sleep). Without `--launch-only` it also installs the show-day
+      no idle sleep, wake for network). Without `--launch-only` it also installs the show-day
       gate, autorestart and the schedule notes -- later, if wanted.
 
 ### Permissions (a human, once)

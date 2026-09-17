@@ -8,8 +8,8 @@
 #   ./setup-kiosk.sh [--apply] [--user expo] --launch-only
 #
 # --launch-only is the half of this that makes the piece come up at login and
-# stay up: readable tree, LaunchAgent, no idle sleep, and Start/Stop shortcuts
-# on the kiosk user's desktop. No show-day gate, no autorestart, no schedule.
+# stay up: readable tree, LaunchAgent, no idle sleep, wake for network, and
+# Start/Stop shortcuts on the kiosk user's desktop. No show-day gate, no autorestart, no schedule.
 #
 # What it does NOT do, because it cannot or should not be scripted:
 #   * create the kiosk account, or set automatic login
@@ -120,8 +120,9 @@ done
 
 if [ "$LAUNCH_ONLY" = 1 ]; then
     echo
-    echo "== power behaviour (launch-only: no idle sleep, nothing else)"
+    echo "== power behaviour (launch-only: no idle sleep, wake for network)"
     run pmset -a displaysleep 0 sleep 0
+    run pmset -a womp 1                 # so Jump Desktop / SSH can reach it
     echo
     echo "== not done here -- see README.md"
     cat <<NOTE
@@ -129,8 +130,8 @@ if [ "$LAUNCH_ONLY" = 1 ]; then
      which requires FileVault to be OFF.
   2. Camera + microphone permission: log in as $KIOSK_USER, run
      $BIN once from Terminal, click Allow.
-  Skipped (--launch-only): the show-day gate, autorestart, wake-for-network,
-  and the daily wake/sleep schedule. Run again without --launch-only for those.
+  Skipped (--launch-only): the show-day gate, autorestart, and the daily
+  wake/sleep schedule. Run again without --launch-only for those.
 NOTE
     exit 0
 fi
