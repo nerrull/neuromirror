@@ -1369,6 +1369,10 @@ int main(int argc, char** argv) {
         // was created under a menu bar down by its height.
         [NSApp setPresentationOptions:NSApplicationPresentationHideDock
                                     | NSApplicationPresentationHideMenuBar];
+        // launchd starts the app without bringing it to the front, and both
+        // the presentation options and the hidden cursor only hold for the
+        // frontmost app.
+        [NSApp activateIgnoringOtherApps:YES];
         int mx = 0, my = 0;
         glfwGetMonitorPos(mon, &mx, &my);
         glfwSetWindowPos(win, mx, my);
@@ -3814,18 +3818,10 @@ int main(int argc, char** argv) {
                 g_ui_visible = !g_ui_visible;
 
             // No UI, no cursor: a visitor should not see an arrow parked on
-            // the piece. Followed every frame rather than set where the flag
-            // flips, since the panel's own "hide" button flips it too.
-            // Hidden, not disabled, so the mouse still lands where expected
-            // when the panel comes back.
-            {
-                static bool cursor_shown = true;
-                if (cursor_shown != g_ui_visible) {
-                    glfwSetInputMode(win, GLFW_CURSOR,
-                                     g_ui_visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_HIDDEN);
-                    cursor_shown = g_ui_visible;
-                }
-            }
+            // the piece. Told to ImGui every frame rather than to GLFW once,
+            // because imgui_impl_glfw sets the GLFW cursor mode itself each
+            // frame from this and would undo a direct glfwSetInputMode.
+            if (!g_ui_visible) ImGui::SetMouseCursor(ImGuiMouseCursor_None);
 
             // The readout is its own key, and deliberately not tied to the
             // panel: the case it exists for is a phase that will not advance
