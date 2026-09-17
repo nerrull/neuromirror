@@ -36,10 +36,17 @@ checkouts move somewhere shared, and the app is rebuilt there:
     #   /Users/Shared/racine/neuromirror
 
     cd /Users/Shared/racine/jardins_racine
-    cmake -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --target mirror_app -j"$(sysctl -n hw.logicalcpu)"
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DWWISE_CONFIG=Profile
+    mirror_app/install/racine build
 
-Develop there too. Two trees means tuning the show in one and running the other.
+`WWISE_CONFIG=Profile`, not Release: the custom plug-ins under `wwise_plugins/`
+were only ever built for Profile, and a Release configure silently comes up
+with no sound engine at all (`-- mirror_app: Wwise sound engine disabled`).
+
+Two trees means tuning the show in one and running the other. The shared copy
+has a `dev` git remote pointing at the home checkout, so changes get there
+without a trip through GitHub -- see [CHECKLIST.md](CHECKLIST.md) for the
+update procedure. Paths in this file are relative to the repo root.
 
 ## 1. The kiosk account
 
@@ -66,23 +73,29 @@ unsigned or ad-hoc-signed build gets a *new* identity every rebuild, so the
 grant evaporates and macOS asks again — behind a fullscreen window, with nobody
 there to click Allow.
 
-Make a self-signed code-signing certificate once (Keychain Access → Certificate
-Assistant → Create a Certificate → name it `Racine Kiosk`, type *Code Signing*),
-and from then on build through `racine build`, which signs every time:
+Any identity that stays the same from build to build will do. This machine
+already has one: the **Apple Development** certificate in the artist's login
+keychain (`security find-identity -v -p codesigning`), and `racine build`
+signs with it by default — so there is no certificate to make, just build
+through `racine build` every time:
 
-    install/racine build
+    mirror_app/install/racine build
+
+(`RACINE_SIGNING_ID` overrides the identity, by name or SHA-1. A self-signed
+*Code Signing* certificate from Keychain Access → menu bar → Certificate
+Assistant → Create a Certificate works too, if this one ever expires.)
 
 ## 3. Run the setup script
 
 Read what it intends to do first:
 
-    sudo install/setup-kiosk.sh --user expo
+    sudo mirror_app/install/setup-kiosk.sh --user expo
 
 It refuses to go on if the checkout is still under a home directory, if the
 binary isn't built, or if `expo` doesn't exist — and warns if `expo` is an admin
 or the binary is ad-hoc signed. When it looks right:
 
-    sudo install/setup-kiosk.sh --user expo --apply
+    sudo mirror_app/install/setup-kiosk.sh --user expo --apply
 
 That makes the tree readable, makes `imgui.ini`, `mirror_panel.ini` and
 `presets/` writable by the kiosk user, creates `/Users/Shared/racine/logs`,
@@ -227,7 +240,7 @@ pmset events underneath it. `--check` never sleeps, so this is safe mid-show.
 Test the sleeping half once on the real machine before the run — move
 `show-days.txt` aside so today is definitely not a show day, then:
 
-    sudo install/show-gate.sh
+    sudo mirror_app/install/show-gate.sh
 
 It should log the date, wait 45 seconds, and sleep the machine. Put the file
 back afterwards.
@@ -275,8 +288,8 @@ do it.
 From either account — as `expo` it uses its own launchd domain, from anywhere
 else it targets `expo`'s by uid and asks for `sudo`:
 
-    install/racine start | stop | restart | status | log | build
-    install/racine days | keep-awake [on|off]
+    mirror_app/install/racine start | stop | restart | status | log | build
+    mirror_app/install/racine days | keep-awake [on|off]
 
 `restart` is a `launchctl kickstart -k`: the process is killed and launchd starts
 a fresh one. `stop` boots the agent out entirely, so `KeepAlive` doesn't

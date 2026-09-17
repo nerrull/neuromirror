@@ -85,7 +85,10 @@ build)
     # asks again on next launch, behind a fullscreen window, with nobody
     # there to click Allow. See install/README.md.
     cmake --build "$ROOT/build" --target mirror_app -j"$(sysctl -n hw.logicalcpu)"
-    codesign -s "${RACINE_SIGNING_ID:-Racine Kiosk}" --force \
+    # Default: the Apple Development identity in the artist's login keychain
+    # (team B6C64D8M6K, valid to 2027-04). `security find-identity -v -p
+    # codesigning` lists what's available; override with RACINE_SIGNING_ID.
+    codesign -s "${RACINE_SIGNING_ID:-DE5193F0519AD4207DA3778BABC7E3EE0EFA7892}" --force \
         "$ROOT/build/mirror_app/mirror_app"
     echo "built and signed"
     ;;
