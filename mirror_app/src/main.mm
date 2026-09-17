@@ -1357,6 +1357,14 @@ int main(int argc, char** argv) {
     GLFWwindow* win = glfwCreateWindow(W, H, "neuromirror ⇄ roots", nullptr, nullptr);
     if (!win) { fprintf(stderr, "window failed\n"); glfwTerminate(); return 1; }
     if (mon) {
+        // The menu bar and Dock sit above a floating window, whatever its
+        // size, so a fresh account (whose menu bar does not auto-hide) shows
+        // a strip of it along the top. Hide both for as long as this app is
+        // frontmost; they come back when it is not, which is what an
+        // operator wants. Position after, since AppKit nudges a window that
+        // was created under a menu bar down by its height.
+        [NSApp setPresentationOptions:NSApplicationPresentationHideDock
+                                    | NSApplicationPresentationHideMenuBar];
         int mx = 0, my = 0;
         glfwGetMonitorPos(mon, &mx, &my);
         glfwSetWindowPos(win, mx, my);
