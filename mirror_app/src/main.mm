@@ -1352,9 +1352,15 @@ int main(int argc, char** argv) {
     // than one running a window. Sizing to the monitor's work area covers the
     // menu bar and Dock without asking macOS for a Space of its own.
     GLFWmonitor* mon = g_fullscreen ? glfwGetPrimaryMonitor() : nullptr;
+    // macOS 26 draws a one-pixel hairline along the edge of every window,
+    // borderless ones included, and the piece is a bright image with a grey
+    // frame around it. The window is made a pixel larger than the monitor on
+    // every side, so the hairline lands off screen. The composition loses a
+    // one-pixel rim, which nobody sees.
+    const int kBleed = mon ? 1 : 0;
     if (mon) {
         const GLFWvidmode* vm = glfwGetVideoMode(mon);
-        if (vm) { W = vm->width; H = vm->height; }
+        if (vm) { W = vm->width + 2 * kBleed; H = vm->height + 2 * kBleed; }
         glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
     }
@@ -1375,7 +1381,12 @@ int main(int argc, char** argv) {
         [NSApp activateIgnoringOtherApps:YES];
         int mx = 0, my = 0;
         glfwGetMonitorPos(mon, &mx, &my);
-        glfwSetWindowPos(win, mx, my);
+        glfwSetWindowPos(win, mx - kBleed, my - kBleed);
+        int px = 0, py = 0, pw = 0, ph = 0;
+        glfwGetWindowPos(win, &px, &py);
+        glfwGetWindowSize(win, &pw, &ph);
+        printf("window: %dx%d at %d,%d (monitor %dx%d at %d,%d)\n",
+               pw, ph, px, py, W - 2 * kBleed, H - 2 * kBleed, mx, my);
     }
 
     MetalContext ctx;
