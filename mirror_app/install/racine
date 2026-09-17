@@ -8,6 +8,7 @@
 #   racine start | stop | restart | status | log | build
 #   racine days                 -- is today a show day, and what is scheduled
 #   racine keep-awake on | off  -- override the show-day gate while working
+#   racine display [save]       -- the display arrangement launch.sh applies
 #
 set -euo pipefail
 
@@ -66,6 +67,26 @@ days)
         || echo "  (none -- the gate will fail awake)"
     echo
     pmset -g sched
+    ;;
+display)
+    # Rotation is a per-user preference macOS forgets across user switches.
+    # `save` captures this session's arrangement as a displayplacer command;
+    # launch.sh runs it before the piece starts. Save from the session that
+    # looks right, with the show's monitors and only those plugged in.
+    ARR=/Users/Shared/racine/display.sh
+    DP=/opt/homebrew/bin/displayplacer
+    case "${2:-}" in
+        save)
+            [ -x "$DP" ] || { echo "no displayplacer -- brew install displayplacer" >&2; exit 1; }
+            cmd="$("$DP" list | grep '^displayplacer ')"
+            [ -n "$cmd" ] || { echo "displayplacer printed no arrangement" >&2; exit 1; }
+            "${AS[@]}" tee "$ARR" >/dev/null <<<"$cmd"
+            "${AS[@]}" chmod 644 "$ARR"
+            echo "saved to $ARR:"; echo "  $cmd";;
+        *)
+            [ -r "$ARR" ] && { echo "$ARR:"; sed 's/^/  /' "$ARR"; } \
+                || echo "none saved -- racine display save";;
+    esac
     ;;
 keep-awake)
     # The gate sleeps the machine on any morning that is not a show day,

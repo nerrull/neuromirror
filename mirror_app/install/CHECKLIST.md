@@ -56,6 +56,12 @@ Paths are from the repo root. Two trees live on this machine:
       copied over `/Library/Preferences/com.apple.windowserver.displays.plist`
       (original kept as `.bak` beside it).
 - [x] Menu bar / Dock hidden by the app itself while fullscreen (5a2b226).
+- [x] Rotation applied by the piece itself at every launch: `launch.sh` runs
+      `/Users/Shared/racine/display.sh` (a displayplacer command captured with
+      `racine display save`) before exec'ing mirror_app. macOS forgets the
+      per-user rotation across user switches; this does not depend on it.
+- [ ] **At the gallery, with only the show monitor plugged in**: `racine display
+      save` again, so the arrangement names just that screen.
 
 ### Permissions (a human, once)
 
@@ -141,6 +147,7 @@ next login. Same from Terminal: `racine stop` / `racine start` (no sudo
 needed from the expo account).
 
     mirror_app/install/racine start | stop | restart | status | log
+    mirror_app/install/racine display [save]      # the rotation launch.sh applies
     mirror_app/install/racine days                # is today a show day? + pmset
     mirror_app/install/racine keep-awake [on|off] # override the gate
 

@@ -5,13 +5,12 @@
     <key>Label</key>
     <string>net.jardinsracine.mirror</string>
 
-    <!-- The show. --no-panel hides the ImGui UI from the first frame;
-         F1 or ` brings it back for the operator. -->
+    <!-- launch.sh applies the saved display arrangement and then execs
+         mirror_app --fullscreen --no-panel; F1 or ` brings the panel back
+         for the operator. -->
     <key>ProgramArguments</key>
     <array>
-        <string>@MIRROR_BIN@</string>
-        <string>--fullscreen</string>
-        <string>--no-panel</string>
+        <string>@LAUNCH_SH@</string>
     </array>
 
     <!-- imgui.ini, mirror_panel.ini and the machine bank are resolved

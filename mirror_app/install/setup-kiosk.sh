@@ -85,7 +85,7 @@ echo
 echo "== launch agent"
 run mkdir -p "$AGENT_DIR"
 tmp="$(mktemp)"
-sed -e "s|@MIRROR_BIN@|$BIN|g" \
+sed -e "s|@LAUNCH_SH@|$HERE/launch.sh|g" \
     -e "s|@RACINE_ROOT@|$ROOT|g" \
     -e "s|@LOG_DIR@|$LOG_DIR|g" \
     "$HERE/$LABEL.plist.in" > "$tmp"
@@ -98,6 +98,18 @@ else
     sed 's/^/    | /' "$tmp"
 fi
 rm -f "$tmp"
+
+echo
+echo "== display arrangement"
+# Saved by `racine display save` from a session where it looks right, and
+# applied by launch.sh before the piece starts. Optional but worth having.
+if [ -r /Users/Shared/racine/display.sh ]; then
+    echo "  ok: /Users/Shared/racine/display.sh"
+    sed 's/^/    | /' /Users/Shared/racine/display.sh
+else
+    echo "  WARNING: no /Users/Shared/racine/display.sh -- rotation is left to"
+    echo "  macOS. Run \`racine display save\` in a session that looks right."
+fi
 
 echo
 echo "== desktop shortcuts"
