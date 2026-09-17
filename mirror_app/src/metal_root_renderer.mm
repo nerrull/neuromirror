@@ -101,8 +101,9 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     id<MTLLibrary> blmLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_bloom.metal"});
     id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_post.metal"});
     id<MTLLibrary> gltLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_glitch.metal"});
+    id<MTLLibrary> taaLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_taa.metal"});
     if (!geomLib || !faceLib || !leafLib || !clothLib || !fogLib
-        || !aoLib || !blmLib || !postLib || !gltLib) {
+        || !aoLib || !blmLib || !postLib || !gltLib || !taaLib) {
         fprintf(stderr, "MetalRootRenderer: shader compile failed\n"); return;
     }
 
@@ -190,8 +191,10 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     motionPipe_    = makePost(gltLib,  "root_glitch_vs", "root_motion_fs",    kMotionFmt, false);
     sortPipe_      = makePost(gltLib,  "root_glitch_vs", "root_sort_fs",       kColorFmt, false);
     glitchPipe_    = makePost(gltLib,  "root_glitch_vs", "root_glitch_fs",     kColorFmt, false);
+    taaResolvePipe_ = makePost(taaLib, "root_taa_vs",    "root_taa_resolve_fs", kColorFmt, false);
+    taaPipe_        = makePost(taaLib, "root_taa_vs",    "root_taa_fs",         kColorFmt, false);
     if (!aoPipe_ || !aoBlurPipe_ || !bloomDownPipe_ || !bloomUpPipe_ || !postPipe_
-        || !motionPipe_ || !sortPipe_ || !glitchPipe_) return;
+        || !motionPipe_ || !sortPipe_ || !glitchPipe_ || !taaResolvePipe_ || !taaPipe_) return;
 
     {
         MTLDepthStencilDescriptor* dd = [[MTLDepthStencilDescriptor alloc] init];
@@ -258,6 +261,7 @@ void MetalRootRenderer::buildTargets() {
     // Output-sized, so a resize invalidates them; rebuilt lazily by the first
     // frame that actually asks for the effect again.
     releaseGlitchTargets();
+    releaseTaaTargets();
 
     builtSsaa_ = ss;
     builtAoDs_ = ds;
@@ -696,12 +700,18 @@ void MetalRootRenderer::setInstancePulseStart(int i, float start) {
     if (i >= 0 && i < (int)instances_.size()) instances_[size_t(i)].pulseStart = start;
 }
 
-// The glitch stage's three targets. Separate from buildTargets because they
-// depend on nothing it tracks (they are always output-sized) and because most
-// runs never allocate them at all -- 1080p is 16 MB of RGBA16F apiece.
+// The glitch stage's targets. Separate from buildTargets because they depend
+// on nothing it tracks (they are always output-sized) and because most runs
+// never allocate them at all -- 1080p is 16 MB of RGBA16F apiece. The motion
+// field is the exception: the TAA reads it every frame, so it has its own
+// allocator, shared.
 void MetalRootRenderer::ensureGlitchTargets() {
-    if (glitchTex_[0] && glitchTex_[1] && motionTex_ && sortTex_[0] && sortTex_[1]) return;
-    releaseGlitchTargets();
+    ensureMotionTarget();
+    if (glitchTex_[0] && glitchTex_[1] && sortTex_[0] && sortTex_[1]) return;
+    for (int i = 0; i < 2; ++i) {
+        [glitchTex_[i] release]; glitchTex_[i] = nil;
+        [sortTex_[i] release];   sortTex_[i] = nil;
+    }
     auto make2D = [&](MTLPixelFormat fmt, MTLStorageMode store) -> id<MTLTexture> {
         MTLTextureDescriptor* td =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
@@ -716,11 +726,43 @@ void MetalRootRenderer::ensureGlitchTargets() {
     // returns, and the headless capture paths read that without a blit.
     glitchTex_[0] = make2D(kColorFmt, MTLStorageModeShared);
     glitchTex_[1] = make2D(kColorFmt, MTLStorageModeShared);
-    motionTex_    = make2D(kMotionFmt, MTLStorageModePrivate);
     sortTex_[0]   = make2D(kColorFmt, MTLStorageModePrivate);
     sortTex_[1]   = make2D(kColorFmt, MTLStorageModePrivate);
     moshHistValid_ = false;
     sortValid_ = false;
+}
+
+static id<MTLTexture> makeOutputSized(id<MTLDevice> device, MTLPixelFormat fmt, int w, int h,
+                                      MTLStorageMode store) {
+    MTLTextureDescriptor* td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
+                                                           width:std::max(1, w)
+                                                          height:std::max(1, h)
+                                                       mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = store;
+    return [device newTextureWithDescriptor:td];
+}
+
+void MetalRootRenderer::ensureMotionTarget() {
+    if (motionTex_) return;
+    motionTex_ = makeOutputSized(device_, kMotionFmt, w_, h_, MTLStorageModePrivate);
+}
+
+void MetalRootRenderer::ensureTaaTargets() {
+    ensureMotionTarget();
+    if (taaResolveTex_ && taaTex_[0] && taaTex_[1]) return;
+    releaseTaaTargets();
+    taaResolveTex_ = makeOutputSized(device_, kColorFmt, w_, h_, MTLStorageModePrivate);
+    taaTex_[0]     = makeOutputSized(device_, kColorFmt, w_, h_, MTLStorageModePrivate);
+    taaTex_[1]     = makeOutputSized(device_, kColorFmt, w_, h_, MTLStorageModePrivate);
+    taaHistValid_ = false;
+}
+
+void MetalRootRenderer::releaseTaaTargets() {
+    [taaResolveTex_ release]; taaResolveTex_ = nil;
+    for (int i = 0; i < 2; ++i) { [taaTex_[i] release]; taaTex_[i] = nil; }
+    taaHistValid_ = false;
 }
 
 void MetalRootRenderer::releaseGlitchTargets() {
@@ -758,6 +800,29 @@ void MetalRootRenderer::cancelDatamosh() {
 
 bool MetalRootRenderer::datamoshActive() const {
     return post.mosh || (moshTriggered_ && postTime < moshUntil_);
+}
+
+// The automatic focus distance: the nearest of the focus points that lands
+// in the frame, else the orbit radius (which is where the subject is when
+// no mask is), eased so a mask coming into frame pulls focus rather than
+// cutting it. `vp` is the unjittered view-projection, `e*` the eye.
+float MetalRootRenderer::autoFocusDistance(const simd_float4x4& vp, float ex, float ey, float ez,
+                                           float radius) {
+    float want = radius;
+    float best = 1e30f;
+    for (const auto& p : focusPoints_) {
+        const simd_float4 c = simd_mul(vp, (simd_float4){p[0], p[1], p[2], 1.f});
+        if (c.w <= 1e-4f) continue;                       // behind the camera
+        if (std::fabs(c.x) > c.w || std::fabs(c.y) > c.w) continue;   // out of frame
+        const float dx = p[0] - ex, dy = p[1] - ey, dz = p[2] - ez;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < best) { best = d; want = d; }
+    }
+    const float dt = std::clamp(postTime - dofFocusTime_, 0.f, 0.25f);
+    dofFocusTime_ = postTime;
+    if (dofFocusCur_ < 0.f || post.dofFocusEase <= 1e-3f) dofFocusCur_ = want;
+    else dofFocusCur_ += (want - dofFocusCur_) * (1.f - std::exp(-dt / post.dofFocusEase));
+    return dofFocusCur_;
 }
 
 id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
@@ -848,6 +913,34 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         (simd_float4){-dre,  -due,   dfe,   1});
 
     simd_float4x4 vp = simd_mul(proj, view);
+
+    // --- TAA jitter ---
+    // The scene passes draw through a projection nudged by a fraction of an
+    // output pixel, a different fraction each frame (Halton 2,3 -- an even
+    // spread over the pixel at any prefix length); the TAA pass blends the
+    // frames back together. Everything that reconstructs a pixel's ray from
+    // its position (fog, AO, motion) keeps the unjittered camera: the error
+    // is sub-pixel and none of them is resolving edges.
+    const bool taaOn = post.enabled && post.taa && taaPipe_ && taaResolvePipe_;
+    simd_float2 jitter = {0.f, 0.f};
+    if (taaOn) {
+        auto halton = [](unsigned i, unsigned b) {
+            float f = 1.f, r = 0.f;
+            while (i) { f /= (float)b; r += f * (float)(i % b); i /= b; }
+            return r;
+        };
+        const unsigned k = (taaFrame_ % 16) + 1;
+        const float amp = std::max(0.f, post.taaJitter);
+        jitter = (simd_float2){(halton(k, 2) - 0.5f) * amp * 2.f / (float)w_,
+                               (halton(k, 3) - 0.5f) * amp * 2.f / (float)h_};
+    }
+    taaFrame_++;
+    // A shift of NDC xy by `jitter`: clip.xy += jitter * w, and w = -z here.
+    simd_float4x4 projJ = proj;
+    projJ.columns[2].x = -jitter.x;
+    projJ.columns[2].y = -jitter.y;
+    const simd_float4x4 vpJ = simd_mul(projJ, view);
+
     simd_float3x3 cam = simd_matrix(
         (simd_float3){rgt.x, rgt.y, rgt.z},
         (simd_float3){up.x,  up.y,  up.z},
@@ -855,7 +948,8 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
 
     // --- Geometry uniforms ---
     RootGeomU gu = {};
-    gu.viewProj = vp;
+    gu.viewProj = vpJ;
+    gu.jitter = jitter;
     gu.cam = cam;
     gu.eye = (simd_float4){ex, ey, ez, 0};
     gu.baseColor  = (simd_float4){mat.baseColor[0], mat.baseColor[1], mat.baseColor[2], 0};
@@ -1032,7 +1126,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // depth-composited against the capsules (matches RootRenderer's midGeometryHook).
     if ((faceVertCount_ > 0 || debugMarkerVertCount_ > 0) && facePipe_) {
         RootFaceU ffu = {};
-        ffu.viewProj = vp;
+        ffu.viewProj = vpJ;
         ffu.eye = gu.eye;
         ffu.lightDir = gu.lightDir;
         ffu.lightIntensity = face.lightIntensity;
@@ -1094,7 +1188,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // as the face pass, shaded as thin translucent lamina instead of stone.
     if (leafVertCount_ > 0 && leafPipe_) {
         RootLeafU lu = {};
-        lu.viewProj     = vp;
+        lu.viewProj     = vpJ;
         lu.eye          = gu.eye;
         lu.lightDir     = gu.lightDir;
         lu.skyColor     = gu.skyColor;
@@ -1123,7 +1217,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // has not handed over a pond texture this frame.
     if (clothVertCount_ > 0 && clothPipe_ && clothTex_) {
         RootClothU cu = {};
-        cu.viewProj = vp;
+        cu.viewProj = vpJ;
         cu.lightDir = gu.lightDir;
         cu.refract = cloth.refract;
         cu.reliefShade = cloth.reliefShade;
@@ -1236,10 +1330,60 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         // Still record the camera: the glitch stage's freeze needs an unbroken
         // history of it, and post.enabled is a live checkbox.
         prevViewProj_ = vp; prevViewProjValid_ = true;
+        taaHistValid_ = false;
         outTex_ = fogColorTex_; return fogColorTex_;
     }
 
-    // --- Pass 4: bloom chain ---
+    // The motion field, shared by the TAA and the datamosh: where each pixel
+    // was last frame, from the depth buffer and last frame's camera.
+    auto encodeMotion = [&]() {
+        RootMotionU mu = {};
+        mu.cam = cam;
+        mu.eye = gu.eye;
+        mu.res = (simd_float2){(float)w_, (float)h_};
+        mu.fov = fov;
+        mu.nearZ = nearZ; mu.farZ = farZ;
+        mu.bgDepth = post.moshBgDepth;
+        // On the very first frame there is no previous camera; the current
+        // one gives a zero field, which is the honest answer.
+        mu.prevViewProj = prevViewProjValid_ ? prevViewProj_ : vp;
+        encodeFS({cb, motionPipe_, motionTex_, &mu, sizeof(mu), rootDepthTex_}, "motion");
+    };
+    const bool moshOn = datamoshActive();
+
+    // --- Pass 4: temporal AA ---
+    // Resolves the supersample to output size and blends it with last frame's
+    // result; the post pass then reads that instead of the scene texture (and
+    // its depth-of-field taps land on a resolved picture, which they did not
+    // before). No history through the datamosh: its freeze stops the motion
+    // field, and the picture is about to be torn up anyway.
+    id<MTLTexture> sceneForPost = fogColorTex_;
+    if (taaOn) {
+        ensureTaaTargets();
+        const bool useHist = taaHistValid_ && prevViewProjValid_ && !moshOn;
+        if (useHist) encodeMotion();
+        RootTaaU tu = {};
+        tu.res = (simd_float2){(float)w_, (float)h_};
+        tu.srcTexel = (simd_float2){1.0f / (float)sw_, 1.0f / (float)sh_};
+        tu.ssaa = builtSsaa_;
+        tu.histValid = useHist ? 1 : 0;
+        tu.blend = std::clamp(post.taaBlend, 0.02f, 1.0f);
+        tu.clipGamma = std::max(0.f, post.taaClip);
+        encodeFS({cb, taaResolvePipe_, taaResolveTex_, &tu, sizeof(tu), fogColorTex_}, "taa resolve");
+        const int dst = taaIdx_ ^ 1;
+        // The motion texture is bound whether or not it was written this
+        // frame: unread behind histValid = 0, but an unbound read is undefined
+        // even behind a branch the shader never takes.
+        encodeFS({cb, taaPipe_, taaTex_[dst], &tu, sizeof(tu), taaResolveTex_,
+                  useHist ? taaTex_[taaIdx_] : taaResolveTex_, motionTex_}, "taa");
+        taaIdx_ = dst;
+        taaHistValid_ = true;
+        sceneForPost = taaTex_[dst];
+    } else {
+        taaHistValid_ = false;
+    }
+
+    // --- Pass 5: bloom chain ---
     const bool bloomOn = post.bloom && !bloomMips_.empty()
                       && bloomDownPipe_ && bloomUpPipe_;
     if (bloomOn) {
@@ -1267,11 +1411,13 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         }
     }
 
-    // --- Pass 5: composite ---
+    // --- Pass 6: composite ---
     RootPostU pu = {};
     pu.res = (simd_float2){(float)w_, (float)h_};
-    pu.srcTexel = (simd_float2){1.0f / (float)sw_, 1.0f / (float)sh_};
-    pu.ssaa = builtSsaa_;
+    // With the TAA on, the scene it reads is already resolved to output size.
+    pu.srcTexel = taaOn ? (simd_float2){1.0f / (float)w_, 1.0f / (float)h_}
+                        : (simd_float2){1.0f / (float)sw_, 1.0f / (float)sh_};
+    pu.ssaa = taaOn ? 1 : builtSsaa_;
     pu.tonemap = post.tonemap ? 1 : 0;
     pu.bloomOn = bloomOn ? 1 : 0;
     pu.dofOn = post.dof ? 1 : 0;
@@ -1281,7 +1427,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     // A focus distance of 0 means "wherever the camera is looking", which for an
     // orbit camera is its own radius. Hard-coding a distance instead would have
     // the subject drift out of focus every time the framing changed.
-    pu.dofFocus = (post.dofFocus > 0.0f) ? post.dofFocus : radius;
+    pu.dofFocus = (post.dofFocus > 0.0f) ? post.dofFocus : autoFocusDistance(vp, ex, ey, ez, radius);
     pu.dofRange = post.dofRange;
     pu.dofStrength = post.dofStrength;
     pu.vignette = post.vignette;
@@ -1318,14 +1464,13 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         haloTex = bloomMips_[hm];
     }
     encodeFS({cb, postPipe_, postTex_, &pu, sizeof(pu),
-              fogColorTex_, bloomOn ? bloomMips_[0] : fogColorTex_, rootDepthTex_,
+              sceneForPost, bloomOn ? bloomMips_[0] : fogColorTex_, rootDepthTex_,
               haloTex}, "post");
 
-    // --- Pass 6: pixel sort, datamosh, bitcrush ------------------------------
+    // --- Pass 7: pixel sort, datamosh, bitcrush ------------------------------
     // Codec and display artefacts on the finished picture; see
     // root_glitch.metal. Skipped whole -- targets included, which is 40 MB at
     // 1080p -- when none of the three is asked for, the common case.
-    const bool moshOn  = datamoshActive();
     const bool crushOn = post.crush > 0.0f;
     const bool sortOn  = post.sort && post.sortAmount > 0.0f;
     if (moshTriggered_ && postTime >= moshUntil_) moshTriggered_ = false;
@@ -1349,19 +1494,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         const bool frozen = moshOn && !firstMoshFrame &&
                             (post.moshFreeze <= 0.0f ||
                              postTime - moshStart_ < post.moshFreeze);
-        if (moshOn && !frozen) {
-            RootMotionU mu = {};
-            mu.cam = cam;
-            mu.eye = gu.eye;
-            mu.res = (simd_float2){(float)w_, (float)h_};
-            mu.fov = fov;
-            mu.nearZ = nearZ; mu.farZ = farZ;
-            mu.bgDepth = post.moshBgDepth;
-            // On the very first frame there is no previous camera; the current
-            // one gives a zero field, which is the honest answer.
-            mu.prevViewProj = prevViewProjValid_ ? prevViewProj_ : vp;
-            encodeFS({cb, motionPipe_, motionTex_, &mu, sizeof(mu), rootDepthTex_}, "motion");
-        }
+        if (moshOn && !frozen) encodeMotion();
 
         // The pixel sort's own state, stepped once (or a few times) per frame.
         // Each step is a fullscreen pass with four texture reads, and the sort

@@ -95,8 +95,10 @@ struct RootGeomU {
                              // detail; strength and rough fade to 0 below half
                              // of it. 0 = never fade.
     float   _padD0;
-    float   _padD1;
-    float   _padD2;
+    // Sub-pixel jitter of the projection, NDC units, for the temporal AA
+    // (root_taa.metal). viewProj already carries it; the ray the fragment
+    // builds from its pixel has to subtract it so pixel and matrix agree.
+    RS_F2   jitter;
     RS_F4   keyColor;        // xyz, directional key colour x intensity
     // The pluck flash (MetalRootRenderer::Flash): bare point lights inside
     // masks, fired on a pluck marker during the Orbit -- one mask, or all of
@@ -347,6 +349,21 @@ struct RootPostU {
     float   distortK1;     // radial distortion: <0 barrel, >0 pincushion
     float   distortK2;     // fourth-order term, for the corners
     float   distortZoom;   // re-crop so the distorted corners stay in frame
+};
+
+// Temporal anti-aliasing (root_taa.metal). The scene's supersample grid is
+// box-resolved to output resolution first (the same filter root_post.metal
+// applies when this is off), then blended with last frame's result carried
+// along the motion vectors below. The projection is jittered by a fraction of
+// an output pixel each frame (RootGeomU::jitter), so what the blend
+// accumulates is a supersample the SSAA grid alone cannot afford.
+struct RootTaaU {
+    RS_F2   res;          // output resolution
+    RS_F2   srcTexel;     // 1 / scene (supersampled) resolution
+    RS_INT  ssaa;         // supersample factor being resolved (1 = none)
+    RS_INT  histValid;    // 0 = no usable history: pass the frame through
+    float   blend;        // the new frame's share of the result
+    float   clipGamma;    // history clamp, in neighbourhood standard deviations
 };
 
 // Camera-reprojection motion vectors (root_glitch.metal, first pass).

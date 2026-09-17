@@ -378,7 +378,9 @@ fragment GeomFOut root_geom_fs(GeomVOut in [[stage_in]],
 
     // From the pixel, not the interpolated corner value: the same ray for
     // a pixel whatever quad it came in on, to the last bit.
-    float2 ndc = float2(in.pos.x / U.res.x * 2.0 - 1.0, 1.0 - in.pos.y / U.res.y * 2.0);
+    // Less the frame's jitter: viewProj shifted the picture by it, so this
+    // pixel is looking at what sits that far the other way.
+    float2 ndc = float2(in.pos.x / U.res.x * 2.0 - 1.0, 1.0 - in.pos.y / U.res.y * 2.0) - U.jitter;
     ndc.x *= U.res.x / U.res.y;
     float3 rd = normalize(U.cam * float3(ndc * tan(U.fov), 1.0));
     float3 ro = U.eye.xyz;

@@ -21,6 +21,7 @@
 #include "root_shared.h"
 #include <string>
 #include <vector>
+#include <array>
 
 class MetalContext;
 
@@ -294,8 +295,11 @@ public:
         float bloomRadius    = 1.0f;
         int   bloomLevels    = 5;
         bool  dof            = true;
-        // 0 = follow the camera's orbit radius, which is where the subject is.
+        // 0 = automatic: the nearest mask in frame (setFocusPoints), eased
+        // over dofFocusEase seconds so a mask entering the frame is a pull,
+        // not a cut; the camera's orbit radius when no mask is in frame.
         float dofFocus       = 0.0f;
+        float dofFocusEase   = 0.4f;
         // Wide and weak. The intent is to take the edge off the far end of the
         // tangle so the eye settles on the mask in focus, not to shoot the scene
         // at f/1.4 -- and a gather this size cannot support a heavy blur without
@@ -307,6 +311,15 @@ public:
         bool  dither         = true;
         float fogDither      = 1.0f;
         int   ssaa           = 2;      // supersample factor for the scene passes
+        // Temporal AA on top of the supersample (root_taa.metal): the
+        // projection is jittered a fraction of a pixel each frame and the
+        // frames blended along the camera's motion vectors. What the box
+        // resolve cannot settle at 2x -- the crawl along a long thick root's
+        // edge, the highlight shimmer -- this does, over a dozen frames.
+        bool  taa            = true;
+        float taaBlend       = 0.10f;  // the new frame's share; 1 = off in effect
+        float taaJitter      = 1.0f;   // jitter amplitude, output pixels (1 = the pixel)
+        float taaClip        = 1.25f;  // history clamp, neighbourhood std devs
 
         // --- lens ------------------------------------------------------------
         // Chromatic aberration, in pixels of channel separation at the image
@@ -458,6 +471,9 @@ public:
     // setPondTexture used to receive. nil skips the cloth draw entirely rather
     // than sampling an unbound texture.
     void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
+    // Candidates for the automatic focus distance (post.dofFocus == 0): the
+    // world positions of the masks being drawn. Replaced each call.
+    void setFocusPoints(const std::vector<std::array<float, 3>>& pts) { focusPoints_ = pts; }
 
     // --- cached instances (many static root systems, LOD + culling) ----------
     // Placement of a cached system in the world (applied once, baked into the
@@ -616,6 +632,8 @@ private:
     id<MTLRenderPipelineState> bloomUpPipe_   = nil;   // additive blend
     id<MTLRenderPipelineState> postPipe_ = nil;
     id<MTLRenderPipelineState> motionPipe_ = nil;   // camera reprojection
+    id<MTLRenderPipelineState> taaResolvePipe_ = nil;   // supersample box, to output res
+    id<MTLRenderPipelineState> taaPipe_ = nil;          // the temporal blend
     id<MTLRenderPipelineState> sortPipe_   = nil;   // one odd-even sort step
     id<MTLRenderPipelineState> glitchPipe_ = nil;   // datamosh + bitcrush
     id<MTLDepthStencilState>   depthState_ = nil;
@@ -670,6 +688,21 @@ private:
     bool prevViewProjValid_ = false;
     void ensureGlitchTargets();
     void releaseGlitchTargets();
+    // The motion field is shared by the datamosh and the TAA; either allocates it.
+    void ensureMotionTarget();
+    // The TAA's targets: the resolved frame and the history ping-pong, all
+    // w_ x h_. Lazy like the glitch stage's, released with them on a resize.
+    id<MTLTexture> taaResolveTex_ = nil;
+    id<MTLTexture> taaTex_[2]     = {nil, nil};
+    int   taaIdx_ = 0;              // the one written this frame
+    bool  taaHistValid_ = false;    // the other one holds last frame
+    unsigned taaFrame_ = 0;         // jitter sequence index
+    std::vector<std::array<float, 3>> focusPoints_;
+    float dofFocusCur_ = -1.f;      // the eased automatic focus; < 0 = unset
+    float dofFocusTime_ = 0.f;      // postTime it was last eased at
+    void ensureTaaTargets();
+    float autoFocusDistance(const simd_float4x4& vp, float ex, float ey, float ez, float radius);
+    void releaseTaaTargets();
     id<MTLTexture> outTex_       = nil;   // whichever of the two the caller gets
     std::vector<id<MTLTexture>> bloomMips_;   // w_/2, w_/4, ... (post.bloomLevels)
     id<MTLTexture> noiseTex_     = nil;

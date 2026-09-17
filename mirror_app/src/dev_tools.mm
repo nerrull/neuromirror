@@ -27,6 +27,8 @@
 #include "text_overlay.h"
 #include "LeafMesh.h"
 #include "dev_tools.h"
+#include "panel.h"
+#include "ui_params.h"
 #include "core_frame.h"
 
 #include <sys/stat.h>
@@ -246,7 +248,9 @@ int growshot(const char* path, int steps, float az, float el, float rad,
 
     id<MTLTexture> tex = nil;
     for (int i = 0; i < steps; ++i) roots.advance(1.0 / 60.0);   // grow (no GPU work)
-    for (int i = 0; i < 2; ++i) {
+    // Two frames, or enough for the TAA to settle on its still.
+    const int settle = roots.renderer().post.taa ? 14 : 2;
+    for (int i = 0; i < settle; ++i) {
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
             tex = roots.render(cb);
@@ -329,8 +333,10 @@ static bool readTextureLuma(id<MTLTexture> tex, int W, int H, std::vector<float>
     return true;
 }
 
-static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
-                            bool encoded) {
+// The renderer's RGBA16F output as 8-bit RGB, display-encoded (the post
+// chain's own encode when it ran, a plain gamma otherwise).
+static void textureToRGB8(id<MTLTexture> tex, int W, int H, bool encoded,
+                          std::vector<unsigned char>& out) {
     std::vector<uint16_t> px((size_t)W * H * 4);
     [tex getBytes:px.data() bytesPerRow:W * 4 * sizeof(uint16_t)
        fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
@@ -339,19 +345,24 @@ static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
         if (e == 0) bits = (s << 31) | 0; else bits = (s << 31) | ((e + 112) << 23) | (m << 13);
         float f; __builtin_memcpy(&f, &bits, 4); return f;
     };
+    out.resize((size_t)W * H * 3);
+    for (size_t i = 0; i < (size_t)W * H; ++i)
+        for (int c = 0; c < 3; ++c) {
+            float v = h2f(px[i * 4 + c]);
+            v = v <= 0.f ? 0.f : (v >= 1.f ? 1.f : v);
+            if (!encoded) v = powf(v, 1.0f / 2.2f);
+            out[i * 3 + c] = (unsigned char)(v * 255.0f + 0.5f);
+        }
+}
+
+static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
+                            bool encoded) {
+    std::vector<unsigned char> rgb;
+    textureToRGB8(tex, W, H, encoded, rgb);
     FILE* fp = fopen(path, "wb");
     if (!fp) { fprintf(stderr, "cannot open %s\n", path); return false; }
     fprintf(fp, "P6\n%d %d\n255\n", W, H);
-    for (int y = 0; y < H; ++y)
-        for (int x = 0; x < W; ++x) {
-            const uint16_t* p = &px[((size_t)y * W + x) * 4];
-            for (int c = 0; c < 3; ++c) {
-                float v = h2f(p[c]);
-                v = v <= 0.f ? 0.f : (v >= 1.f ? 1.f : v);
-                if (!encoded) v = powf(v, 1.0f / 2.2f);
-                fputc((unsigned char)(v * 255.0f + 0.5f), fp);
-            }
-        }
+    fwrite(rgb.data(), 1, rgb.size(), fp);
     fclose(fp);
     return true;
 }
@@ -361,6 +372,94 @@ static bool writeTexturePPM(id<MTLTexture> tex, int W, int H, const char* path,
 // Shared by --abshot and --rootbench, which is the point: the setting that was
 // measured and the setting that was photographed have to be spelled the same
 // way or the cost table and the images stop describing the same thing.
+// The roots bank the show runs on, applied to a headless RootScene. A preset
+// only lands where a control declares it (ui_params.h), so this runs the
+// panel's roots tab in a backend-less ImGui context for two frames: the
+// first stages the file's values, the second lets the declares consume them
+// (the same two --rootpreset needs). Without this a still is shot on the
+// struct defaults -- a different key light, fog and material from the
+// piece, which is what the stills were quietly showing for a while.
+// `name` is a bank name ("default"), a path, or "none"; empty means the
+// bank named in presets/defaults.
+static bool applyRootsBank(RootScene& roots, const char* name, int W, int H) {
+    std::string n = name ? name : "";
+    if (n == "none") return true;
+    std::string err;
+    if (n.empty()) {
+        if (!ui::LoadDefaults(err)) { fprintf(stderr, "roots bank: %s\n", err.c_str()); return false; }
+        n = ui::DefaultName(ui::Bank::Roots);
+        if (n.empty()) { fprintf(stderr, "roots bank: no default named\n"); return false; }
+    }
+    const std::string path = n.find('/') != std::string::npos
+        ? n : ui::BankDir(ui::Bank::Roots) + "/" + n + ui::BankExt(ui::Bank::Roots);
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1200, 900);
+    io.Fonts->Build();
+    unsigned char* px; int tw, th;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    io.Fonts->SetTexID((ImTextureID)1);
+
+    int fieldGrid = 6, rootSeed = 0;
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        ui::BeginFrame();
+        ImGui::Begin("roots");
+        DrawRootsTab(roots, fieldGrid, rootSeed, W, H);
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();   // declare once so the bank's controls exist to load into
+    const bool ok = ui::LoadBank(ui::Bank::Roots, path, err);
+    if (!ok) fprintf(stderr, "roots bank: %s\n", err.c_str());
+    frame();
+    frame();
+    if (ok) {
+        const rootsim::SimParams& SP = roots.simParams();
+        printf("roots bank: %s (%d parameters); growth: seed %u, %d masks, %s, host %s, pattern %s\n",
+               path.c_str(), ui::BankCount(ui::Bank::Roots), SP.seed, SP.N, SP.speciesXml.c_str(),
+               SP.host.c_str(), SP.pattern.c_str());
+        if (getenv("SEQSHOT_DUMP_SIM"))
+            rootsim::visitSimParams(roots.simParams(), [&](const char* name, auto& f) {
+                using T = std::decay_t<decltype(f)>;
+                if constexpr (std::is_same_v<T, std::string>) printf("  sim %s = %s\n", name, f.c_str());
+                else printf("  sim %s = %g\n", name, (double)f);
+            });
+    }
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+    return ok;
+}
+
+// One value out of the show bank named in presets/defaults, as text, or
+// nullptr. The file is "p <path> = <value>" lines (ui_params.cpp's format).
+static const char* showBankValue(const char* key) {
+    static std::string val;
+    std::string err;
+    if (!ui::LoadDefaults(err)) return nullptr;
+    const std::string n = ui::DefaultName(ui::Bank::Show);
+    if (n.empty()) return nullptr;
+    const std::string path = ui::BankDir(ui::Bank::Show) + "/" + n + ui::BankExt(ui::Bank::Show);
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return nullptr;
+    const std::string want = std::string("p show/") + key + " = ";
+    char line[512];
+    val.clear();
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, want.c_str(), want.size()) != 0) continue;
+        val = line + want.size();
+        while (!val.empty() && (val.back() == '\n' || val.back() == '\r')) val.pop_back();
+        break;
+    }
+    fclose(f);
+    return val.empty() ? nullptr : val.c_str();
+}
+
 static void applyPostOverride(RootScene& roots, const char* spec) {
     if (!spec) return;
     auto& P = roots.renderer().post;
@@ -390,6 +489,10 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "vignette")   P.vignette = v;
         else if (k == "exposure")   P.exposure = v;
         else if (k == "ssaa")       P.ssaa = (int)v;
+        else if (k == "taa")        P.taa = v != 0.f;
+        else if (k == "taaBlend")   P.taaBlend = v;
+        else if (k == "taaJitter")  P.taaJitter = v;
+        else if (k == "taaClip")    P.taaClip = v;
         else if (k == "minPx")      roots.renderer().minRadiusPx = v;
         else if (k == "ao")         A.enabled = v != 0.f;
         else if (k == "aoInt")      A.intensity = v;
@@ -2199,6 +2302,18 @@ int seqshot(const char* prefix, int W, int H,
     if (!ctx.device()) { fprintf(stderr, "seqshot: no Metal device\n"); return 1; }
     RootScene roots(ctx, W, H);
     if (!roots.valid()) { fprintf(stderr, "seqshot: root scene invalid\n"); return 1; }
+    // The show's roots bank first, then the command line's overrides on top.
+    // SEQSHOT_ROOTS=<bank name | path | none>; unset = presets/defaults' pick.
+    if (!applyRootsBank(roots, getenv("SEQSHOT_ROOTS"), W, H)) return 1;
+    // The fog's thickness is the show bank's, not the roots bank's
+    // (main.mm's applyFogFade drives it from g_roots_fog_intensity), and the
+    // show bank needs the whole panel to land, so just that one line is
+    // read from the file. The default (45) is nearly twice as clear as the
+    // piece runs (25), which changed the whole picture of a still.
+    if (const char* v = showBankValue("roots/fog intensity (visibility, world u)")) {
+        roots.renderer().fog.visibility = (float)atof(v);
+        printf("seqshot: fog visibility %s (show bank)\n", v);
+    }
     applyGrowthFields(roots, fields);
     applyPostOverride(roots, getenv("SEQSHOT_POST"));
     // The per-hop spawn/mouth/first-node log line (task: verify the mouth
@@ -2210,6 +2325,14 @@ int seqshot(const char* prefix, int W, int H,
                                   atoi(getenv("SEQSHOT_DEBUG_MARKERS")) != 0;
     if (const char* f = getenv("SEQSHOT_FACES"))
         roots.setTestIdentities(roots.simParams().N, 7u, (float)atof(f));
+    // The sim was reset at construction, on RootScene's own defaults (5
+    // masks, seed 42, a coarser plant); everything above only changed
+    // simParams_. The show replants before every sitting (main.mm's Roots
+    // entry: newSittingSeed(); replant()), which is what actually hands the
+    // bank's growth to the sim -- without this the sequence grew the
+    // constructor's plant whatever the bank said, a tenth the size of a
+    // sitting's.
+    roots.replant();
     roots.skipCloth();
 
     RootSequenceParams sp;
@@ -2218,6 +2341,12 @@ int seqshot(const char* prefix, int W, int H,
     // how long Grow actually took against what the params promise: the
     // pacing check. Otherwise the stages are compressed for stills.
     const bool realtime = getenv("SEQSHOT_REALTIME") && atoi(getenv("SEQSHOT_REALTIME")) != 0;
+    // SEQSHOT_VIDEO=<file.mp4>: every Orbit and Outro frame rendered and piped
+    // to ffmpeg at the run's own frame rate (30, or 60 with SEQSHOT_REALTIME=1)
+    // -- the moving picture the stills cannot show, which is where the
+    // anti-aliasing is judged.
+    const char* videoPath = getenv("SEQSHOT_VIDEO");
+    FILE* videoPipe = nullptr;
     if (!realtime) {
         sp.face_seconds = 0.1f; sp.face_hold_after_cloth_seconds = 0.f;
         sp.grow_face_seconds = 0.6f; sp.grow_rate_max = 1e6f;
@@ -2422,6 +2551,13 @@ int seqshot(const char* prefix, int W, int H,
     };
     auto snap = [&](const char* tag) {
         @autoreleasepool {
+            // The TAA converges over frames; a still is what it settles to,
+            // so let it settle. The scene does not advance between these.
+            if (roots.renderer().post.taa)
+                for (int i = 0; i < 12; ++i) {
+                    id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                    roots.render(cb); [cb commit]; [cb waitUntilCompleted];
+                }
             id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
             id<MTLTexture> tex = roots.render(cb);
             [cb commit]; [cb waitUntilCompleted];
@@ -2437,8 +2573,30 @@ int seqshot(const char* prefix, int W, int H,
             return ok;
         }
     };
+    if (videoPath) {
+        char cmd[1024];
+        snprintf(cmd, sizeof(cmd),
+                 "ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgb24 -s %dx%d -r %d -i - "
+                 "-c:v libx264 -pix_fmt yuv420p -crf 18 -movflags +faststart '%s'",
+                 W, H, (int)std::lround(1.0 / dt), videoPath);
+        videoPipe = popen(cmd, "w");
+        if (!videoPipe) { fprintf(stderr, "seqshot: cannot start ffmpeg\n"); return 1; }
+    }
+    int videoFrames = 0;
     for (; frame < 6000; ++frame) {
         clock += dt;
+        if (videoPipe && (seq.stage() == RootSequence::Stage::Orbit ||
+                          seq.stage() == RootSequence::Stage::Outro)) {
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                id<MTLTexture> tex = roots.render(cb);
+                [cb commit]; [cb waitUntilCompleted];
+                std::vector<unsigned char> rgb;
+                textureToRGB8(tex, W, H, roots.renderer().outputIsEncoded(), rgb);
+                fwrite(rgb.data(), 1, rgb.size(), videoPipe);
+                ++videoFrames;
+            }
+        }
         RootSequence::Inputs in;
         in.clothCleared = roots.clothCleared();
         in.wantOutro = wantOutro;
@@ -2705,6 +2863,17 @@ int seqshot(const char* prefix, int W, int H,
             // Everything lit to its last mask.
             bool all = !roots.neighbours.empty();
             for (const auto& n : roots.neighbours) all = all && n.allMasksLit();
+            // Alone (the show's own case, hood off): nothing to light. The
+            // pull-back finishing is this run's "all lit" -- a still halfway
+            // through it and one at its end, then the shimmer window below
+            // on the steady orbit, where the edge crawl is most visible.
+            if (!sp.hood_enabled && roots.neighbours.empty()) {
+                if (!topShot && clock - orbitT0 >= 0.5 * sp.zoom_out_seconds) {
+                    topShot = true;
+                    if (!snap("orbit_zoom_half")) return 1;
+                }
+                all = clock - orbitT0 >= sp.zoom_out_seconds;
+            }
             if (!allShot && all) {
                 allShot = true;
                 printf("seqshot: all %d structures lit, %.1f s into the orbit\n", vis, clock - orbitT0);
@@ -2833,6 +3002,12 @@ int seqshot(const char* prefix, int W, int H,
                    (moshBeforeFade && moshDuringFade == fadeFrames && !onAfterBegin) ? "OK" : "FAIL");
             break;
         }
+    }
+    if (videoPipe) {
+        const int rc = pclose(videoPipe);
+        printf("seqshot: video %s: %d frames at %d fps (ffmpeg %d)\n",
+               videoPath, videoFrames, (int)std::lround(1.0 / dt), rc);
+        videoPipe = nullptr;
     }
     // The operator's jumps (RootSequence::jumpTo), on the re-begun sequence:
     // each one has to land in its stage, survive one step + advance, and

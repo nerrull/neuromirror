@@ -60,3 +60,7 @@ void PanelStateLoad(bool* detached);
 
 void DrawControlPanel(PanelFrameArgs& a);
 void DrawOverlayWindows(PanelFrameArgs& a);
+// The roots tab alone (the "roots/..." registry section), for a headless
+// caller that wants a roots preset applied to a RootScene without the rest
+// of the app: see dev_tools.mm's applyRootsBank. Needs a live ImGui frame.
+void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int fbh);

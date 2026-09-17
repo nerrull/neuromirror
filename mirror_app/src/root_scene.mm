@@ -517,7 +517,7 @@ void RootScene::regrow() {
     if (!sim_) return;
     syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
-    useSim_ = sim_->reset(simParams_);
+    useSim_ = sim_->reset(liveSimParams());
     mouthSyncPending_ = true;
     simAvailable_ = simAvailable_ || useSim_;
     growthStepEstimate_ = -1;   // simParams_ may have changed; recompute lazily
@@ -532,7 +532,7 @@ void RootScene::replant() {
     if (!sim_) return;
     syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
-    useSim_ = sim_->reset(simParams_);
+    useSim_ = sim_->reset(liveSimParams());
     mouthSyncPending_ = true;
     simAvailable_ = simAvailable_ || useSim_;
     // growthStepEstimate_ deliberately kept -- see the header.
@@ -598,10 +598,18 @@ void RootScene::replant() {
     rebuildFace();
 }
 
+// simParams_ as the live plant actually grows them: the sitting's seed
+// (setSeedOffset) in place of the preset's base.
+rootsim::SimParams RootScene::liveSimParams() const {
+    rootsim::SimParams p = simParams_;
+    p.seed = effectiveSeed();
+    return p;
+}
+
 int RootScene::growthStepEstimate() const {
     if (growthStepEstimate_ >= 0) return growthStepEstimate_;
     int simSteps = 0;
-    rootsim::SimParams probe = simParams_;
+    rootsim::SimParams probe = liveSimParams();
     probe.paramDir = ROOTSIM_PARAM_DIR;
     // Probed at a coarse step and scaled: the run's length in sim *days* is
     // what the parameters fix (a hop ends on arrival plus the dwell, both in
@@ -642,7 +650,7 @@ void RootScene::resetGrowth() {
     if (!sim_) return;
     syncFaceParams();
     simParams_.paramDir = ROOTSIM_PARAM_DIR;
-    useSim_ = sim_->reset(simParams_);
+    useSim_ = sim_->reset(liveSimParams());
     simAvailable_ = simAvailable_ || useSim_;
     ++growGeneration_;
     debugLastLoggedHop_ = -2;
@@ -2595,5 +2603,13 @@ id<MTLTexture> RootScene::render(id<MTLCommandBuffer> cb) {
     if (ld < 1e-5f) ld = 1.f;
     float L[3] = {renderLightDir_[0] / ld, renderLightDir_[1] / ld, renderLightDir_[2] / ld};
     for (int k = 0; k < 3; ++k) rr_->camUp[k] = camUp[k];
+    // Every mask being drawn is a candidate for the automatic focus.
+    {
+        std::vector<std::array<float, 3>> pts;
+        pts.reserve(faceBlocks_.size());
+        for (const auto& fb : faceBlocks_)
+            pts.push_back({fb.mask.pos[0], fb.mask.pos[1], fb.mask.pos[2]});
+        rr_->setFocusPoints(pts);
+    }
     return rr_->render(cb, azimuth, elevation, radius, target, effectiveFov(), L);
 }

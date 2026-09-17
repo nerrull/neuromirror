@@ -169,6 +169,916 @@ static void DrawBankSaveUI(ui::Bank bank) {
     ImGui::PopID();
 }
 
+// The roots tab's body, on its own so a headless caller (dev_tools.mm's
+// applyRootsBank, for the --seqshot stills) can declare exactly the controls
+// the panel does and have a loaded roots preset land on the scene the same
+// way it lands in the app. Path level "roots" is pushed here; the tab itself
+// adds none.
+void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int fbh) {
+    ui::PushSection("roots");
+    MetalRootRenderer& R = roots.renderer();
+        ImGui::Text("t=%5.1fs", roots.clock());   // fps is in the title
+        ImGui::Text("render %d x %d -> %d x %d  (overdraw-bound)",
+                    roots.width(), roots.height(), fbw, fbh);
+        ImGui::Separator();
+
+        // --- growth ------------------------------------------------
+        ui::PushSection("growth");
+        ui::BeginHeader("growth", /*default_open=*/true);
+        {
+            rootsim::SimParams& SP = roots.simParams();
+            ImGui::Text("%s", roots.simActive()
+                            ? (roots.simDone() ? "grown" : "growing")
+                            : "stand-in (no CPlantBox parameters)");
+
+            // The species is saved by name, not by its position in the
+            // combo: the list is a hand-written table that will grow,
+            // and an index would repoint every roots preset the day a
+            // row is inserted above the one they meant.
+            ui::DeclareString("species", &SP.speciesXml);
+
+            const auto& sp = RootScene::species();
+            int si = roots.speciesIndex();
+            ImGui::PushItemWidth(-90);
+            if (ImGui::BeginCombo("species",
+                                  si >= 0 ? sp[size_t(si)].first.c_str()
+                                          : SP.speciesXml.c_str())) {
+                for (int i = 0; i < (int)sp.size(); ++i) {
+                    const bool selected = (i == si);
+                    if (ImGui::Selectable(sp[size_t(i)].first.c_str(), selected))
+                        roots.setSpeciesIndex(i);
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopItemWidth();
+
+            // --- host and pattern -----------------------------
+            // Two axes, not one: the host is what the roots crawl on,
+            // the pattern is where the masks sit in its coordinates.
+            // Any pattern composes with any host -- a helix is a curve
+            // on a cylinder, not a topology of its own.
+            ui::DeclareString("host", &SP.host);
+            ui::DeclareString("pattern", &SP.pattern);
+            {
+                static const char* kHosts[] = {"cone", "cylinder", "sphere",
+                                               "torus", "lobes"};
+                static const char* kPatterns[] = {"phyllotaxis", "helix",
+                                                  "rosette", "feature"};
+                ImGui::PushItemWidth(-90);
+                if (ui::Visible() && ImGui::BeginCombo("host", SP.host.c_str())) {
+                    for (const char* h : kHosts)
+                        if (ImGui::Selectable(h, SP.host == h)) {
+                            SP.host = h; roots.regrow();
+                        }
+                    ImGui::EndCombo();
+                }
+                // Lobes have no surface, so they have no (u, v) for a
+                // pattern to place into -- the grouping is the layout.
+                ui::BeginGate(SP.host != "lobes");
+                if (ui::Visible() && ImGui::BeginCombo("pattern", SP.pattern.c_str())) {
+                    for (const char* q : kPatterns)
+                        if (ImGui::Selectable(q, SP.pattern == q)) {
+                            SP.pattern = q; roots.regrow();
+                        }
+                    ImGui::EndCombo();
+                }
+                ui::EndGate();
+                ImGui::PopItemWidth();
+            }
+
+            ImGui::PushItemWidth(110);
+            ui::BeginGate(SP.pattern == "helix" && SP.host != "lobes");
+            ui::SliderFloat("helix turns", &SP.helixTurns, 0.25f, 6.f, "%.2f");
+            ui::EndGate();
+            ui::BeginGate(SP.host == "lobes" || SP.pattern == "rosette");
+            ui::SliderInt("group size", &SP.groupSize, 1, 9);
+            ui::EndGate();
+            ui::BeginGate(SP.pattern == "rosette" && SP.host != "lobes");
+            ImGui::SameLine();
+            ui::SliderFloat("group spread", &SP.groupSpread, 0.1f, 1.2f);
+            ui::EndGate();
+            ui::BeginGate(SP.pattern == "feature" && SP.host != "lobes");
+            ui::SliderInt("feature clusters", &SP.featureClusters, 1, 6);
+            ui::EndGate();
+            ui::BeginGate(SP.host == "torus" || SP.host == "lobes");
+            ui::SliderFloat("tube radius", &SP.tubeRadius, 2.f, 20.f, "%.1f cm");
+            ui::EndGate();
+            ImGui::PopItemWidth();
+
+            ui::BeginGate(SP.host == "cone" || SP.host == "cylinder");
+            ui::Checkbox("anchor on axis", &SP.anchorOnAxis);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "The first mask on the host's axis, facing down it,\n"
+                    "instead of on the surface facing out: the root\n"
+                    "leaves the visitor's face straight out of its front\n"
+                    "and the chain grows toward the camera. Structural --\n"
+                    "regrow to apply.");
+            }
+            ui::BeginGate(SP.anchorOnAxis);
+            ImGui::PushItemWidth(110);
+            ui::SliderFloat("anchor pitch", &SP.anchorPitchDeg, 0.f, 85.f, "%.0f deg");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How steeply the first face looks down, degrees below\n"
+                    "the horizontal. The chain hangs off that face, so\n"
+                    "this is how the structure hangs: 90 would be\n"
+                    "straight down, 0 lays it level. Structural --\n"
+                    "regrow to apply.");
+            }
+            ImGui::SameLine();
+            ui::SliderFloat("anchor spawn", &SP.anchorSpawn, 0.f, 6.f, "%.2f cm");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How far behind the anchor mask's mouth the first\n"
+                    "root starts; it grows out through the mouth hole\n"
+                    "along the normal. Takes effect at the next regrow.");
+            }
+            ImGui::PopItemWidth();
+            ui::EndGate();
+            ui::EndGate();
+            ui::Checkbox("tree relay", &SP.treeRelay);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Each hop leaves from the revealed mask NEAREST the\n"
+                    "next one, rather than from the one just left: the\n"
+                    "system branches instead of threading.\n\n"
+                    "Changes nothing on a spiral, where the nearest mask\n"
+                    "already is the previous one. It is for the clustered\n"
+                    "layouts -- and it currently costs reach there, since\n"
+                    "the hop starts inside a crowded neighbourhood it has\n"
+                    "to escape.");
+            }
+            ImGui::Separator();
+
+            ImGui::PushItemWidth(110);
+            ui::SliderInt("masks", &SP.N, 1, 24);
+            ImGui::SameLine();
+            ui::SliderFloat("cone radius", &SP.R0, 6.f, 24.f, "%.1f cm");
+            ui::SliderFloat("cone height", &SP.Hh, 24.f, 96.f, "%.1f cm");
+            ImGui::SameLine();
+            ui::SliderFloat("taper", &SP.taperPower, 0.4f, 2.5f);
+            ui::SliderFloat("spiral x golden", &SP.angleStepGoldenMult,
+                               0.2f, 2.0f);
+            ImGui::SameLine();
+            ui::SliderFloat("jitter", &SP.sigma, 0.f, 1.2f);
+            ui::SliderFloat("travel pull", &SP.weight, 0.f, 1.f);
+            ImGui::SameLine();
+            ui::SliderFloat("pull reach", &SP.travelPullReach, 0.4f, 3.f);
+            ui::SliderFloat("lateral", &SP.lateralWeight, 0.f, 1.f);
+            ImGui::SameLine();
+            ui::SliderFloat("dwell", &SP.dwellWeight, 0.f, 1.f);
+            ui::SliderFloat("dwell days", &SP.dwellDays, 2.f, 60.f);
+            ImGui::SameLine();
+            ui::SliderFloat("hop days", &SP.maxHopDays, 10.f, 160.f);
+            ui::SliderInt("root types", &SP.rootTypes, 1, 3);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Up to three dwell settings dealt to the hops in\n"
+                    "turn (hop 1 type 1, hop 2 type 2, ... round again).\n"
+                    "Type 1 is dwell / dwell days / dwell lateral above\n"
+                    "and in advanced; types 2 and 3 are below. 1 = every\n"
+                    "hop the same. Applies on regrow.");
+            }
+            // Gated, not if'd: declared every frame (PANEL.md).
+            ui::BeginGate(SP.rootTypes >= 2);
+            ui::SliderFloat("type 2 dwell days", &SP.dwell2Days, 2.f, 60.f);
+            ImGui::SameLine();
+            ui::SliderFloat("type 2 dwell", &SP.dwell2Weight, 0.f, 1.f);
+            ImGui::SameLine();
+            ui::SliderFloat("type 2 dwell lateral", &SP.dwell2Lateral, 0.f, 1.f);
+            ui::EndGate();
+            ui::BeginGate(SP.rootTypes >= 3);
+            ui::SliderFloat("type 3 dwell days", &SP.dwell3Days, 2.f, 60.f);
+            ImGui::SameLine();
+            ui::SliderFloat("type 3 dwell", &SP.dwell3Weight, 0.f, 1.f);
+            ImGui::SameLine();
+            ui::SliderFloat("type 3 dwell lateral", &SP.dwell3Lateral, 0.f, 1.f);
+            ui::EndGate();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Ceiling, not the budget. How long a hop's travel\n"
+                    "actually gets is worked out from how far it has to\n"
+                    "go and how fast this species elongates -- this only\n"
+                    "stops a hop that is never going to arrive from\n"
+                    "growing the whole system into a ball.");
+            }
+            ui::SliderFloat("travel slack", &SP.travelSlack, 1.f, 4.f);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How much longer the root's real path is than the\n"
+                    "straight line to the mask. It wanders -- the tropism\n"
+                    "is a random walk with a pull -- and it steers around\n"
+                    "the masks already revealed, so a budget that assumes\n"
+                    "a straight line runs out short of every target.\n\n"
+                    "Too low and late masks get revealed with the root\n"
+                    "still halfway there; too high only costs days on a\n"
+                    "hop that was never going to make it.");
+            }
+            ImGui::PopItemWidth();
+
+            ui::Checkbox("even nests", &SP.evenNests);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "The same amount of root at every mask.\n\n"
+                    "The dwell is already the same everywhere, but the\n"
+                    "nest is not: laterals grow during the travel too,\n"
+                    "and travel gets longer as the cone widens -- so the\n"
+                    "last mask ends up with about twice the root of the\n"
+                    "first. This pads every hop out to one age, so the\n"
+                    "early masks wait instead of the late ones being\n"
+                    "fuller.\n\n"
+                    "It costs days, and the days are what make the system\n"
+                    "bushy: turning it on wants a shorter dwell to hold\n"
+                    "the same density.");
+            }
+            ui::Checkbox("crawl the cone surface", &SP.coneSurfaceTravel);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Confine the travelling root to a thin shell around\n"
+                    "the cone the masks sit on, so it crawls over the\n"
+                    "surface between them instead of cutting through the\n"
+                    "interior.\n\n"
+                    "Travel only: the dwell wrapping stays free, or the\n"
+                    "nests around each mask would be flattened onto the\n"
+                    "surface instead of bulging into 3D.");
+            }
+            ui::BeginGate(SP.coneSurfaceTravel);
+            if (ui::Visible()) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+            }
+            ui::SliderFloat("shell", &SP.coneShellThickness, 1.f, 20.f,
+                               "%.1f cm");
+            ui::EndGate();
+
+            ImGui::SetNextItemWidth(110);
+            ui::SliderFloat("days / step", &SP.growthDt, 0.05f, 3.f, "%.2f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How far the plant moves per sim step. The show\n"
+                    "paces steps to the same wall-clock speed whatever\n"
+                    "this is, so smaller only makes the motion finer:\n"
+                    "at 1 a hop is a few steps a second and reads as\n"
+                    "stop motion; 0.2 is ~30 steps/s. Takes effect at\n"
+                    "the next replant (the next visitor) or regrow --\n"
+                    "the sim copies its parameters at reset.");
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90);
+            ui::SliderInt("steps/frame", &roots.simStepsPerFrame, 1, 30);
+
+            if (ImGui::Button("regrow")) roots.regrow();
+            ImGui::SameLine();
+            if (ImGui::Button("reseed")) roots.reseed((uint32_t)(++rootSeed));
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "A new random seed for the same parameters. Reseeds\n"
+                    "the growth itself -- it used to drop a synthetic\n"
+                    "stand-in structure over a running grow, which the\n"
+                    "next frame then overwrote.");
+            }
+            ImGui::SameLine();
+            if (roots.seedOffset())
+                ImGui::TextDisabled("seed %u (+%u this sitting)", SP.seed, roots.seedOffset());
+            else
+                ImGui::TextDisabled("seed %u", SP.seed);
+
+            // --- the rest of SimParams ----------------------------
+            //
+            // These had no control at all: they existed only in the
+            // .root file, which is what made a second preset system
+            // necessary in the first place. Declaring them here is what
+            // lets that system go away -- a roots preset is now the
+            // whole of SimParams, and there is one file per root look
+            // instead of two that can disagree.
+            //
+            // Folded away by default because they are structure, not
+            // performance: changing one means a regrow.
+            ui::BeginHeader("structure (needs a regrow)");
+            {
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("mask start", &SP.startFrac, 0.f, 1.f);
+                ImGui::SameLine();
+                ui::SliderFloat("mask end", &SP.endFrac, 0.f, 1.f);
+                ui::SliderFloat("spiral drift", &SP.distStepFrac, -0.5f, 0.5f);
+                ImGui::SameLine();
+                ui::SliderFloat("travel trials", &SP.mainTravelTrials, 1.f, 60.f,
+                                "%.0f");
+                ui::SliderFloat("dwell lateral", &SP.dwellLateralWeight, 0.f, 1.f);
+                ImGui::SameLine();
+                ui::SliderFloat("reach x", &SP.reachMult, 0.4f, 4.f);
+                ui::SliderFloat("view cylinder", &SP.viewCylLen, 1.f, 30.f,
+                                "%.1f cm");
+                ImGui::SameLine();
+                ui::SliderFloat("target lift", &SP.targetLift, -10.f, 10.f,
+                                "%.2f cm");
+                ui::SliderFloat("spawn behind", &SP.spawnBehind, 0.f, 10.f,
+                                "%.2f cm");
+                ImGui::SameLine();
+                ui::SliderFloat("nest behind", &SP.nestBehind, -5.f, 15.f,
+                                "%.2f cm");
+                ui::SliderFloat("basal clear", &SP.basalClear, -1.f, 10.f, "%.1f cm");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How far past the mouth the main root grows before\n"
+                        "its first lateral. The species files start laterals\n"
+                        "1 cm from the base -- inside the head -- and those\n"
+                        "were the pile of root behind the first mask.\n"
+                        "-1 = the species' own value.");
+                }
+                ui::SliderFloat("motion cavity", &SP.motionCavity, 0.f, 1.5f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How much of a replayed head's swing is added to\n"
+                        "its mask's keep-out and nest ring, so the roots\n"
+                        "grow around the motion instead of through it.\n"
+                        "1 = the whole swing, 0 = ignore it. Next sitting.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Where the dwell's ring of attractors sits: this far\n"
+                        "behind the face along its normal. 0 rings the face in\n"
+                        "its own plane (the wrap frames it); a few cm back and\n"
+                        "the roots gather behind the head instead, a nest the\n"
+                        "face sits in front of. Takes effect at the next regrow.");
+                }
+                ui::SliderInt("nest rings", &SP.nestRings, 1, 6);
+                ImGui::SameLine();
+                ui::SliderInt("nest per ring", &SP.nestPerRing, 3, 16);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The nest's attractors: a hemisphere behind the mask,\n"
+                        "rings from the rim back to a point at the pole. More\n"
+                        "of them, the more places the wrap has left to go once\n"
+                        "the ones it reached are spent (nest hit radius).");
+                }
+                ui::SliderFloat("nest hit radius", &SP.nestHitRadius, 0.f, 6.f,
+                                "%.2f cm");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "A nest attractor is dropped once a root node comes\n"
+                        "within this of it, so the wrap moves on instead of\n"
+                        "circling a spot it has reached. 0 keeps them all for\n"
+                        "the whole dwell. Takes effect at the next regrow.");
+                }
+                ImGui::PopItemWidth();
+
+                // The seed is part of the look -- a preset that came
+                // back with a different one would not be the same root
+                // system -- so it is saved, through an int because that
+                // is the widest kind the registry has.
+                int seed_i = (int)SP.seed;
+                ui::DeclareInt("seed", &seed_i, 0, 1 << 30);
+                SP.seed = (unsigned)seed_i;
+            }
+            ui::EndHeader();
+        }
+        ui::EndHeader();
+        ui::PopSection();
+
+        // --- presets -----------------------------------------------
+        // The root scene's presets are the `roots` bank now, saved
+        // from the settings section at the bottom of the panel with
+        // everything else. There used to be a second preset system
+        // here, writing .root files that held the SimParams fields the
+        // panel did not expose -- so "the root preset" and "the root
+        // settings" were two different things that could disagree, and
+        // only one of them was ever in the file you loaded.
+
+        // --- camera ------------------------------------------------
+        ui::PushSection("camera");
+        ui::BeginHeader("camera", /*default_open=*/true);
+        {
+            // In the show the timeline (show tab, show/roots) owns the
+            // camera and these are inert. They drive the fallback
+            // framing outside Transition/Roots -- looking at the scene
+            // rather than playing it.
+            ImGui::TextDisabled("in Transition/Roots the show's timeline drives the camera");
+            ui::Checkbox("frame automatically", &roots.autoFrame);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Derive the target and distance from the layout's\n"
+                    "own bounds -- the whole planned layout, or one\n"
+                    "mask square to its normal. The constants this\n"
+                    "replaced were tuned to one cone size and pointed\n"
+                    "at the wrong part of any other.");
+            }
+            ui::BeginGate(roots.autoFrame);
+            {
+                const int nm = (int)roots.plannedMasks().size();
+                std::string label = roots.focusMask >= 0 && roots.focusMask < nm
+                                        ? ("mask " + std::to_string(roots.focusMask))
+                                        : std::string("whole scene");
+                ImGui::PushItemWidth(-90);
+                if (ImGui::BeginCombo("focus", label.c_str())) {
+                    if (ImGui::Selectable("whole scene", roots.focusMask < 0))
+                        roots.focusMask = -1;
+                    for (int i = 0; i < nm; ++i) {
+                        const std::string it = "mask " + std::to_string(i);
+                        if (ImGui::Selectable(it.c_str(), roots.focusMask == i))
+                            roots.focusMask = i;
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::PopItemWidth();
+                ImGui::SetNextItemWidth(110);
+                ui::SliderFloat("zoom", &roots.zoom, 0.15f, 5.f, "%.2fx");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("reset zoom")) roots.zoom = 1.f;
+                ImGui::SetNextItemWidth(90);
+                ui::SliderFloat("margin", &roots.frameMargin, 0.f, 1.5f, "%.2f");
+            }
+            ui::EndGate();
+            ImGui::BeginDisabled(roots.autoFrame);
+            ui::SliderFloat("radius", &roots.radius, 5.0f, 120.0f);
+            ImGui::EndDisabled();
+            ui::SliderFloat("azimuth", &roots.azimuth, -(float)M_PI, (float)M_PI);
+            ui::SliderFloat("elevation", &roots.elevation, -1.5f, 1.5f);
+            ui::SliderFloat("fov", &roots.fov, 0.2f, 1.2f);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ImGui::Separator();
+        ImGui::Separator();
+        // shading
+        ui::PushSection("material");
+        const char* modes[] = {"Phong", "PBR", "Invert (approx)"};
+        int sm = (int)R.shaderMode;
+        if (ImGui::Combo("shader", &sm, modes, 3)) R.shaderMode = (MetalRootRenderer::ShaderMode)sm;
+        ui::ColorEdit3("base color", R.mat.baseColor);
+        ui::ColorEdit3("base color 2", R.mat.baseColor2);
+        ui::SliderFloat("color noise", &R.mat.colorNoiseStrength, 0.0f, 1.0f);
+        ui::SliderFloat("ambient", &R.mat.ambient, 0.0f, 0.5f);
+        ui::SliderFloat("diffuse", &R.mat.diffuse, 0.0f, 1.5f);
+        ui::SliderFloat("shininess", &R.mat.shininess, 4.0f, 300.0f);
+        ui::BeginGate(sm == 1);
+        {
+            ui::SliderFloat("metallic", &R.pbr.metallic, 0.0f, 1.0f);
+            ui::SliderFloat("roughness", &R.pbr.roughness, 0.05f, 1.0f);
+        }
+        ui::EndGate();
+        ui::SliderFloat("radius scale", &R.radiusScale, 0.2f, 4.0f);
+        ui::PopSection();           // "material"
+        ImGui::Separator();
+        // fog
+        ui::PushSection("fog & atmosphere");
+        ui::BeginHeader("fog & atmosphere", /*default_open=*/false);
+        {
+            ui::Checkbox("fog on", &R.fog.enabled);
+            ui::ColorEdit3("fog color", R.fog.color);
+            // Visibility itself is per-phase now (show/<phase>/fog
+            // intensity, with beat 1's fade-in on top) -- see the
+            // Roots render branch, which writes R.fog.visibility
+            // every frame. Everything else about the look stays one
+            // global Roots-preset value.
+            ImGui::TextDisabled("visibility: set per phase, in the show tab");
+            ui::SliderFloat("height scale", &R.fog.heightScale, 2.0f, 120.0f);
+            ui::Checkbox("height ref follows target", &R.fog.heightRefAuto);
+            if (!R.fog.heightRefAuto)
+                ui::SliderFloat("height ref (Y)", &R.fog.heightRef, -20.0f, 60.0f);
+            ImGui::Separator();
+            ui::Checkbox("clear radius follows camera", &R.fog.startAuto);
+            if (R.fog.startAuto)
+                ui::SliderFloat("clear radius x orbit", &R.fog.startFrac, 0.0f, 1.5f);
+            else
+                ui::SliderFloat("clear radius", &R.fog.startDist, 0.0f, 200.0f);
+            ImGui::TextDisabled("marching from %.1f u", R.fog.startDist);
+            ImGui::Separator();
+            ui::SliderFloat("fog noise", &R.fog.noiseStrength, 0.0f, 1.0f);
+            ui::SliderFloat("noise contrast", &R.fog.noiseContrast, 0.0f, 3.0f);
+            ui::SliderFloat("noise scale", &R.fog.noiseScale, 0.02f, 2.5f);
+            ImGui::TextDisabled("feature size ~%.1f world u",
+                                8.0f / std::max(R.fog.noiseScale, 1e-3f));
+            ui::SliderFloat("drift speed", &R.fog.driftSpeed, 0.0f, 6.0f);
+            ui::SliderInt("march steps", &R.fog.steps, 4, 32);
+            ui::SliderFloat("noise mip level", &R.fog.noiseLod, 0.0f, 4.0f, "%.1f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Which mip of the noise volume the march reads.\n"
+                    "Coarser is cheaper (the march is bound by these\n"
+                    "fetches) and loses nothing until about 3, where\n"
+                    "the finest octave goes.");
+            }
+            ui::SliderInt("volume downscale", &R.fog.downscale, 1, 4);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "The volumetric integral runs at 1/this of the\n"
+                    "output. Depth-aware upsampling keeps it tight to\n"
+                    "silhouettes at 3 and 4.");
+            }
+            ImGui::Separator();
+            ui::SliderFloat("scatter (medium albedo)", &R.fog.scatter, 0.0f, 1.5f);
+            ui::SliderFloat("anisotropy (fwd <-> back)", &R.fog.anisotropy, -0.9f, 0.9f);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        // pulses
+        ui::PushSection("travelling pulses");
+        ui::BeginHeader("travelling pulses", /*default_open=*/false);
+        {
+            ui::Checkbox("pulses on", &R.pulse.enabled);
+            ui::SliderFloat("pulse speed", &R.pulse.speed, 0.0f, 40.0f);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "The live structure's train runs continuously, node\n"
+                    "distance 0..N under the free-running pulse clock.\n"
+                    "A hood structure shows no pulses at all until its\n"
+                    "own Reveal marker fires (see roots/reveal); at that\n"
+                    "moment its train starts from its seed (top) mask,\n"
+                    "node distance 0, and travels outward from there.");
+            }
+            ui::SliderFloat("pulse spacing", &R.pulse.spacing, 4.0f, 60.0f);
+            ui::SliderFloat("pulse width", &R.pulse.width, 0.5f, 12.0f);
+            ui::SliderFloat("pulse intensity", &R.pulse.intensity, 0.0f, 4.0f);
+            ui::ColorEdit3("pulse color", R.pulse.color);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("environment & material");
+        ui::BeginHeader("environment & material", /*default_open=*/false);
+        {
+            // The tranche buttons are a coarse quality dial and the A/B
+            // control: each one is a whole group of the settings below,
+            // so a look can be compared against the previous stage
+            // without hunting for which sliders belonged to it.
+            ImGui::TextUnformatted("quality tranche");
+            for (int t = 0; t <= 3; ++t) {
+                if (t) ImGui::SameLine();
+                char lbl[8]; snprintf(lbl, sizeof lbl, "%d", t);
+                if (ImGui::RadioButton(lbl, R.tranche() == t)) {
+                    R.setTranche(t);
+                    roots.rebuildFace();   // smoothNormals is baked into the mesh
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(0 baseline, 3 full)");
+            ImGui::TextUnformatted("key light");
+            ui::ColorEdit3("key color", R.env.keyColor);
+            ui::SliderFloat("key intensity", &R.env.keyIntensity, 0.0f, 4.0f);
+            if (roots.micLightResponsive) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(live -- set by the mic below)");
+            }
+            // What a structure the Reveal has popped in but not yet lit
+            // keeps of its radiance (see MetalRootRenderer::EnvParams).
+            ui::SliderFloat("unlit level", &R.env.unlitLevel, 0.0f, 0.3f);
+            ui::SliderFloat("key direction X", &roots.lightDir[0], -1.0f, 1.0f);
+            ui::SliderFloat("key direction Y", &roots.lightDir[1], -1.0f, 1.0f);
+            ui::SliderFloat("key direction Z", &roots.lightDir[2], -1.0f, 1.0f);
+            if (roots.trackLightAngle) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(home dir. -- swung by tracking below)");
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted("key light -- room responsivity");
+            ui::Checkbox("intensity follows the mic", &roots.micLightResponsive);
+            ui::SliderFloat("base intensity (silence)", &roots.micBaseKeyIntensity,
+                            0.0f, 4.0f);
+            ui::SliderFloat("mic gain", &roots.micIntensityGain, 0.0f, 4.0f);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Key intensity = base * (1 + gain * mic level).\n"
+                    "The mic level is the room's own ambient level\n"
+                    "(a real microphone tap -- see mic_level.h), not\n"
+                    "anything Wwise is playing.");
+            }
+            ui::Checkbox("angle follows the tracked visitor",
+                        &roots.trackLightAngle);
+            ui::SliderFloat("track angle range (rad)", &roots.trackAngleRange,
+                            0.0f, 1.5f);
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("key light -- placement");
+            {
+                int lm = (int)roots.lightMode;
+                if (ImGui::Combo("aim", &lm,
+                        "direction (authored)\0position (place a lamp)\0"
+                        "camera-relative\0"))
+                    roots.lightMode = (RootScene::LightMode)lm;
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The key stays a single directional light in every\n"
+                        "mode -- this is how its direction is decided.\n"
+                        "  direction       the X/Y/Z above, dialled by hand\n"
+                        "  position        aim from a world point at the\n"
+                        "                  focus below; easier to place by eye\n"
+                        "  camera-relative offset from the view axis, so the\n"
+                        "                  rake stays put as the camera moves");
+                }
+                // Both arms declare (PANEL.md): the inactive mode's
+                // numbers still have to load and save.
+                ui::BeginGate(roots.lightMode == RootScene::LightMode::Position);
+                {
+                    ui::SliderFloat("lamp X", &roots.lightPos[0], -60.f, 60.f);
+                    ui::SliderFloat("lamp Y", &roots.lightPos[1], -60.f, 60.f);
+                    ui::SliderFloat("lamp Z", &roots.lightPos[2], -60.f, 60.f);
+                }
+                ui::EndGate();
+                ui::BeginGate(roots.lightMode == RootScene::LightMode::CameraRelative);
+                {
+                    ui::SliderFloat("offset azimuth (rad)",
+                                    &roots.lightOffsetAz, -3.14f, 3.14f);
+                    ui::SliderFloat("offset elevation (rad)",
+                                    &roots.lightOffsetEl, -1.5f, 1.5f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "A key on the view axis (offset 0) is flat frontal\n"
+                            "light with nothing to model the form -- the rake\n"
+                            "lives in the off-axis angle.");
+                    }
+                }
+                ui::EndGate();
+                int lf = (int)roots.lightFocus;
+                if (ImGui::Combo("focus", &lf,
+                        "scene centre\0anchor mask\0camera target\0"))
+                    roots.lightFocus = (RootScene::LightFocus)lf;
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("What the lamp aims at.");
+                }
+                const float* rl = roots.resolvedLightDir();
+                const float* rf = roots.resolvedLightFocus();
+                ImGui::TextDisabled("live dir (%.2f, %.2f, %.2f)  focus (%.1f, %.1f, %.1f)",
+                                    rl[0], rl[1], rl[2], rf[0], rf[1], rf[2]);
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("ambient (hemisphere)");
+            ui::ColorEdit3("background", R.env.background);
+            ui::ColorEdit3("sky color", R.env.skyColor);
+            ui::ColorEdit3("ground color", R.env.groundColor);
+            ui::SliderFloat("hemisphere", &R.env.hemiStrength, 0.0f, 3.0f);
+            ui::SliderFloat("env specular", &R.env.envSpec, 0.0f, 2.0f);
+            ui::SliderFloat("rim", &R.env.rimStrength, 0.0f, 1.0f);
+            ImGui::Separator();
+            ui::SliderFloat("sss wrap", &R.env.sssWrap, 0.0f, 1.5f);
+            ui::SliderFloat("sss transmit", &R.env.sssTrans, 0.0f, 2.0f);
+            ui::SliderFloat("sss power", &R.env.sssPower, 1.0f, 16.0f);
+            ui::ColorEdit3("sss tint", R.env.sssTint);
+            ImGui::Separator();
+            ImGui::Separator();
+            ImGui::TextUnformatted("root surface (fibre detail)");
+            ui::SliderFloat("fibre strength", &R.detail.strength, 0.0f, 1.5f);
+            ui::SliderFloat("fibre scale", &R.detail.scale, 2.0f, 40.0f);
+            ui::SliderFloat("fibre stretch", &R.detail.stretch, 1.0f, 20.0f);
+            ui::SliderFloat("fibre break-up", &R.detail.rough, 0.0f, 1.0f);
+            ui::SliderFloat("per-root tint", &R.detail.tint, 0.0f, 0.5f);
+            ui::SliderFloat("fibre fade px", &R.detail.fadePx, 0.0f, 6.0f, "%.1f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Anti-shimmer. Fibre detail is faded out on roots\n"
+                    "far enough that one fibre cell projects smaller\n"
+                    "than this many screen pixels (full detail from\n"
+                    "twice this up). Far roots go smooth instead of\n"
+                    "crawling as the camera orbits. 0 = never fade.");
+            }
+            ImGui::Separator();
+            ui::Checkbox("ambient occlusion", &R.ao.enabled);
+            ui::SliderFloat("AO radius", &R.ao.radius, 0.2f, 6.0f);
+            ui::SliderFloat("AO intensity", &R.ao.intensity, 0.0f, 4.0f);
+            ui::SliderInt("AO samples", &R.ao.samples, 4, 24);
+            ui::SliderInt("AO downscale", &R.ao.downscale, 1, 4);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("post");
+        ui::BeginHeader("post", /*default_open=*/false);
+        {
+            ui::Checkbox("post chain", &R.post.enabled);
+            ui::SliderInt("supersample", &R.post.ssaa, 1, 3);
+            ImGui::TextDisabled("scene renders at %dx%d", R.width() * R.post.ssaa,
+                                R.height() * R.post.ssaa);
+            ui::Checkbox("temporal AA", &R.post.taa);
+            ui::SliderFloat("TAA blend", &R.post.taaBlend, 0.02f, 1.0f);
+            ui::SliderFloat("TAA jitter", &R.post.taaJitter, 0.0f, 1.0f);
+            ui::SliderFloat("TAA clip", &R.post.taaClip, 0.0f, 3.0f);
+            ui::Checkbox("filmic tonemap", &R.post.tonemap);
+            ui::SliderFloat("exposure", &R.post.exposure, 0.1f, 4.0f);
+            ImGui::Separator();
+            ui::Checkbox("bloom", &R.post.bloom);
+            ui::SliderFloat("bloom threshold", &R.post.bloomThreshold, 0.2f, 4.0f);
+            ui::SliderFloat("bloom intensity", &R.post.bloomIntensity, 0.0f, 1.0f);
+            ui::SliderFloat("bloom radius", &R.post.bloomRadius, 0.5f, 3.0f);
+            ImGui::Separator();
+            ui::Checkbox("depth of field", &R.post.dof);
+            ui::SliderFloat("DoF focus (0=auto)", &R.post.dofFocus, 0.0f, 120.0f);
+            ui::SliderFloat("DoF focus ease (s)", &R.post.dofFocusEase, 0.0f, 2.0f);
+            ui::SliderFloat("DoF range", &R.post.dofRange, 5.0f, 150.0f);
+            ui::SliderFloat("DoF strength", &R.post.dofStrength, 0.0f, 1.0f);
+            ImGui::Separator();
+            ui::SliderFloat("vignette", &R.post.vignette, 0.0f, 1.0f);
+            ui::SliderFloat("fog dither", &R.post.fogDither, 0.0f, 1.0f);
+            ui::Checkbox("output dither", &R.post.dither);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("lens & film");
+        ui::BeginHeader("lens & film", /*default_open=*/false);
+        {
+            ImGui::TextUnformatted("lens");
+            if (ImGui::Button("wide angle")) roots.setWideAngle(true);
+            ImGui::SameLine();
+            if (ImGui::Button("normal")) roots.setWideAngle(false);
+            ui::Checkbox("set FOV by focal length", &roots.useFocal);
+            ui::BeginGate(roots.useFocal);
+            {
+                ui::SliderFloat("focal length (mm)", &roots.focalMM, 8.0f, 135.0f);
+                ImGui::TextDisabled("35mm equiv · %.0f deg vertical FOV",
+                                    roots.effectiveFov() * 2.0f * 57.2957795f);
+            }
+            ui::EndGate();
+            ui::BeginGate(!(roots.useFocal));
+            {
+                ui::SliderFloat("fov (rad, half-angle)", &roots.fov, 0.15f, 1.2f);
+            }
+            ui::EndGate();
+            ui::SliderFloat("barrel <-> pincushion", &R.post.distortK1, -0.4f, 0.4f);
+            ui::SliderFloat("distortion (corners)", &R.post.distortK2, -0.2f, 0.2f);
+            ui::SliderFloat("distortion re-crop", &R.post.distortZoom, 0.6f, 1.2f);
+            ImGui::Separator();
+            ui::SliderFloat("chromatic aberration", &R.post.caStrength, 0.0f, 8.0f);
+            ImGui::TextDisabled("px of channel separation at the corner");
+            ui::SliderFloat("anamorphic streak", &R.post.streak, 0.0f, 1.0f);
+            ui::SliderFloat("streak length", &R.post.streakLength, 2.0f, 60.0f);
+            ui::ColorEdit3("streak tint", R.post.streakTint);
+            ImGui::Separator();
+            ImGui::TextUnformatted("film");
+            ui::SliderFloat("halation", &R.post.halation, 0.0f, 1.0f);
+            ui::ColorEdit3("halation tint", R.post.halationTint);
+            ui::SliderInt("halation spread (mip)", &R.post.halationMip, 0, 4);
+            ImGui::Separator();
+            ui::SliderFloat("grain", &R.post.grain, 0.0f, 0.12f);
+            ui::SliderFloat("grain size (px)", &R.post.grainSize, 1.0f, 6.0f);
+            ui::SliderFloat("grain chroma", &R.post.grainChroma, 0.0f, 1.0f);
+            ImGui::Separator();
+            ImGui::TextUnformatted("print grade");
+            ui::SliderFloat("contrast", &R.post.contrast, 0.5f, 2.0f);
+            ui::SliderFloat("saturation", &R.post.saturation, 0.0f, 2.0f);
+            ui::SliderFloat("split strength", &R.post.splitStrength, 0.0f, 1.0f);
+            ui::SliderFloat("split balance (-1 off)", &R.post.toneBalance, -1.0f, 1.0f);
+            ui::ColorEdit3("shadow tint", R.post.shadowTint);
+            ui::ColorEdit3("highlight tint", R.post.highlightTint);
+            ui::ColorEdit3("lift", R.post.lift);
+            ui::ColorEdit3("gamma", R.post.gammaC);
+            ui::ColorEdit3("gain", R.post.gain);
+            if (ImGui::Button("reset grade")) {
+                R.post.contrast = 1.f; R.post.saturation = 1.f;
+                for (int i = 0; i < 3; ++i) {
+                    R.post.lift[i] = 0.f; R.post.gammaC[i] = 1.f; R.post.gain[i] = 1.f;
+                }
+            }
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("glitch");
+        ui::BeginHeader("glitch", /*default_open=*/false);
+        {
+            ImGui::TextUnformatted("bitcrush");
+            ui::SliderFloat("crush", &R.post.crush, 0.0f, 1.0f);
+            ImGui::TextDisabled("0 is bit-exact; the dial drives block "
+                                "size and level count together");
+            ui::BeginGate(R.post.crush > 0.0f);
+            {
+                ui::SliderFloat("block size (px)", &R.post.crushBlock, 1.0f, 64.0f);
+                ImGui::TextDisabled("output is %.0fx%.0f blocks at full crush",
+                                    (float)R.width() / std::max(R.post.crushBlock, 1.0f),
+                                    (float)R.height() / std::max(R.post.crushBlock, 1.0f));
+                ui::SliderFloat("colour levels", &R.post.crushLevels, 2.0f, 32.0f);
+                ui::SliderFloat("crush dither", &R.post.crushDither, 0.0f, 2.0f);
+            }
+            ui::EndGate();
+            ImGui::Separator();
+            ImGui::TextUnformatted("datamosh");
+            ui::Checkbox("mosh (hold)", &R.post.mosh);
+            ImGui::SameLine();
+            if (ImGui::Button("trigger")) R.triggerDatamosh(R.post.moshTrigger);
+            ui::SliderFloat("trigger length (s)", &R.post.moshTrigger, 0.1f, 10.0f);
+            ui::SliderFloat("vector freeze (s)", &R.post.moshFreeze, 0.0f, 8.0f);
+            ImGui::TextDisabled("how long the motion field stays fixed after "
+                                "it starts; 0 = for the whole run");
+            ui::SliderFloat("mosh amount", &R.post.moshAmount, 0.0f, 1.0f);
+            ui::SliderFloat("vector gain", &R.post.moshGain, 0.0f, 6.0f);
+            ui::SliderFloat("macroblock (px)", &R.post.moshBlock, 1.0f, 64.0f);
+            ui::SliderFloat("background depth", &R.post.moshBgDepth, 5.0f, 400.0f);
+            ImGui::TextDisabled(R.datamoshActive() ? "moshing" : "idle");
+            ImGui::Separator();
+            ImGui::TextUnformatted("pixel sort");
+            ui::Checkbox("sort", &R.post.sort);
+            ui::BeginGate(R.post.sort);
+            {
+                ui::SliderFloat("sort amount", &R.post.sortAmount, 0.0f, 1.0f);
+                ui::SliderFloat("band low", &R.post.sortLow, 0.0f, 1.0f);
+                ui::SliderFloat("band high", &R.post.sortHigh, 0.0f, 1.0f);
+                ImGui::TextDisabled("only pixels inside the band move, so the "
+                                    "band's edges are where the spans break");
+                ui::SliderInt("passes/frame", &R.post.sortPasses, 1, 8);
+                ImGui::TextDisabled("the sort converges over frames; this is "
+                                    "how fast");
+                ui::SliderFloat("live feed", &R.post.sortFeed, 0.0f, 0.5f);
+                int axis = R.post.sortAxis;
+                if (ImGui::RadioButton("columns", axis == 0)) R.post.sortAxis = 0;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("rows", axis == 1)) R.post.sortAxis = 1;
+                ui::Checkbox("bright first", &R.post.sortDescending);
+            }
+            ui::EndGate();
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("face masks");
+        ui::BeginHeader("face masks", /*default_open=*/false);
+        {
+            if (ui::Checkbox("show faces", &roots.showFace)) roots.rebuildFace();
+            if (ui::SliderFloat("face scale", &roots.faceScale, 0.3f, 1.5f))
+                roots.rebuildFace();
+            if (ui::SliderFloat("face recess", &roots.faceRecess, -2.0f, 1.5f))
+                roots.rebuildFace();
+            ImGui::TextDisabled("cavity half-depths back along the normal;\n"
+                                "negative stands the face proud of the nest");
+            ui::SliderFloat("face light", &R.face.lightIntensity, 0.0f, 8.0f);
+            ui::ColorEdit3("face light color", R.face.lightColor);
+            ui::SliderFloat("face falloff", &R.face.lightFalloff, 0.001f, 0.1f);
+            ui::SliderFloat("spot outer angle", &R.face.spotOuterDeg, 5.0f, 90.0f);
+            ui::SliderFloat("spot inner angle", &R.face.spotInnerDeg, 1.0f, 89.0f);
+            ImGui::TextDisabled("90 outer = no cone (bare point light)");
+            ui::SliderFloat("face spec", &R.face.specStrength, 0.0f, 3.0f);
+            ui::SliderFloat("mask roughness", &R.face.roughness, 0.04f, 1.0f);
+            ui::SliderFloat("albedo gamma", &R.face.albedoGamma, 1.0f, 3.0f);
+            ui::SliderFloat("albedo saturation", &R.face.albedoSat, 0.0f, 3.0f);
+            ImGui::TextDisabled("decode of the photograph before lighting;\n"
+                                "gamma 1 = as-is (pale), 2.2 = sRGB; sat 1 = as-is");
+            if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
+                roots.rebuildFace();
+            ui::SliderFloat("mask sss wrap", &R.face.sssWrap, 0.0f, 1.5f);
+            ui::SliderFloat("mask sss transmit", &R.face.sssTrans, 0.0f, 2.0f);
+            ui::SliderFloat("mask sss power", &R.face.sssPower, 1.0f, 16.0f);
+            ui::ColorEdit3("mask sss tint", R.face.sssTint);
+            ImGui::TextDisabled("the mask's own subsurface terms (the roots'\n"
+                                "are under environment); transmit is also\n"
+                                "how much of the pluck flash shows through");
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("pluck flash");
+        ui::BeginHeader("pluck flash", /*default_open=*/false);
+        {
+            ImGui::TextDisabled("a point light inside one mask on each pluck\n"
+                                "marker, orbit only; 0 intensity = off");
+            ui::SliderFloat("flash intensity", &R.flash.intensity, 0.0f, 60.0f);
+            ui::ColorEdit3("flash color", R.flash.color);
+            ui::SliderFloat("flash radius", &R.flash.radius, 0.2f, 12.0f);
+            ui::SliderFloat("flash decay (s)", &R.flash.decaySeconds, 0.05f, 4.0f);
+            ui::SliderFloat("flash depth", &R.flash.depth, -1.0f, 2.0f);
+            ImGui::TextDisabled("x the mask's cavity half-depth, back along\n"
+                                "its facing; negative is in front of the face");
+            ui::Checkbox("flash all masks", &R.flash.all);
+            ui::Checkbox("flash nearest mask", &R.flash.nearest);
+            ui::Checkbox("flash mask 0", &R.flash.mask0);
+            ImGui::TextDisabled("mask 0 = the visitor's own face");
+            if (ImGui::Button("fire flash")) roots.triggerFlash();
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("cached field: LOD & culling");
+        ui::BeginHeader("cached field: LOD & culling", /*default_open=*/false);
+        {
+            ui::SliderInt("grid NxN", &fieldGrid, 2, 20);
+            if (ImGui::Button("tile field")) roots.buildField(fieldGrid, 30.0f);
+            ImGui::SameLine();
+            if (ImGui::Button("clear field")) { R.clearInstances(); roots.regrow(); }
+            ui::Checkbox("frustum cull", &R.cullInstances); ImGui::SameLine();
+            ui::Checkbox("sub-pixel cull", &R.subpixelCull);
+            ui::SliderFloat("cull below px", &R.instanceCullPx, 0.5f, 20.0f);
+            ui::SliderFloat("LOD bias (>1 coarser)", &R.lodBias, 0.1f, 4.0f);
+            ui::SliderFloat("min radius px", &R.minRadiusPx, 0.f, 3.f, "%.2f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Anti-shimmer for thin roots. A capsule projecting\n"
+                    "thinner than this many screen pixels is drawn this\n"
+                    "thick and dimmed by the ratio, so a hairline root\n"
+                    "at orbit distance is a steady faint line rather\n"
+                    "than one flashing in and out as the camera moves.\n"
+                    "0 = off. Also relaxes the sub-pixel cull below it.");
+            }
+            ImGui::Text("instances %d   visible %d   culled %d",
+                        R.instanceCount(), R.lastVisibleInstances, R.lastCulledInstances);
+            ImGui::Text("capsules drawn: %ld", R.lastDrawnSegments);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+        ui::PushSection("overlays");
+        ui::BeginHeader("overlays", /*default_open=*/false);
+        {
+            ui::Checkbox("axes", &R.overlay.showAxes); ImGui::SameLine();
+            ui::Checkbox("grid", &R.overlay.showGrid);
+            ui::SliderFloat("grid spacing", &R.overlay.gridSpacing, 1.0f, 20.0f);
+        }
+        ui::EndHeader();
+        ui::PopSection();
+    ui::PopSection();          // "roots"
+}
+
 void DrawControlPanel(PanelFrameArgs& pf) {
             // --- the panel, drawn (or not) --------------------------------
             //
@@ -711,14 +1621,29 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "the face toward the tip (0 pins the face, 1\n"
                                         "follows the tip); on arrival it is the face.");
                                 }
-                                ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
                                 ui::SliderFloat("grow swing ease-in (s)", &S.grow_swing_ease_seconds, 0.f, 10.f, "%.1f");
                                 if (ImGui::IsItemHovered())
                                     ImGui::SetTooltip(
-                                        "The first hop's swing off the Face pose: the camera\n"
-                                        "ease's rate is faded in from zero over this long, so\n"
-                                        "it leaves the held face from rest instead of at full\n"
-                                        "speed. 0 = the plain ease.");
+                                        "Every hop's departure -- the first off the Face\n"
+                                        "pose, each later one off the face just settled on:\n"
+                                        "the camera ease's rate is faded in from zero over\n"
+                                        "this long, so it leaves from rest instead of at\n"
+                                        "full speed. 0 = the plain ease.");
+                                ui::Checkbox("new seed each sitting", &S.vary_seed);
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "Every visitor's plant grows from a fresh random\n"
+                                        "seed on top of the roots preset's own. Off, each\n"
+                                        "sitting grows the preset's seed exactly -- the\n"
+                                        "same root system every time.");
+                                ui::Checkbox("grow frame previous face", &S.grow_frame_previous);
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "Each hop also keeps the face the root left and the\n"
+                                        "growth tip in frame: a pull-out on every hop and a\n"
+                                        "push back in on arrival. Off, the camera stays close\n"
+                                        "and travels from face to face.");
+                                ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
                                         "Margin around the target face / growth tip /\n"
@@ -812,6 +1737,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "at \"mouth open seconds\" so the ease actually\n"
                                         "finishes by the time Grow starts rather than\n"
                                         "still being mid-open when the root needs it.");
+                                }
+                                ui::SliderFloat("hold settle (s)", &S.hold_settle_seconds, 0.f, 3.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "How long mask 0 eases from the last frame the\n"
+                                        "visitor drove (posed, live) onto the frame it\n"
+                                        "holds from Grow on (squared, jaw open). Runs\n"
+                                        "over the last seconds of Face, so the mask is\n"
+                                        "still before the root leaves it. 0 cuts.");
                                 }
                             }
                             ui::EndHeader();
@@ -1717,7 +2651,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "'follow', the weights of 'centre'.\n\n"
                         "The whole field shifts with the head, background\n"
                         "included: the offset is on the coordinates, not on\n"
-                        "the subject.");
+                        "the subject -- unless 'shift reach' confines it to\n"
+                        "around the head.");
                 }
                 // Size is only meaningful where the app owns the placement.
                 // In the other two modes the subject is where the camera
@@ -1745,6 +2680,30 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "The shift is a latch: it holds where it is when\n"
                             "the face is lost, and the next one picks up\n"
                             "from there.");
+                    }
+                    ui::SliderFloat("shift reach", &g_shift_radius, 0.f, 3.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How far from the head the whole shift applies, in\n"
+                            "coord units (the frame is 2 tall). 0: the whole\n"
+                            "field moves with the head, background included.\n"
+                            "Above 0 the field moves whole within this radius\n"
+                            "and falls off to 'shift far' past the fade -- a\n"
+                            "parallax, the near moving more than the far. The\n"
+                            "face is still fitted at one network input.");
+                    }
+                    ui::SliderFloat("shift fade", &g_shift_fade, 0.05f, 3.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Over how many coord units the shift falls from\n"
+                            "whole to 'shift far'. A shift larger than this\n"
+                            "band folds the field over itself.");
+                    }
+                    ui::SliderFloat("shift far", &g_shift_far, 0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The fraction of the shift left past the fade.\n"
+                            "0 pins the far field to the room.");
                     }
                     ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 2.f, "%.2f");
                     if (ImGui::IsItemHovered()) {
@@ -3159,900 +4118,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
 
             ui::BeginTab("roots", g_panel_test && g_panel_test_tab == panel_test_tab_i++);
             {
-                ui::PushSection("roots");
-                MetalRootRenderer& R = pf.roots.renderer();
-                ImGui::Text("t=%5.1fs", pf.roots.clock());   // fps is in the title
-                ImGui::Text("render %d x %d -> %d x %d  (overdraw-bound)",
-                            pf.roots.width(), pf.roots.height(), pf.fbw, pf.fbh);
-                ImGui::Separator();
-
-                // --- growth ------------------------------------------------
-                ui::PushSection("growth");
-                ui::BeginHeader("growth", /*default_open=*/true);
-                {
-                    rootsim::SimParams& SP = pf.roots.simParams();
-                    ImGui::Text("%s", pf.roots.simActive()
-                                    ? (pf.roots.simDone() ? "grown" : "growing")
-                                    : "stand-in (no CPlantBox parameters)");
-
-                    // The species is saved by name, not by its position in the
-                    // combo: the list is a hand-written table that will grow,
-                    // and an index would repoint every roots preset the day a
-                    // row is inserted above the one they meant.
-                    ui::DeclareString("species", &SP.speciesXml);
-
-                    const auto& sp = RootScene::species();
-                    int si = pf.roots.speciesIndex();
-                    ImGui::PushItemWidth(-90);
-                    if (ImGui::BeginCombo("species",
-                                          si >= 0 ? sp[size_t(si)].first.c_str()
-                                                  : SP.speciesXml.c_str())) {
-                        for (int i = 0; i < (int)sp.size(); ++i) {
-                            const bool selected = (i == si);
-                            if (ImGui::Selectable(sp[size_t(i)].first.c_str(), selected))
-                                pf.roots.setSpeciesIndex(i);
-                            if (selected) ImGui::SetItemDefaultFocus();
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::PopItemWidth();
-
-                    // --- host and pattern -----------------------------
-                    // Two axes, not one: the host is what the roots crawl on,
-                    // the pattern is where the masks sit in its coordinates.
-                    // Any pattern composes with any host -- a helix is a curve
-                    // on a cylinder, not a topology of its own.
-                    ui::DeclareString("host", &SP.host);
-                    ui::DeclareString("pattern", &SP.pattern);
-                    {
-                        static const char* kHosts[] = {"cone", "cylinder", "sphere",
-                                                       "torus", "lobes"};
-                        static const char* kPatterns[] = {"phyllotaxis", "helix",
-                                                          "rosette", "feature"};
-                        ImGui::PushItemWidth(-90);
-                        if (ui::Visible() && ImGui::BeginCombo("host", SP.host.c_str())) {
-                            for (const char* h : kHosts)
-                                if (ImGui::Selectable(h, SP.host == h)) {
-                                    SP.host = h; pf.roots.regrow();
-                                }
-                            ImGui::EndCombo();
-                        }
-                        // Lobes have no surface, so they have no (u, v) for a
-                        // pattern to place into -- the grouping is the layout.
-                        ui::BeginGate(SP.host != "lobes");
-                        if (ui::Visible() && ImGui::BeginCombo("pattern", SP.pattern.c_str())) {
-                            for (const char* q : kPatterns)
-                                if (ImGui::Selectable(q, SP.pattern == q)) {
-                                    SP.pattern = q; pf.roots.regrow();
-                                }
-                            ImGui::EndCombo();
-                        }
-                        ui::EndGate();
-                        ImGui::PopItemWidth();
-                    }
-
-                    ImGui::PushItemWidth(110);
-                    ui::BeginGate(SP.pattern == "helix" && SP.host != "lobes");
-                    ui::SliderFloat("helix turns", &SP.helixTurns, 0.25f, 6.f, "%.2f");
-                    ui::EndGate();
-                    ui::BeginGate(SP.host == "lobes" || SP.pattern == "rosette");
-                    ui::SliderInt("group size", &SP.groupSize, 1, 9);
-                    ui::EndGate();
-                    ui::BeginGate(SP.pattern == "rosette" && SP.host != "lobes");
-                    ImGui::SameLine();
-                    ui::SliderFloat("group spread", &SP.groupSpread, 0.1f, 1.2f);
-                    ui::EndGate();
-                    ui::BeginGate(SP.pattern == "feature" && SP.host != "lobes");
-                    ui::SliderInt("feature clusters", &SP.featureClusters, 1, 6);
-                    ui::EndGate();
-                    ui::BeginGate(SP.host == "torus" || SP.host == "lobes");
-                    ui::SliderFloat("tube radius", &SP.tubeRadius, 2.f, 20.f, "%.1f cm");
-                    ui::EndGate();
-                    ImGui::PopItemWidth();
-
-                    ui::BeginGate(SP.host == "cone" || SP.host == "cylinder");
-                    ui::Checkbox("anchor on axis", &SP.anchorOnAxis);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The first mask on the host's axis, facing down it,\n"
-                            "instead of on the surface facing out: the root\n"
-                            "leaves the visitor's face straight out of its front\n"
-                            "and the chain grows toward the camera. Structural --\n"
-                            "regrow to apply.");
-                    }
-                    ui::BeginGate(SP.anchorOnAxis);
-                    ImGui::PushItemWidth(110);
-                    ui::SliderFloat("anchor pitch", &SP.anchorPitchDeg, 0.f, 85.f, "%.0f deg");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "How steeply the first face looks down, degrees below\n"
-                            "the horizontal. The chain hangs off that face, so\n"
-                            "this is how the structure hangs: 90 would be\n"
-                            "straight down, 0 lays it level. Structural --\n"
-                            "regrow to apply.");
-                    }
-                    ImGui::SameLine();
-                    ui::SliderFloat("anchor spawn", &SP.anchorSpawn, 0.f, 6.f, "%.2f cm");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "How far behind the anchor mask's mouth the first\n"
-                            "root starts; it grows out through the mouth hole\n"
-                            "along the normal. Takes effect at the next regrow.");
-                    }
-                    ImGui::PopItemWidth();
-                    ui::EndGate();
-                    ui::EndGate();
-                    ui::Checkbox("tree relay", &SP.treeRelay);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Each hop leaves from the revealed mask NEAREST the\n"
-                            "next one, rather than from the one just left: the\n"
-                            "system branches instead of threading.\n\n"
-                            "Changes nothing on a spiral, where the nearest mask\n"
-                            "already is the previous one. It is for the clustered\n"
-                            "layouts -- and it currently costs reach there, since\n"
-                            "the hop starts inside a crowded neighbourhood it has\n"
-                            "to escape.");
-                    }
-                    ImGui::Separator();
-
-                    ImGui::PushItemWidth(110);
-                    ui::SliderInt("masks", &SP.N, 1, 24);
-                    ImGui::SameLine();
-                    ui::SliderFloat("cone radius", &SP.R0, 6.f, 24.f, "%.1f cm");
-                    ui::SliderFloat("cone height", &SP.Hh, 24.f, 96.f, "%.1f cm");
-                    ImGui::SameLine();
-                    ui::SliderFloat("taper", &SP.taperPower, 0.4f, 2.5f);
-                    ui::SliderFloat("spiral x golden", &SP.angleStepGoldenMult,
-                                       0.2f, 2.0f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("jitter", &SP.sigma, 0.f, 1.2f);
-                    ui::SliderFloat("travel pull", &SP.weight, 0.f, 1.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("pull reach", &SP.travelPullReach, 0.4f, 3.f);
-                    ui::SliderFloat("lateral", &SP.lateralWeight, 0.f, 1.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("dwell", &SP.dwellWeight, 0.f, 1.f);
-                    ui::SliderFloat("dwell days", &SP.dwellDays, 2.f, 60.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("hop days", &SP.maxHopDays, 10.f, 160.f);
-                    ui::SliderInt("root types", &SP.rootTypes, 1, 3);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Up to three dwell settings dealt to the hops in\n"
-                            "turn (hop 1 type 1, hop 2 type 2, ... round again).\n"
-                            "Type 1 is dwell / dwell days / dwell lateral above\n"
-                            "and in advanced; types 2 and 3 are below. 1 = every\n"
-                            "hop the same. Applies on regrow.");
-                    }
-                    // Gated, not if'd: declared every frame (PANEL.md).
-                    ui::BeginGate(SP.rootTypes >= 2);
-                    ui::SliderFloat("type 2 dwell days", &SP.dwell2Days, 2.f, 60.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("type 2 dwell", &SP.dwell2Weight, 0.f, 1.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("type 2 dwell lateral", &SP.dwell2Lateral, 0.f, 1.f);
-                    ui::EndGate();
-                    ui::BeginGate(SP.rootTypes >= 3);
-                    ui::SliderFloat("type 3 dwell days", &SP.dwell3Days, 2.f, 60.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("type 3 dwell", &SP.dwell3Weight, 0.f, 1.f);
-                    ImGui::SameLine();
-                    ui::SliderFloat("type 3 dwell lateral", &SP.dwell3Lateral, 0.f, 1.f);
-                    ui::EndGate();
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Ceiling, not the budget. How long a hop's travel\n"
-                            "actually gets is worked out from how far it has to\n"
-                            "go and how fast this species elongates -- this only\n"
-                            "stops a hop that is never going to arrive from\n"
-                            "growing the whole system into a ball.");
-                    }
-                    ui::SliderFloat("travel slack", &SP.travelSlack, 1.f, 4.f);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "How much longer the root's real path is than the\n"
-                            "straight line to the mask. It wanders -- the tropism\n"
-                            "is a random walk with a pull -- and it steers around\n"
-                            "the masks already revealed, so a budget that assumes\n"
-                            "a straight line runs out short of every target.\n\n"
-                            "Too low and late masks get revealed with the root\n"
-                            "still halfway there; too high only costs days on a\n"
-                            "hop that was never going to make it.");
-                    }
-                    ImGui::PopItemWidth();
-
-                    ui::Checkbox("even nests", &SP.evenNests);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The same amount of root at every mask.\n\n"
-                            "The dwell is already the same everywhere, but the\n"
-                            "nest is not: laterals grow during the travel too,\n"
-                            "and travel gets longer as the cone widens -- so the\n"
-                            "last mask ends up with about twice the root of the\n"
-                            "first. This pads every hop out to one age, so the\n"
-                            "early masks wait instead of the late ones being\n"
-                            "fuller.\n\n"
-                            "It costs days, and the days are what make the system\n"
-                            "bushy: turning it on wants a shorter dwell to hold\n"
-                            "the same density.");
-                    }
-                    ui::Checkbox("crawl the cone surface", &SP.coneSurfaceTravel);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Confine the travelling root to a thin shell around\n"
-                            "the cone the masks sit on, so it crawls over the\n"
-                            "surface between them instead of cutting through the\n"
-                            "interior.\n\n"
-                            "Travel only: the dwell wrapping stays free, or the\n"
-                            "nests around each mask would be flattened onto the\n"
-                            "surface instead of bulging into 3D.");
-                    }
-                    ui::BeginGate(SP.coneSurfaceTravel);
-                    if (ui::Visible()) {
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(90);
-                    }
-                    ui::SliderFloat("shell", &SP.coneShellThickness, 1.f, 20.f,
-                                       "%.1f cm");
-                    ui::EndGate();
-
-                    ImGui::SetNextItemWidth(110);
-                    ui::SliderFloat("days / step", &SP.growthDt, 0.05f, 3.f, "%.2f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "How far the plant moves per sim step. The show\n"
-                            "paces steps to the same wall-clock speed whatever\n"
-                            "this is, so smaller only makes the motion finer:\n"
-                            "at 1 a hop is a few steps a second and reads as\n"
-                            "stop motion; 0.2 is ~30 steps/s. Takes effect at\n"
-                            "the next replant (the next visitor) or regrow --\n"
-                            "the sim copies its parameters at reset.");
-                    }
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(90);
-                    ui::SliderInt("steps/frame", &pf.roots.simStepsPerFrame, 1, 30);
-
-                    if (ImGui::Button("regrow")) pf.roots.regrow();
-                    ImGui::SameLine();
-                    if (ImGui::Button("reseed")) pf.roots.reseed((uint32_t)(++pf.rootSeed));
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "A new random seed for the same parameters. Reseeds\n"
-                            "the growth itself -- it used to drop a synthetic\n"
-                            "stand-in structure over a running grow, which the\n"
-                            "next frame then overwrote.");
-                    }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("seed %u", SP.seed);
-
-                    // --- the rest of SimParams ----------------------------
-                    //
-                    // These had no control at all: they existed only in the
-                    // .root file, which is what made a second preset system
-                    // necessary in the first place. Declaring them here is what
-                    // lets that system go away -- a roots preset is now the
-                    // whole of SimParams, and there is one file per root look
-                    // instead of two that can disagree.
-                    //
-                    // Folded away by default because they are structure, not
-                    // performance: changing one means a regrow.
-                    ui::BeginHeader("structure (needs a regrow)");
-                    {
-                        ImGui::PushItemWidth(110);
-                        ui::SliderFloat("mask start", &SP.startFrac, 0.f, 1.f);
-                        ImGui::SameLine();
-                        ui::SliderFloat("mask end", &SP.endFrac, 0.f, 1.f);
-                        ui::SliderFloat("spiral drift", &SP.distStepFrac, -0.5f, 0.5f);
-                        ImGui::SameLine();
-                        ui::SliderFloat("travel trials", &SP.mainTravelTrials, 1.f, 60.f,
-                                        "%.0f");
-                        ui::SliderFloat("dwell lateral", &SP.dwellLateralWeight, 0.f, 1.f);
-                        ImGui::SameLine();
-                        ui::SliderFloat("reach x", &SP.reachMult, 0.4f, 4.f);
-                        ui::SliderFloat("view cylinder", &SP.viewCylLen, 1.f, 30.f,
-                                        "%.1f cm");
-                        ImGui::SameLine();
-                        ui::SliderFloat("target lift", &SP.targetLift, -10.f, 10.f,
-                                        "%.2f cm");
-                        ui::SliderFloat("spawn behind", &SP.spawnBehind, 0.f, 10.f,
-                                        "%.2f cm");
-                        ImGui::SameLine();
-                        ui::SliderFloat("nest behind", &SP.nestBehind, -5.f, 15.f,
-                                        "%.2f cm");
-                        ui::SliderFloat("basal clear", &SP.basalClear, -1.f, 10.f, "%.1f cm");
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "How far past the mouth the main root grows before\n"
-                                "its first lateral. The species files start laterals\n"
-                                "1 cm from the base -- inside the head -- and those\n"
-                                "were the pile of root behind the first mask.\n"
-                                "-1 = the species' own value.");
-                        }
-                        ui::SliderFloat("motion cavity", &SP.motionCavity, 0.f, 1.5f, "%.2f");
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "How much of a replayed head's swing is added to\n"
-                                "its mask's keep-out and nest ring, so the roots\n"
-                                "grow around the motion instead of through it.\n"
-                                "1 = the whole swing, 0 = ignore it. Next sitting.");
-                        }
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "Where the dwell's ring of attractors sits: this far\n"
-                                "behind the face along its normal. 0 rings the face in\n"
-                                "its own plane (the wrap frames it); a few cm back and\n"
-                                "the roots gather behind the head instead, a nest the\n"
-                                "face sits in front of. Takes effect at the next regrow.");
-                        }
-                        ui::SliderInt("nest rings", &SP.nestRings, 1, 6);
-                        ImGui::SameLine();
-                        ui::SliderInt("nest per ring", &SP.nestPerRing, 3, 16);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "The nest's attractors: a hemisphere behind the mask,\n"
-                                "rings from the rim back to a point at the pole. More\n"
-                                "of them, the more places the wrap has left to go once\n"
-                                "the ones it reached are spent (nest hit radius).");
-                        }
-                        ui::SliderFloat("nest hit radius", &SP.nestHitRadius, 0.f, 6.f,
-                                        "%.2f cm");
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "A nest attractor is dropped once a root node comes\n"
-                                "within this of it, so the wrap moves on instead of\n"
-                                "circling a spot it has reached. 0 keeps them all for\n"
-                                "the whole dwell. Takes effect at the next regrow.");
-                        }
-                        ImGui::PopItemWidth();
-
-                        // The seed is part of the look -- a preset that came
-                        // back with a different one would not be the same root
-                        // system -- so it is saved, through an int because that
-                        // is the widest kind the registry has.
-                        int seed_i = (int)SP.seed;
-                        ui::DeclareInt("seed", &seed_i, 0, 1 << 30);
-                        SP.seed = (unsigned)seed_i;
-                    }
-                    ui::EndHeader();
-                }
-                ui::EndHeader();
-                ui::PopSection();
-
-                // --- presets -----------------------------------------------
-                // The root scene's presets are the `roots` bank now, saved
-                // from the settings section at the bottom of the panel with
-                // everything else. There used to be a second preset system
-                // here, writing .root files that held the SimParams fields the
-                // panel did not expose -- so "the root preset" and "the root
-                // settings" were two different things that could disagree, and
-                // only one of them was ever in the file you loaded.
-
-                // --- camera ------------------------------------------------
-                ui::PushSection("camera");
-                ui::BeginHeader("camera", /*default_open=*/true);
-                {
-                    // In the show the timeline (show tab, show/roots) owns the
-                    // camera and these are inert. They drive the fallback
-                    // framing outside Transition/Roots -- looking at the scene
-                    // rather than playing it.
-                    ImGui::TextDisabled("in Transition/Roots the show's timeline drives the camera");
-                    ui::Checkbox("frame automatically", &pf.roots.autoFrame);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Derive the target and distance from the layout's\n"
-                            "own bounds -- the whole planned layout, or one\n"
-                            "mask square to its normal. The constants this\n"
-                            "replaced were tuned to one cone size and pointed\n"
-                            "at the wrong part of any other.");
-                    }
-                    ui::BeginGate(pf.roots.autoFrame);
-                    {
-                        const int nm = (int)pf.roots.plannedMasks().size();
-                        std::string label = pf.roots.focusMask >= 0 && pf.roots.focusMask < nm
-                                                ? ("mask " + std::to_string(pf.roots.focusMask))
-                                                : std::string("whole scene");
-                        ImGui::PushItemWidth(-90);
-                        if (ImGui::BeginCombo("focus", label.c_str())) {
-                            if (ImGui::Selectable("whole scene", pf.roots.focusMask < 0))
-                                pf.roots.focusMask = -1;
-                            for (int i = 0; i < nm; ++i) {
-                                const std::string it = "mask " + std::to_string(i);
-                                if (ImGui::Selectable(it.c_str(), pf.roots.focusMask == i))
-                                    pf.roots.focusMask = i;
-                            }
-                            ImGui::EndCombo();
-                        }
-                        ImGui::PopItemWidth();
-                        ImGui::SetNextItemWidth(110);
-                        ui::SliderFloat("zoom", &pf.roots.zoom, 0.15f, 5.f, "%.2fx");
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("reset zoom")) pf.roots.zoom = 1.f;
-                        ImGui::SetNextItemWidth(90);
-                        ui::SliderFloat("margin", &pf.roots.frameMargin, 0.f, 1.5f, "%.2f");
-                    }
-                    ui::EndGate();
-                    ImGui::BeginDisabled(pf.roots.autoFrame);
-                    ui::SliderFloat("radius", &pf.roots.radius, 5.0f, 120.0f);
-                    ImGui::EndDisabled();
-                    ui::SliderFloat("azimuth", &pf.roots.azimuth, -(float)M_PI, (float)M_PI);
-                    ui::SliderFloat("elevation", &pf.roots.elevation, -1.5f, 1.5f);
-                    ui::SliderFloat("fov", &pf.roots.fov, 0.2f, 1.2f);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ImGui::Separator();
-                ImGui::Separator();
-                // shading
-                ui::PushSection("material");
-                const char* modes[] = {"Phong", "PBR", "Invert (approx)"};
-                int sm = (int)R.shaderMode;
-                if (ImGui::Combo("shader", &sm, modes, 3)) R.shaderMode = (MetalRootRenderer::ShaderMode)sm;
-                ui::ColorEdit3("base color", R.mat.baseColor);
-                ui::ColorEdit3("base color 2", R.mat.baseColor2);
-                ui::SliderFloat("color noise", &R.mat.colorNoiseStrength, 0.0f, 1.0f);
-                ui::SliderFloat("ambient", &R.mat.ambient, 0.0f, 0.5f);
-                ui::SliderFloat("diffuse", &R.mat.diffuse, 0.0f, 1.5f);
-                ui::SliderFloat("shininess", &R.mat.shininess, 4.0f, 300.0f);
-                ui::BeginGate(sm == 1);
-                {
-                    ui::SliderFloat("metallic", &R.pbr.metallic, 0.0f, 1.0f);
-                    ui::SliderFloat("roughness", &R.pbr.roughness, 0.05f, 1.0f);
-                }
-                ui::EndGate();
-                ui::SliderFloat("radius scale", &R.radiusScale, 0.2f, 4.0f);
-                ui::PopSection();           // "material"
-                ImGui::Separator();
-                // fog
-                ui::PushSection("fog & atmosphere");
-                ui::BeginHeader("fog & atmosphere", /*default_open=*/false);
-                {
-                    ui::Checkbox("fog on", &R.fog.enabled);
-                    ui::ColorEdit3("fog color", R.fog.color);
-                    // Visibility itself is per-phase now (show/<phase>/fog
-                    // intensity, with beat 1's fade-in on top) -- see the
-                    // Roots render branch, which writes R.fog.visibility
-                    // every frame. Everything else about the look stays one
-                    // global Roots-preset value.
-                    ImGui::TextDisabled("visibility: set per phase, in the show tab");
-                    ui::SliderFloat("height scale", &R.fog.heightScale, 2.0f, 120.0f);
-                    ui::Checkbox("height ref follows target", &R.fog.heightRefAuto);
-                    if (!R.fog.heightRefAuto)
-                        ui::SliderFloat("height ref (Y)", &R.fog.heightRef, -20.0f, 60.0f);
-                    ImGui::Separator();
-                    ui::Checkbox("clear radius follows camera", &R.fog.startAuto);
-                    if (R.fog.startAuto)
-                        ui::SliderFloat("clear radius x orbit", &R.fog.startFrac, 0.0f, 1.5f);
-                    else
-                        ui::SliderFloat("clear radius", &R.fog.startDist, 0.0f, 200.0f);
-                    ImGui::TextDisabled("marching from %.1f u", R.fog.startDist);
-                    ImGui::Separator();
-                    ui::SliderFloat("fog noise", &R.fog.noiseStrength, 0.0f, 1.0f);
-                    ui::SliderFloat("noise contrast", &R.fog.noiseContrast, 0.0f, 3.0f);
-                    ui::SliderFloat("noise scale", &R.fog.noiseScale, 0.02f, 2.5f);
-                    ImGui::TextDisabled("feature size ~%.1f world u",
-                                        8.0f / std::max(R.fog.noiseScale, 1e-3f));
-                    ui::SliderFloat("drift speed", &R.fog.driftSpeed, 0.0f, 6.0f);
-                    ui::SliderInt("march steps", &R.fog.steps, 4, 32);
-                    ui::SliderFloat("noise mip level", &R.fog.noiseLod, 0.0f, 4.0f, "%.1f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Which mip of the noise volume the march reads.\n"
-                            "Coarser is cheaper (the march is bound by these\n"
-                            "fetches) and loses nothing until about 3, where\n"
-                            "the finest octave goes.");
-                    }
-                    ui::SliderInt("volume downscale", &R.fog.downscale, 1, 4);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The volumetric integral runs at 1/this of the\n"
-                            "output. Depth-aware upsampling keeps it tight to\n"
-                            "silhouettes at 3 and 4.");
-                    }
-                    ImGui::Separator();
-                    ui::SliderFloat("scatter (medium albedo)", &R.fog.scatter, 0.0f, 1.5f);
-                    ui::SliderFloat("anisotropy (fwd <-> back)", &R.fog.anisotropy, -0.9f, 0.9f);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                // pulses
-                ui::PushSection("travelling pulses");
-                ui::BeginHeader("travelling pulses", /*default_open=*/false);
-                {
-                    ui::Checkbox("pulses on", &R.pulse.enabled);
-                    ui::SliderFloat("pulse speed", &R.pulse.speed, 0.0f, 40.0f);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The live structure's train runs continuously, node\n"
-                            "distance 0..N under the free-running pulse clock.\n"
-                            "A hood structure shows no pulses at all until its\n"
-                            "own Reveal marker fires (see roots/reveal); at that\n"
-                            "moment its train starts from its seed (top) mask,\n"
-                            "node distance 0, and travels outward from there.");
-                    }
-                    ui::SliderFloat("pulse spacing", &R.pulse.spacing, 4.0f, 60.0f);
-                    ui::SliderFloat("pulse width", &R.pulse.width, 0.5f, 12.0f);
-                    ui::SliderFloat("pulse intensity", &R.pulse.intensity, 0.0f, 4.0f);
-                    ui::ColorEdit3("pulse color", R.pulse.color);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("environment & material");
-                ui::BeginHeader("environment & material", /*default_open=*/false);
-                {
-                    // The tranche buttons are a coarse quality dial and the A/B
-                    // control: each one is a whole group of the settings below,
-                    // so a look can be compared against the previous stage
-                    // without hunting for which sliders belonged to it.
-                    ImGui::TextUnformatted("quality tranche");
-                    for (int t = 0; t <= 3; ++t) {
-                        if (t) ImGui::SameLine();
-                        char lbl[8]; snprintf(lbl, sizeof lbl, "%d", t);
-                        if (ImGui::RadioButton(lbl, R.tranche() == t)) {
-                            R.setTranche(t);
-                            pf.roots.rebuildFace();   // smoothNormals is baked into the mesh
-                        }
-                    }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(0 baseline, 3 full)");
-                    ImGui::TextUnformatted("key light");
-                    ui::ColorEdit3("key color", R.env.keyColor);
-                    ui::SliderFloat("key intensity", &R.env.keyIntensity, 0.0f, 4.0f);
-                    if (pf.roots.micLightResponsive) {
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("(live -- set by the mic below)");
-                    }
-                    // What a structure the Reveal has popped in but not yet lit
-                    // keeps of its radiance (see MetalRootRenderer::EnvParams).
-                    ui::SliderFloat("unlit level", &R.env.unlitLevel, 0.0f, 0.3f);
-                    ui::SliderFloat("key direction X", &pf.roots.lightDir[0], -1.0f, 1.0f);
-                    ui::SliderFloat("key direction Y", &pf.roots.lightDir[1], -1.0f, 1.0f);
-                    ui::SliderFloat("key direction Z", &pf.roots.lightDir[2], -1.0f, 1.0f);
-                    if (pf.roots.trackLightAngle) {
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("(home dir. -- swung by tracking below)");
-                    }
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("key light -- room responsivity");
-                    ui::Checkbox("intensity follows the mic", &pf.roots.micLightResponsive);
-                    ui::SliderFloat("base intensity (silence)", &pf.roots.micBaseKeyIntensity,
-                                    0.0f, 4.0f);
-                    ui::SliderFloat("mic gain", &pf.roots.micIntensityGain, 0.0f, 4.0f);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Key intensity = base * (1 + gain * mic level).\n"
-                            "The mic level is the room's own ambient level\n"
-                            "(a real microphone tap -- see mic_level.h), not\n"
-                            "anything Wwise is playing.");
-                    }
-                    ui::Checkbox("angle follows the tracked visitor",
-                                &pf.roots.trackLightAngle);
-                    ui::SliderFloat("track angle range (rad)", &pf.roots.trackAngleRange,
-                                    0.0f, 1.5f);
-
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("key light -- placement");
-                    {
-                        int lm = (int)pf.roots.lightMode;
-                        if (ImGui::Combo("aim", &lm,
-                                "direction (authored)\0position (place a lamp)\0"
-                                "camera-relative\0"))
-                            pf.roots.lightMode = (RootScene::LightMode)lm;
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "The key stays a single directional light in every\n"
-                                "mode -- this is how its direction is decided.\n"
-                                "  direction       the X/Y/Z above, dialled by hand\n"
-                                "  position        aim from a world point at the\n"
-                                "                  focus below; easier to place by eye\n"
-                                "  camera-relative offset from the view axis, so the\n"
-                                "                  rake stays put as the camera moves");
-                        }
-                        // Both arms declare (PANEL.md): the inactive mode's
-                        // numbers still have to load and save.
-                        ui::BeginGate(pf.roots.lightMode == RootScene::LightMode::Position);
-                        {
-                            ui::SliderFloat("lamp X", &pf.roots.lightPos[0], -60.f, 60.f);
-                            ui::SliderFloat("lamp Y", &pf.roots.lightPos[1], -60.f, 60.f);
-                            ui::SliderFloat("lamp Z", &pf.roots.lightPos[2], -60.f, 60.f);
-                        }
-                        ui::EndGate();
-                        ui::BeginGate(pf.roots.lightMode == RootScene::LightMode::CameraRelative);
-                        {
-                            ui::SliderFloat("offset azimuth (rad)",
-                                            &pf.roots.lightOffsetAz, -3.14f, 3.14f);
-                            ui::SliderFloat("offset elevation (rad)",
-                                            &pf.roots.lightOffsetEl, -1.5f, 1.5f);
-                            if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip(
-                                    "A key on the view axis (offset 0) is flat frontal\n"
-                                    "light with nothing to model the form -- the rake\n"
-                                    "lives in the off-axis angle.");
-                            }
-                        }
-                        ui::EndGate();
-                        int lf = (int)pf.roots.lightFocus;
-                        if (ImGui::Combo("focus", &lf,
-                                "scene centre\0anchor mask\0camera target\0"))
-                            pf.roots.lightFocus = (RootScene::LightFocus)lf;
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip("What the lamp aims at.");
-                        }
-                        const float* rl = pf.roots.resolvedLightDir();
-                        const float* rf = pf.roots.resolvedLightFocus();
-                        ImGui::TextDisabled("live dir (%.2f, %.2f, %.2f)  focus (%.1f, %.1f, %.1f)",
-                                            rl[0], rl[1], rl[2], rf[0], rf[1], rf[2]);
-                    }
-
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("ambient (hemisphere)");
-                    ui::ColorEdit3("background", R.env.background);
-                    ui::ColorEdit3("sky color", R.env.skyColor);
-                    ui::ColorEdit3("ground color", R.env.groundColor);
-                    ui::SliderFloat("hemisphere", &R.env.hemiStrength, 0.0f, 3.0f);
-                    ui::SliderFloat("env specular", &R.env.envSpec, 0.0f, 2.0f);
-                    ui::SliderFloat("rim", &R.env.rimStrength, 0.0f, 1.0f);
-                    ImGui::Separator();
-                    ui::SliderFloat("sss wrap", &R.env.sssWrap, 0.0f, 1.5f);
-                    ui::SliderFloat("sss transmit", &R.env.sssTrans, 0.0f, 2.0f);
-                    ui::SliderFloat("sss power", &R.env.sssPower, 1.0f, 16.0f);
-                    ui::ColorEdit3("sss tint", R.env.sssTint);
-                    ImGui::Separator();
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("root surface (fibre detail)");
-                    ui::SliderFloat("fibre strength", &R.detail.strength, 0.0f, 1.5f);
-                    ui::SliderFloat("fibre scale", &R.detail.scale, 2.0f, 40.0f);
-                    ui::SliderFloat("fibre stretch", &R.detail.stretch, 1.0f, 20.0f);
-                    ui::SliderFloat("fibre break-up", &R.detail.rough, 0.0f, 1.0f);
-                    ui::SliderFloat("per-root tint", &R.detail.tint, 0.0f, 0.5f);
-                    ui::SliderFloat("fibre fade px", &R.detail.fadePx, 0.0f, 6.0f, "%.1f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Anti-shimmer. Fibre detail is faded out on roots\n"
-                            "far enough that one fibre cell projects smaller\n"
-                            "than this many screen pixels (full detail from\n"
-                            "twice this up). Far roots go smooth instead of\n"
-                            "crawling as the camera orbits. 0 = never fade.");
-                    }
-                    ImGui::Separator();
-                    ui::Checkbox("ambient occlusion", &R.ao.enabled);
-                    ui::SliderFloat("AO radius", &R.ao.radius, 0.2f, 6.0f);
-                    ui::SliderFloat("AO intensity", &R.ao.intensity, 0.0f, 4.0f);
-                    ui::SliderInt("AO samples", &R.ao.samples, 4, 24);
-                    ui::SliderInt("AO downscale", &R.ao.downscale, 1, 4);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("post");
-                ui::BeginHeader("post", /*default_open=*/false);
-                {
-                    ui::Checkbox("post chain", &R.post.enabled);
-                    ui::SliderInt("supersample", &R.post.ssaa, 1, 3);
-                    ImGui::TextDisabled("scene renders at %dx%d", R.width() * R.post.ssaa,
-                                        R.height() * R.post.ssaa);
-                    ui::Checkbox("filmic tonemap", &R.post.tonemap);
-                    ui::SliderFloat("exposure", &R.post.exposure, 0.1f, 4.0f);
-                    ImGui::Separator();
-                    ui::Checkbox("bloom", &R.post.bloom);
-                    ui::SliderFloat("bloom threshold", &R.post.bloomThreshold, 0.2f, 4.0f);
-                    ui::SliderFloat("bloom intensity", &R.post.bloomIntensity, 0.0f, 1.0f);
-                    ui::SliderFloat("bloom radius", &R.post.bloomRadius, 0.5f, 3.0f);
-                    ImGui::Separator();
-                    ui::Checkbox("depth of field", &R.post.dof);
-                    ui::SliderFloat("DoF focus (0=auto)", &R.post.dofFocus, 0.0f, 120.0f);
-                    ui::SliderFloat("DoF range", &R.post.dofRange, 5.0f, 150.0f);
-                    ui::SliderFloat("DoF strength", &R.post.dofStrength, 0.0f, 1.0f);
-                    ImGui::Separator();
-                    ui::SliderFloat("vignette", &R.post.vignette, 0.0f, 1.0f);
-                    ui::SliderFloat("fog dither", &R.post.fogDither, 0.0f, 1.0f);
-                    ui::Checkbox("output dither", &R.post.dither);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("lens & film");
-                ui::BeginHeader("lens & film", /*default_open=*/false);
-                {
-                    ImGui::TextUnformatted("lens");
-                    if (ImGui::Button("wide angle")) pf.roots.setWideAngle(true);
-                    ImGui::SameLine();
-                    if (ImGui::Button("normal")) pf.roots.setWideAngle(false);
-                    ui::Checkbox("set FOV by focal length", &pf.roots.useFocal);
-                    ui::BeginGate(pf.roots.useFocal);
-                    {
-                        ui::SliderFloat("focal length (mm)", &pf.roots.focalMM, 8.0f, 135.0f);
-                        ImGui::TextDisabled("35mm equiv · %.0f deg vertical FOV",
-                                            pf.roots.effectiveFov() * 2.0f * 57.2957795f);
-                    }
-                    ui::EndGate();
-                    ui::BeginGate(!(pf.roots.useFocal));
-                    {
-                        ui::SliderFloat("fov (rad, half-angle)", &pf.roots.fov, 0.15f, 1.2f);
-                    }
-                    ui::EndGate();
-                    ui::SliderFloat("barrel <-> pincushion", &R.post.distortK1, -0.4f, 0.4f);
-                    ui::SliderFloat("distortion (corners)", &R.post.distortK2, -0.2f, 0.2f);
-                    ui::SliderFloat("distortion re-crop", &R.post.distortZoom, 0.6f, 1.2f);
-                    ImGui::Separator();
-                    ui::SliderFloat("chromatic aberration", &R.post.caStrength, 0.0f, 8.0f);
-                    ImGui::TextDisabled("px of channel separation at the corner");
-                    ui::SliderFloat("anamorphic streak", &R.post.streak, 0.0f, 1.0f);
-                    ui::SliderFloat("streak length", &R.post.streakLength, 2.0f, 60.0f);
-                    ui::ColorEdit3("streak tint", R.post.streakTint);
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("film");
-                    ui::SliderFloat("halation", &R.post.halation, 0.0f, 1.0f);
-                    ui::ColorEdit3("halation tint", R.post.halationTint);
-                    ui::SliderInt("halation spread (mip)", &R.post.halationMip, 0, 4);
-                    ImGui::Separator();
-                    ui::SliderFloat("grain", &R.post.grain, 0.0f, 0.12f);
-                    ui::SliderFloat("grain size (px)", &R.post.grainSize, 1.0f, 6.0f);
-                    ui::SliderFloat("grain chroma", &R.post.grainChroma, 0.0f, 1.0f);
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("print grade");
-                    ui::SliderFloat("contrast", &R.post.contrast, 0.5f, 2.0f);
-                    ui::SliderFloat("saturation", &R.post.saturation, 0.0f, 2.0f);
-                    ui::SliderFloat("split strength", &R.post.splitStrength, 0.0f, 1.0f);
-                    ui::SliderFloat("split balance (-1 off)", &R.post.toneBalance, -1.0f, 1.0f);
-                    ui::ColorEdit3("shadow tint", R.post.shadowTint);
-                    ui::ColorEdit3("highlight tint", R.post.highlightTint);
-                    ui::ColorEdit3("lift", R.post.lift);
-                    ui::ColorEdit3("gamma", R.post.gammaC);
-                    ui::ColorEdit3("gain", R.post.gain);
-                    if (ImGui::Button("reset grade")) {
-                        R.post.contrast = 1.f; R.post.saturation = 1.f;
-                        for (int i = 0; i < 3; ++i) {
-                            R.post.lift[i] = 0.f; R.post.gammaC[i] = 1.f; R.post.gain[i] = 1.f;
-                        }
-                    }
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("glitch");
-                ui::BeginHeader("glitch", /*default_open=*/false);
-                {
-                    ImGui::TextUnformatted("bitcrush");
-                    ui::SliderFloat("crush", &R.post.crush, 0.0f, 1.0f);
-                    ImGui::TextDisabled("0 is bit-exact; the dial drives block "
-                                        "size and level count together");
-                    ui::BeginGate(R.post.crush > 0.0f);
-                    {
-                        ui::SliderFloat("block size (px)", &R.post.crushBlock, 1.0f, 64.0f);
-                        ImGui::TextDisabled("output is %.0fx%.0f blocks at full crush",
-                                            (float)R.width() / std::max(R.post.crushBlock, 1.0f),
-                                            (float)R.height() / std::max(R.post.crushBlock, 1.0f));
-                        ui::SliderFloat("colour levels", &R.post.crushLevels, 2.0f, 32.0f);
-                        ui::SliderFloat("crush dither", &R.post.crushDither, 0.0f, 2.0f);
-                    }
-                    ui::EndGate();
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("datamosh");
-                    ui::Checkbox("mosh (hold)", &R.post.mosh);
-                    ImGui::SameLine();
-                    if (ImGui::Button("trigger")) R.triggerDatamosh(R.post.moshTrigger);
-                    ui::SliderFloat("trigger length (s)", &R.post.moshTrigger, 0.1f, 10.0f);
-                    ui::SliderFloat("vector freeze (s)", &R.post.moshFreeze, 0.0f, 8.0f);
-                    ImGui::TextDisabled("how long the motion field stays fixed after "
-                                        "it starts; 0 = for the whole run");
-                    ui::SliderFloat("mosh amount", &R.post.moshAmount, 0.0f, 1.0f);
-                    ui::SliderFloat("vector gain", &R.post.moshGain, 0.0f, 6.0f);
-                    ui::SliderFloat("macroblock (px)", &R.post.moshBlock, 1.0f, 64.0f);
-                    ui::SliderFloat("background depth", &R.post.moshBgDepth, 5.0f, 400.0f);
-                    ImGui::TextDisabled(R.datamoshActive() ? "moshing" : "idle");
-                    ImGui::Separator();
-                    ImGui::TextUnformatted("pixel sort");
-                    ui::Checkbox("sort", &R.post.sort);
-                    ui::BeginGate(R.post.sort);
-                    {
-                        ui::SliderFloat("sort amount", &R.post.sortAmount, 0.0f, 1.0f);
-                        ui::SliderFloat("band low", &R.post.sortLow, 0.0f, 1.0f);
-                        ui::SliderFloat("band high", &R.post.sortHigh, 0.0f, 1.0f);
-                        ImGui::TextDisabled("only pixels inside the band move, so the "
-                                            "band's edges are where the spans break");
-                        ui::SliderInt("passes/frame", &R.post.sortPasses, 1, 8);
-                        ImGui::TextDisabled("the sort converges over frames; this is "
-                                            "how fast");
-                        ui::SliderFloat("live feed", &R.post.sortFeed, 0.0f, 0.5f);
-                        int axis = R.post.sortAxis;
-                        if (ImGui::RadioButton("columns", axis == 0)) R.post.sortAxis = 0;
-                        ImGui::SameLine();
-                        if (ImGui::RadioButton("rows", axis == 1)) R.post.sortAxis = 1;
-                        ui::Checkbox("bright first", &R.post.sortDescending);
-                    }
-                    ui::EndGate();
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("face masks");
-                ui::BeginHeader("face masks", /*default_open=*/false);
-                {
-                    if (ui::Checkbox("show faces", &pf.roots.showFace)) pf.roots.rebuildFace();
-                    if (ui::SliderFloat("face scale", &pf.roots.faceScale, 0.3f, 1.5f))
-                        pf.roots.rebuildFace();
-                    if (ui::SliderFloat("face recess", &pf.roots.faceRecess, -2.0f, 1.5f))
-                        pf.roots.rebuildFace();
-                    ImGui::TextDisabled("cavity half-depths back along the normal;\n"
-                                        "negative stands the face proud of the nest");
-                    ui::SliderFloat("face light", &R.face.lightIntensity, 0.0f, 8.0f);
-                    ui::ColorEdit3("face light color", R.face.lightColor);
-                    ui::SliderFloat("face falloff", &R.face.lightFalloff, 0.001f, 0.1f);
-                    ui::SliderFloat("spot outer angle", &R.face.spotOuterDeg, 5.0f, 90.0f);
-                    ui::SliderFloat("spot inner angle", &R.face.spotInnerDeg, 1.0f, 89.0f);
-                    ImGui::TextDisabled("90 outer = no cone (bare point light)");
-                    ui::SliderFloat("face spec", &R.face.specStrength, 0.0f, 3.0f);
-                    ui::SliderFloat("mask roughness", &R.face.roughness, 0.04f, 1.0f);
-                    ui::SliderFloat("albedo gamma", &R.face.albedoGamma, 1.0f, 3.0f);
-                    ui::SliderFloat("albedo saturation", &R.face.albedoSat, 0.0f, 3.0f);
-                    ImGui::TextDisabled("decode of the photograph before lighting;\n"
-                                        "gamma 1 = as-is (pale), 2.2 = sRGB; sat 1 = as-is");
-                    if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
-                        pf.roots.rebuildFace();
-                    ui::SliderFloat("mask sss wrap", &R.face.sssWrap, 0.0f, 1.5f);
-                    ui::SliderFloat("mask sss transmit", &R.face.sssTrans, 0.0f, 2.0f);
-                    ui::SliderFloat("mask sss power", &R.face.sssPower, 1.0f, 16.0f);
-                    ui::ColorEdit3("mask sss tint", R.face.sssTint);
-                    ImGui::TextDisabled("the mask's own subsurface terms (the roots'\n"
-                                        "are under environment); transmit is also\n"
-                                        "how much of the pluck flash shows through");
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("pluck flash");
-                ui::BeginHeader("pluck flash", /*default_open=*/false);
-                {
-                    ImGui::TextDisabled("a point light inside one mask on each pluck\n"
-                                        "marker, orbit only; 0 intensity = off");
-                    ui::SliderFloat("flash intensity", &R.flash.intensity, 0.0f, 60.0f);
-                    ui::ColorEdit3("flash color", R.flash.color);
-                    ui::SliderFloat("flash radius", &R.flash.radius, 0.2f, 12.0f);
-                    ui::SliderFloat("flash decay (s)", &R.flash.decaySeconds, 0.05f, 4.0f);
-                    ui::SliderFloat("flash depth", &R.flash.depth, -1.0f, 2.0f);
-                    ImGui::TextDisabled("x the mask's cavity half-depth, back along\n"
-                                        "its facing; negative is in front of the face");
-                    ui::Checkbox("flash all masks", &R.flash.all);
-                    ui::Checkbox("flash nearest mask", &R.flash.nearest);
-                    ui::Checkbox("flash mask 0", &R.flash.mask0);
-                    ImGui::TextDisabled("mask 0 = the visitor's own face");
-                    if (ImGui::Button("fire flash")) pf.roots.triggerFlash();
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("cached field: LOD & culling");
-                ui::BeginHeader("cached field: LOD & culling", /*default_open=*/false);
-                {
-                    ui::SliderInt("grid NxN", &pf.fieldGrid, 2, 20);
-                    if (ImGui::Button("tile field")) pf.roots.buildField(pf.fieldGrid, 30.0f);
-                    ImGui::SameLine();
-                    if (ImGui::Button("clear field")) { R.clearInstances(); pf.roots.regrow(); }
-                    ui::Checkbox("frustum cull", &R.cullInstances); ImGui::SameLine();
-                    ui::Checkbox("sub-pixel cull", &R.subpixelCull);
-                    ui::SliderFloat("cull below px", &R.instanceCullPx, 0.5f, 20.0f);
-                    ui::SliderFloat("LOD bias (>1 coarser)", &R.lodBias, 0.1f, 4.0f);
-                    ui::SliderFloat("min radius px", &R.minRadiusPx, 0.f, 3.f, "%.2f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Anti-shimmer for thin roots. A capsule projecting\n"
-                            "thinner than this many screen pixels is drawn this\n"
-                            "thick and dimmed by the ratio, so a hairline root\n"
-                            "at orbit distance is a steady faint line rather\n"
-                            "than one flashing in and out as the camera moves.\n"
-                            "0 = off. Also relaxes the sub-pixel cull below it.");
-                    }
-                    ImGui::Text("instances %d   visible %d   culled %d",
-                                R.instanceCount(), R.lastVisibleInstances, R.lastCulledInstances);
-                    ImGui::Text("capsules drawn: %ld", R.lastDrawnSegments);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PushSection("overlays");
-                ui::BeginHeader("overlays", /*default_open=*/false);
-                {
-                    ui::Checkbox("axes", &R.overlay.showAxes); ImGui::SameLine();
-                    ui::Checkbox("grid", &R.overlay.showGrid);
-                    ui::SliderFloat("grid spacing", &R.overlay.gridSpacing, 1.0f, 20.0f);
-                }
-                ui::EndHeader();
-                ui::PopSection();
-                ui::PopSection();          // "roots"
+                DrawRootsTab(pf.roots, pf.fieldGrid, pf.rootSeed, pf.fbw, pf.fbh);
                 DrawBankSaveUI(ui::Bank::Roots);
             }
             ui::EndTab();
