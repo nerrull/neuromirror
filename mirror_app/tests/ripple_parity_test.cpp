@@ -308,6 +308,36 @@ int main() {
     run_region("latents equal", c, 0.3f, -0.2f, 0.3f, -0.2f, 5);
     run_region("no sources", c, -0.9f, 0.7f, 0.4f, -0.3f, 0);
 
+    // The shift's reach: the kernel scales the input offset per pixel by the
+    // same smoothstep the ops path and shift_weight compute.
+    std::printf("\nshift falloff\n");
+    {
+        const int lh = 96, lw = 160;
+        const float asp = float(lw) / float(lh);
+        auto coords = mirror::make_coord_grid(lh, lw, -asp, asp, -1.f, 1.f);
+        const auto srcs = make_sources(3);
+        const mirror::ShiftFalloff f{0.4f, -0.2f, 0.3f, 0.5f, 0.25f};
+        auto ref = mirror::multi_ripple_features_ops(coords, srcs, 3.f, 1.8f, 0.f, 0.f,
+                                                     0.f, 0.f, 0.31f, -0.17f, {}, 0.f, 0.f, f);
+        auto got = mirror::multi_ripple_features(coords, srcs, 3.f, 1.8f, 0.f, 0.f,
+                                                 0.f, 0.f, 0.31f, -0.17f, f);
+        auto d = mx::max(mx::abs(mx::subtract(mx::astype(ref, mx::float32),
+                                              mx::astype(got, mx::float32))));
+        mx::eval(d);
+        const float md = d.item<float>();
+        bool ok = std::isfinite(md) && md <= kTol;
+        std::printf("  [%s] %-22s max|diff| = %.6f\n", ok ? " ok " : "FAIL", "kernel vs ops", md);
+        if (!ok) ++g_fail;
+        // Whole at the head, `far` past the fade, and off means exactly 1.
+        ok = mirror::shift_weight(f, f.cx, f.cy) == 1.f &&
+             mirror::shift_weight(f, f.cx + f.radius, f.cy) == 1.f &&
+             mirror::shift_weight(f, f.cx + f.radius + f.fade, f.cy) == f.far &&
+             mirror::shift_weight(f, f.cx + 5.f, f.cy) == f.far &&
+             mirror::shift_weight(mirror::ShiftFalloff{}, 3.f, 3.f) == 1.f;
+        std::printf("  [%s] %-22s\n", ok ? " ok " : "FAIL", "weight shape");
+        if (!ok) ++g_fail;
+    }
+
     std::printf("\nregion weight shape\n");
     test_region_shape();
 

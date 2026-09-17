@@ -30,7 +30,8 @@ inline mx::array S(float v) { return mx::array(v); }
 //
 // scal layout: [k, decay, core_r2, warp, x_offset, y_offset, z, z_cos,
 //               z_out, z_cos_out, cx, cy, inv_hx, inv_hy, fade_start, region_on,
-//               inv_fade_width, use_field, fw, fh, ax]
+//               inv_fade_width, use_field, fw, fh, ax,
+//               shift_cx, shift_cy, shift_radius, shift_inv_fade, shift_far]
 const char* kRippleSrc = R"MSL(
     const uint i = thread_position_in_grid.x;
     if (i >= nrows[0]) return;
@@ -133,8 +134,18 @@ const char* kRippleSrc = R"MSL(
         gy += slope * dy;
     }
 
-    const float xw = x - xoff + warp * gx;
-    const float yw = y - yoff + warp * gy;
+    // The shift's reach (ShiftFalloff): whole within the radius of the head,
+    // `far` of it past the fade. From the raw coords, like the region. With
+    // no radius the multiplier is exactly 1 and the shift is the translation
+    // it always was.
+    float sm = 1.0f;
+    if (scal[23] > 0.0f) {
+        const float ddx = x - scal[21], ddy = y - scal[22];
+        const float t = clamp((sqrt(ddx * ddx + ddy * ddy) - scal[23]) * scal[24], 0.0f, 1.0f);
+        sm = 1.0f + (scal[25] - 1.0f) * t * t * (3.0f - 2.0f * t);
+    }
+    const float xw = x - xoff * sm + warp * gx;
+    const float yw = y - yoff * sm + warp * gy;
 
     // (N, 8): x, y, z, bias, sin_field, cos_field, z_cos, spare
     out[8 * i + 0] = (half)xw;
@@ -180,6 +191,14 @@ mx::array make_coord_grid(int h, int w, float x0, float x1, float y0, float y1) 
     return mx::astype(coords, mx::float16);
 }
 
+float shift_weight(const ShiftFalloff& f, float x, float y) {
+    if (f.radius <= 0.f) return 1.f;
+    const float dx = x - f.cx, dy = y - f.cy;
+    float t = (std::sqrt(dx * dx + dy * dy) - f.radius) / std::max(f.fade, 1e-4f);
+    t = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+    return 1.f + (f.far - 1.f) * t * t * (3.f - 2.f * t);
+}
+
 float region_weight(const FitRegion& r, const float* field, float x, float y) {
     if (!r.on) return 0.f;
     float d;
@@ -210,10 +229,11 @@ mx::array multi_ripple_features(const mx::array& coords,
                                 const std::vector<RippleSource>& sources,
                                 float ring_freq, float decay, float z, float z_cos,
                                 float warp, float core_radius,
-                                float x_offset, float y_offset) {
+                                float x_offset, float y_offset,
+                                const ShiftFalloff& shift) {
     return multi_ripple_features_region(coords, sources, ring_freq, decay, z, z_cos,
                                         warp, core_radius, x_offset, y_offset,
-                                        FitRegion{}, z, z_cos, std::nullopt)[0];
+                                        FitRegion{}, z, z_cos, std::nullopt, shift)[0];
 }
 
 std::vector<mx::array> multi_ripple_features_region(
@@ -221,7 +241,7 @@ std::vector<mx::array> multi_ripple_features_region(
     float ring_freq, float decay, float z, float z_cos, float warp,
     float core_radius, float x_offset, float y_offset,
     const FitRegion& region, float z_out, float z_cos_out,
-    const std::optional<mx::array>& field) {
+    const std::optional<mx::array>& field, const ShiftFalloff& shift) {
     const int n = coords_in.shape(0);
     const int nsrc = static_cast<int>(sources.size());
 
@@ -264,8 +284,9 @@ std::vector<mx::array> multi_ripple_features_region(
         region.on ? 1.f : 0.f,
         1.f / std::max(region.fade_width, 1e-4f),
         has_field ? 1.f : 0.f,
-        float(region.fw), float(region.fh), std::max(region.ax, 1e-6f)};
-    auto scal = mx::array(sc.data(), {21}, mx::float32);
+        float(region.fw), float(region.fh), std::max(region.ax, 1e-6f),
+        shift.cx, shift.cy, shift.radius, 1.f / std::max(shift.fade, 1e-4f), shift.far};
+    auto scal = mx::array(sc.data(), {int(sc.size())}, mx::float32);
     auto nrows = mx::array({n}, mx::uint32);
 
     const int grid = ((n + kRippleThreads - 1) / kRippleThreads) * kRippleThreads;
@@ -305,7 +326,8 @@ mx::array multi_ripple_features_ops(const mx::array& coords_in,
                                     float z_cos, float warp, float core_radius,
                                     float x_offset, float y_offset,
                                     const FitRegion& region,
-                                    float z_out, float z_cos_out) {
+                                    float z_out, float z_cos_out,
+                                    const ShiftFalloff& shift) {
     auto coords = mx::astype(coords_in, mx::float32);
     auto xy = mx::split(coords, 2, /*axis=*/1);  // x, y : (N, 1) each
     auto x = xy[0];
@@ -345,9 +367,20 @@ mx::array multi_ripple_features_ops(const mx::array& coords_in,
             gy = mx::add(gy, mx::multiply(slope, dy));
         }
     }
-    // Color coords: subtract xy_offset (color travel) and add warp*gradient (refraction).
-    auto xw = mx::subtract(x, S(x_offset));
-    auto yw = mx::subtract(y, S(y_offset));
+    // Color coords: subtract xy_offset (color travel), scaled by the shift's
+    // reach, and add warp*gradient (refraction).
+    auto sm = mx::ones({n, 1}, mx::float32);
+    if (shift.radius > 0.f) {
+        auto dx = mx::subtract(x, S(shift.cx));
+        auto dy = mx::subtract(y, S(shift.cy));
+        auto d = mx::sqrt(mx::add(mx::multiply(dx, dx), mx::multiply(dy, dy)));
+        auto t = mx::clip(mx::divide(mx::subtract(d, S(shift.radius)),
+                                     S(std::max(shift.fade, 1e-4f))), S(0.f), S(1.f));
+        auto sst = mx::multiply(mx::multiply(t, t), mx::subtract(S(3.f), mx::multiply(S(2.f), t)));
+        sm = mx::add(S(1.f), mx::multiply(S(shift.far - 1.f), sst));
+    }
+    auto xw = mx::subtract(x, mx::multiply(S(x_offset), sm));
+    auto yw = mx::subtract(y, mx::multiply(S(y_offset), sm));
     if (warp != 0.f) {
         xw = mx::add(xw, mx::multiply(S(warp), gx));
         yw = mx::add(yw, mx::multiply(S(warp), gy));

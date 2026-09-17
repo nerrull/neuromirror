@@ -482,6 +482,9 @@ int   g_head_mode = (int)HeadMode::Track;
 float g_head_smooth = 0.25f;    // EMA per frame; 1 = no smoothing
 float g_shift_gain_fit  = 1.f;
 float g_shift_gain_idle = 0.25f;
+float g_shift_radius    = 0.f;
+float g_shift_fade      = 0.6f;
+float g_shift_far       = 0.f;
 float g_stab_size_mul   = 1.f;
 
 // The tracked head, smoothed, in normalised frame coords. Smoothed because the

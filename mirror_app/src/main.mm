@@ -62,6 +62,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <random>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -448,7 +449,12 @@ static bool g_mask_held = false;
 // holds the shift where it is; a new one picks up from there. Snapping back
 // to zero on every loss was a visible jump in Idle, with nothing to justify
 // it. It is zeroed once per cycle, at the Idle entry (see the phase switch).
+//
+// The head's own position, in coord space, is latched alongside: it is where
+// the shift's falloff (ShiftFalloff) is centred, and it holds with the shift
+// when the face is lost, for the same reason.
 static float g_shift_x = 0.f, g_shift_y = 0.f;
+static float g_shift_cx = 0.f, g_shift_cy = 0.f;
 static void UpdateInputShift(float asp, bool fit_live) {
     static bool  prev_valid = false;
     static float prev_cx = 0.5f, prev_cy = 0.5f;
@@ -468,6 +474,8 @@ static void UpdateInputShift(float asp, bool fit_live) {
         g_shift_x += (cx - prev_cx) * 2.f * asp * gain;
         g_shift_y += (cy - prev_cy) * 2.f * gain;
     }
+    g_shift_cx = (cx - 0.5f) * 2.f * asp;
+    g_shift_cy = (cy - 0.5f) * 2.f;
     prev_cx = cx; prev_cy = cy; prev_valid = true;
 }
 
@@ -480,9 +488,11 @@ static void ApplyHeadMode(mirror::PondParams& P, int fw, int fh, bool fit_live) 
     }
     g_mask_held = false;
     P.coord_off_x = P.coord_off_y = 0.f;
+    P.shift_falloff = mirror::ShiftFalloff{};
     if (g_head_mode == (int)HeadMode::Stabilised) {
         P.coord_off_x = g_shift_x;
         P.coord_off_y = g_shift_y;
+        P.shift_falloff = {g_shift_cx, g_shift_cy, g_shift_radius, g_shift_fade, g_shift_far};
     }
     P.region.on = false;
     P.region.use_field = false;
@@ -1752,9 +1762,31 @@ int main(int argc, char** argv) {
     // This is what grows the bank. Once per sitting: thisSittingCaptureId is
     // cleared at Transition entry and set here, and the face track's own
     // save keys off the same id.
+    //
+    // The tracker need not have the visitor on this very frame: they may
+    // have stepped away in the last seconds of Face, or the tracker may
+    // have dropped one frame at exactly the wrong moment. Either way the
+    // fitter still holds its last solve of them -- the mesh mask 0 has been
+    // wearing -- and the colours were sampled while they were there. Only a
+    // sitting the tracker never had at all (no recorded frames) has nothing
+    // to capture; requiring a live detection here instead threw away the
+    // capture and, with it, the sitting's whole track.
+    // The sitting's seed (RootSequenceParams::vary_seed): a fresh random
+    // offset on the preset's seed before every replant, so each visitor
+    // grows their own root system. Logged, so a plant worth keeping can be
+    // reproduced by putting base + offset in the preset.
+    std::mt19937 sittingSeedRng{std::random_device{}()};
+    auto newSittingSeed = [&]() {
+        const unsigned offset = g_root_seq.vary_seed
+            ? 1u + unsigned(sittingSeedRng() % 1000000u) : 0u;
+        roots.setSeedOffset(offset);
+        if (offset) printf("root: sitting seed %u (%u + %u)\n",
+                           roots.effectiveSeed(), roots.simParams().seed, offset);
+    };
     auto autoCaptureAtCut = [&]() {
         if (!g_capture_auto || !thisSittingCaptureId.empty()) return;
-        if (!(g_fitter.valid() && g_track_on && g_face.valid)) return;
+        if (!(g_fitter.valid() && g_track_on && (g_face.valid || faceTrackRec.frames() > 0)))
+            return;
         const std::vector<float>& verts = g_fitter.vertices();
         if (verts.size() < 9 || g_face_colors.size() != verts.size()) return;
         mirror::FaceCapture cap;
@@ -2309,6 +2341,14 @@ int main(int argc, char** argv) {
                     const float absentHold = g_show.hold(show::Phase::Roots, 0);
                     if ((float)g_track_absent_t >= absentHold) {
                         faceTrackRecActive = false;
+                        // A visitor gone this long before the cut (they left
+                        // as the cloth cleared, say) has no capture id yet
+                        // -- the ordinary one is taken at the cut, still
+                        // seconds away -- and a track with no id to key to
+                        // was simply dropped. Take the capture now, from
+                        // the fitter's last solve of them, so the sitting
+                        // is banked like any other. A no-op once one exists.
+                        autoCaptureAtCut();
                         mirror::FaceTrack track;
                         if (faceTrackRec.finish(g_fitter, track) && !thisSittingCaptureId.empty()) {
                             track.id = thisSittingCaptureId;
@@ -2546,7 +2586,7 @@ int main(int argc, char** argv) {
                             // second visitor of the day walked up to a root
                             // system that was already fully grown before their
                             // press had even started.
-                            if (roots.valid()) { roots.replant(); roots.restartCloth(); }
+                            if (roots.valid()) { newSittingSeed(); roots.replant(); roots.restartCloth(); }
                             rootFaceTrisUploaded = false;
                             // Previous visitors onto the other masks, now
                             // rather than at the cut: they are not seen
@@ -2559,11 +2599,11 @@ int main(int argc, char** argv) {
                             rootSeqBegunForSitting = true;
                             rootFaceSeqBegunForSitting = false;
                             // The previous sitting's replay must not carry
-                            // over: left valid, it kept stepping the last
-                            // visitor's recording onto mask 0 through this
-                            // visitor's whole Face stage, over the live fit
-                            // (both root branches step it whenever it is
-                            // valid, and squareAnchorMaskOnLeavingFace
+                            // over: left active, it kept the last visitor's
+                            // recording (or held frame) on mask 0 through
+                            // this visitor's whole Face stage, over the
+                            // live fit (both root branches step it whenever
+                            // it is active, and holdAnchorMaskOnLeavingFace
                             // bails on it too). Mask 0 is the live tracker's
                             // again until onLeaveFace hands over this
                             // sitting's own track.
@@ -2602,7 +2642,7 @@ int main(int argc, char** argv) {
                             // film, the mask already uncovered and wearing its
                             // face. Replaying the press here would make the
                             // two buttons do the same thing a second apart.
-                            if (roots.valid()) { roots.replant(); roots.skipCloth(); }
+                            if (roots.valid()) { newSittingSeed(); roots.replant(); roots.skipCloth(); }
                             rootFaceTrisUploaded = false;
                             rootsClock = 0.0;
                             // No Transition ran, so onLeaveFace never fed
@@ -2664,6 +2704,10 @@ int main(int argc, char** argv) {
                     if (p == show::Phase::Roots && !rootFaceSeqBegunForSitting) {
                         const bool ownTrack = !thisSittingCaptureId.empty() &&
                                               pendingFaceTrack.id == thisSittingCaptureId;
+                        // reset() first: begin() keeps a hold that is already
+                        // under way, and a jump straight here from Idle would
+                        // otherwise keep the previous sitting's held frame.
+                        rootFaceSeq.reset();
                         rootFaceSeq.begin(ownTrack ? pendingFaceTrack : mirror::FaceTrack{},
                                           g_fitter.basis(), g_root_seq.replayConfig());
                     }
@@ -3238,30 +3282,7 @@ int main(int argc, char** argv) {
                 // clock reaching the same edge.
                 rootSeq.jumpTo((RootSequence::Stage)want, roots, g_root_seq, rootsClock);
             };
-            // The moment the viewer stops driving mask 0 (the sequence leaving
-            // Face, by its own clock or a jump), the mask freezes on whatever
-            // pose their head was in on that last frame -- and a tilted head
-            // left the face askew in the nest the sim grew square to the
-            // mask's frame, the same fault the bank's captures had. Upload
-            // it once more, squared: the fitter's own rotation undone about
-            // the centroid, exactly as autoCaptureAtCut saves it. Only the
-            // live tracker's mesh: a loaded capture or a replayed sitting is
-            // already the mask's own business.
-            auto squareAnchorMaskOnLeavingFace = [&](RootSequence::Stage before) {
-                if (!rootSeqActive || !rootSeq.valid()) return;
-                if (before != RootSequence::Stage::Face || rootSeq.stage() == RootSequence::Stage::Face) return;
-                if (!g_capture_loaded.empty() || rootFaceSeq.valid()) return;
-                if (!(g_fitter.valid() && roots.usingFittedFace())) return;
-                std::vector<float> v = g_fitter.vertices();
-                if (v.size() < 9) return;
-                const float* r = g_fitter.rotation();
-                const float rt[9] = {r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]};
-                mirror::RotateAboutCentroid(v, rt);
-                roots.setFittedFace(v, rootFaceTrisUploaded ? std::vector<int>()
-                                                            : g_fitter.basis().triangles());
-                rootFaceTrisUploaded = true;
-            };
-            // The freeze, at the same edge squareAnchorMaskOnLeavingFace
+            // The freeze, at the same edge holdAnchorMaskOnLeavingFace
             // reacts to (Face -> anything else): this is where show_timeline's
             // Transition -> Roots cut now actually happens (SceneDone, not a
             // cloth-clear-plus-tail timer -- see show_timeline.cpp's
@@ -3270,11 +3291,12 @@ int main(int argc, char** argv) {
             // 0 replays *this* visitor from Grow onward instead of freezing on
             // a static mesh (or, worse, the previous visitor's track -- see
             // ROOT_TIMELINE.md's old "known gap"). Called before
-            // squareAnchorMaskOnLeavingFace, above, so that lambda's own
-            // "rootFaceSeq.valid() already" bail is seeing this frame's
+            // holdAnchorMaskOnLeavingFace, above, so that lambda's own
+            // "rootFaceSeq.active() already" bail is seeing this frame's
             // result, not last frame's: once a fresh recording is handed over
-            // here, rootFaceSeq.step() (below) is what poses the mask next,
-            // not a one-off squaring of the live tracker's last frame.
+            // here, rootFaceSeq.step() (below) settles the mask onto its
+            // last frame; the fallback only builds that frame from the
+            // fitter when there is no recording to take it from.
             auto onLeaveFace = [&](RootSequence::Stage before) {
                 if (!rootSeqActive || !rootSeq.valid()) return;
                 if (before != RootSequence::Stage::Face || rootSeq.stage() == RootSequence::Stage::Face)
@@ -3286,7 +3308,18 @@ int main(int argc, char** argv) {
                 // here too is a no-op the second time (guarded on
                 // thisSittingCaptureId already being set).
                 autoCaptureAtCut();
-                if (!faceTrackRecActive) return;
+                if (!faceTrackRecActive) {
+                    // Already finished, by the absence-based path above: the
+                    // visitor left well before the cut. If that produced this
+                    // sitting's own track, it is still what mask 0 should
+                    // hold on -- the recording's last frame is the last the
+                    // tracker saw of them.
+                    if (!thisSittingCaptureId.empty() && pendingFaceTrack.id == thisSittingCaptureId) {
+                        rootFaceSeq.begin(pendingFaceTrack, g_fitter.basis(), g_root_seq.replayConfig());
+                        rootFaceSeqBegunForSitting = true;
+                    }
+                    return;
+                }
                 faceTrackRecActive = false;
                 mirror::FaceTrack track;
                 if (!faceTrackRec.finish(g_fitter, track) || thisSittingCaptureId.empty())
@@ -3365,6 +3398,71 @@ int main(int argc, char** argv) {
                 m.lips  = std::max(0.f, g_root_seq.mouth_open_lips);
                 return m;
             };
+            // The mouth-open modes of the fitter's basis, looked up once --
+            // shared by uploadLiveFace and holdAnchorMaskOnLeavingFace below.
+            static mirror::MouthOpenModes liveMouthModes;
+            static bool liveMouthTried = false;
+            if (!liveMouthTried && g_fitter.valid()) {
+                liveMouthTried = true;
+                liveMouthModes = mirror::mouthOpenModes(g_fitter.basis());
+            }
+            // Mask 0's held frame -- the one it wears from Grow on, for the
+            // rest of the sitting: squared (a tilted head left the face
+            // askew in the nest the sim grew square to the mask's frame, the
+            // same fault the bank's captures had) and jaw all the way open
+            // (the root leaves through it), built from the fitter's last
+            // solve exactly as autoCaptureAtCut saves it plus the mouth-open.
+            // The fitter's last solve is the last thing the tracker saw of
+            // the visitor whether they are still there or stepped out
+            // seconds ago, so this needs no live detection. Handed to
+            // rootFaceSeq.holdTo, which eases the mask onto it from whatever
+            // it wears now over `settle` seconds and then holds. Only the
+            // live tracker's mesh: a loaded capture is already the mask's
+            // own business.
+            auto holdAnchorMask = [&](double settle) {
+                if (!g_capture_loaded.empty() || rootFaceSeq.active()) return;
+                if (!(g_fitter.valid() && roots.usingFittedFace())) return;
+                mirror::MouthOpen target = rootMouthOpenTarget();
+                target.ramp = 1.f;   // held for the whole sitting, so all the way open
+                std::vector<float> expr = g_fitter.expression();
+                mirror::applyMouthOpen(liveMouthModes, target, expr);
+                std::vector<float> v;
+                g_fitter.basis().reconstruct(g_fitter.alpha(), expr, v);   // unposed: square
+                if (v.size() < 9) return;
+                rootFaceSeq.holdTo(v, g_fitter.basis(), settle);
+                rootFaceSeqBegunForSitting = true;
+            };
+            // The ordinary path to the hold: hold_settle_seconds before Face
+            // ends -- a time the sequence knows from the moment the cloth
+            // clears (RootSequence::faceEndsAt) -- so the settle is over and
+            // the mask still by the time Grow's first sim step measures
+            // where its mouth is. A settle that ran *into* Grow left the
+            // root growing out of a mouth that then drifted away from it.
+            // From here the viewer no longer drives the mask (the live
+            // upload below is gated on rootFaceSeq.active()); the recording
+            // carries on regardless, for the bank.
+            auto holdMaskAheadOfGrow = [&]() {
+                if (!rootSeqActive || !rootSeq.valid() || rootHold) return;
+                if (rootSeq.stage() != RootSequence::Stage::Face || rootFaceSeq.active()) return;
+                const double end = rootSeq.faceEndsAt(g_root_seq);
+                if (end < 0.0) return;
+                const double settle = std::max(0.f, g_root_seq.hold_settle_seconds);
+                if (rootsClock < end - settle) return;
+                holdAnchorMask(std::max(0.0, end - rootsClock));
+            };
+            // The same hold at the Face -> anything edge itself, for a cut
+            // that arrived unannounced -- a jump, or a Face so short the
+            // settle never had its window -- with no recording of the
+            // sitting handed over either (onLeaveFace, below, could not
+            // finish one). A snap, not a settle: Grow has begun. Before this
+            // the fallback uploaded the raw squared vertices: the mouth the
+            // ramp had just opened snapped back to wherever the tracker
+            // last left it.
+            auto holdAnchorMaskOnLeavingFace = [&](RootSequence::Stage before) {
+                if (!rootSeqActive || !rootSeq.valid()) return;
+                if (before != RootSequence::Stage::Face || rootSeq.stage() == RootSequence::Stage::Face) return;
+                holdAnchorMask(0.0);
+            };
             // The live tracker's mesh onto mask 0, with the jaw forced open
             // once the sequence's mouth-open ramp calls for it (root_sequence.h's
             // mouth_open_* -- the root leaves mask 0 through its mouth, so it
@@ -3381,16 +3479,10 @@ int main(int argc, char** argv) {
             // past every target) this is exactly the old
             // setFittedFace(g_fitter.vertices(), ...) call.
             auto uploadLiveFace = [&]() {
-                static mirror::MouthOpenModes mouthModes;
-                static bool mouthTried = false;
-                if (!mouthTried) {
-                    mouthTried = true;
-                    if (g_fitter.valid()) mouthModes = mirror::mouthOpenModes(g_fitter.basis());
-                }
                 const mirror::MouthOpen target = rootMouthOpenTarget();
                 const std::vector<float>& liveExpr = g_fitter.expression();
                 std::vector<float> expr = liveExpr;
-                mirror::applyMouthOpen(mouthModes, target, expr);
+                mirror::applyMouthOpen(liveMouthModes, target, expr);
                 const bool needOverride = expr != liveExpr;
                 // The fitter poses its mesh about the centroid (the middle
                 // of the face); on the mask it turns about the neck, the
@@ -3425,6 +3517,9 @@ int main(int argc, char** argv) {
                 roots.setFittedFace(smoothVerts, rootFaceTrisUploaded ? std::vector<int>()
                                                                       : g_fitter.basis().triangles());
                 rootFaceTrisUploaded = true;
+                // What the hold at Face -> Grow settles from -- see
+                // RootFaceSequence::holdTo.
+                rootFaceSeq.noteMaskVerts(smoothVerts);
             };
             // The mouth-open ramp with nobody tracked: the visitor stepped
             // out of the sensor (or the tracker lost them) during the last
@@ -3515,11 +3610,15 @@ int main(int argc, char** argv) {
                 // what that trades away (pixel-exact film registration during
                 // the press) against what it gains (no second mask).
                 //
-                // Only while the sequence is still on Face: the viewer stops
-                // driving the mask the moment Grow starts (the recording keeps
-                // going -- RootFaceSequence plays it back later).
+                // Only while the sequence is still on Face, and only until
+                // the mask starts settling onto its held frame ahead of Grow
+                // (holdMaskAheadOfGrow): the viewer stops driving the mask
+                // then (the recording keeps going -- RootFaceSequence and the
+                // bank play it back later).
+                holdMaskAheadOfGrow();
                 const bool viewerDrivesMask =
-                    !rootSeq.valid() || rootSeq.stage() == RootSequence::Stage::Face;
+                    (!rootSeq.valid() || rootSeq.stage() == RootSequence::Stage::Face) &&
+                    !rootFaceSeq.active();
                 if (g_fitter.valid() && g_track_on && g_face.valid && !rootHold) {
                     if (viewerDrivesMask) {
                         uploadLiveFace();
@@ -3566,15 +3665,15 @@ int main(int argc, char** argv) {
                     roots.simPaused = true;
                 }
                 onLeaveFace(stageBefore);
-                squareAnchorMaskOnLeavingFace(stageBefore);
+                holdAnchorMaskOnLeavingFace(stageBefore);
                 saveSittingPlant(stageBefore);
                 // rootFaceSeq may have just begun (onLeaveFace, above) while
                 // this frame is still rendering Transition -- the literal
                 // Roots phase entry lands a frame later at most. Step it here
                 // too so mask 0 does not sit frozen on the tracker's last
                 // frame for that gap.
-                if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget(),
+                if (rootFaceSeq.active() && !rootHold)
+                    rootFaceSeq.step(roots, rootsClock, dt, rootMouthOpenTarget(),
                                      rootSeq.valid() && rootSeq.mouthOpenRamp(rootsClock, g_root_seq) >= 1.f);
                 if (!rootHold) bankFaceSeq.step(roots, rootsClock, dt);
                 if (rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
@@ -3608,12 +3707,13 @@ int main(int argc, char** argv) {
                 // whoever happens to be in front of the sensor now would
                 // overwrite the face that was just carried in on the mask, one
                 // frame after the transition handed it over.
+                holdMaskAheadOfGrow();
                 const bool viewerDrivesMask =
                     !rootSeqActive || !rootSeq.valid() ||
                     rootSeq.stage() == RootSequence::Stage::Face;
                 if (!g_capture_loaded.empty()) {
                     // Already uploaded when it was loaded; nothing per frame.
-                } else if (rootFaceSeq.valid()) {
+                } else if (rootFaceSeq.active()) {
                     // The sitting that just came through Transition outranks
                     // both a loaded capture's static mesh and the live
                     // tracker, for the same reason a loaded capture already
@@ -3699,15 +3799,16 @@ int main(int argc, char** argv) {
                 // edge is ever seen for that sitting) -- sceneDone() here is
                 // a harmless no-op, the show is already in Roots.
                 onLeaveFace(stageBefore);
-                squareAnchorMaskOnLeavingFace(stageBefore);
+                holdAnchorMaskOnLeavingFace(stageBefore);
                 saveSittingPlant(stageBefore);
                 if (rootSeqActive && rootSeq.valid()) g_root_stage = (int)rootSeq.stage();
-                if (rootFaceSeq.valid() && !rootHold)
-                    rootFaceSeq.step(roots, g_show.phaseTime(), dt, rootMouthOpenTarget(),
+                // Both replays on rootsClock rather than phaseTime():
+                // continuous across the Transition -> Roots cut (the same
+                // clock the recording's timestamps are on), so a face that
+                // was already moving does not jump.
+                if (rootFaceSeq.active() && !rootHold)
+                    rootFaceSeq.step(roots, rootsClock, dt, rootMouthOpenTarget(),
                                      rootSeq.valid() && rootSeq.mouthOpenRamp(rootsClock, g_root_seq) >= 1.f);
-                // The bank's masks, on rootsClock rather than phaseTime():
-                // continuous across the Transition -> Roots cut, so a face
-                // that was already moving in the chain does not jump.
                 if (!rootHold) bankFaceSeq.step(roots, rootsClock, dt);
                 // The live tracker keeps recording, for as long as the same
                 // visitor is still actually present -- see the phase-agnostic

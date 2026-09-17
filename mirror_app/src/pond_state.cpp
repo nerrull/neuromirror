@@ -280,7 +280,7 @@ void Pond::rebuildFitFeatures(const PondParams& p) {
     auto feats = multi_ripple_features(c, {}, p.ring_freq, p.decay,
                                        p.z_amp * std::sin(fit_z_),
                                        p.z_amp * std::cos(fit_z_), 0.f, 0.f,
-                                       p.coord_off_x, p.coord_off_y);
+                                       p.coord_off_x, p.coord_off_y, p.shift_falloff);
     if (trainer_.masked()) {
         // Gather the rows the mask selected, so the forward and backward see
         // only those pixels rather than the whole grid.
@@ -290,13 +290,20 @@ void Pond::rebuildFitFeatures(const PondParams& p) {
     mx::eval(fit_feats_);
     fit_feats_key_ = std::array<int, 2>{h, w};
     fit_feats_gen_ = trainer_.targetGeneration();
-    fit_feats_in_ = {p.coord_off_x, p.coord_off_y, fit_z_};
+    fit_feats_in_ = fitFeatureInputs(p);
+}
+
+// Everything the fit features are *of* besides the pixels: the shift, its
+// reach and the latent. The key fitStep compares to know a rebuild is due.
+std::array<float, 8> Pond::fitFeatureInputs(const PondParams& p) const {
+    const ShiftFalloff& f = p.shift_falloff;
+    return {p.coord_off_x, p.coord_off_y, fit_z_, f.cx, f.cy, f.radius, f.fade, f.far};
 }
 
 float Pond::fitStep(float lr, const PondParams& p) {
     if (!fitting_ || !trainer_.hasTarget()) return -1.f;
     const std::array<int, 2> key{trainer_.targetH(), trainer_.targetW()};
-    const std::array<float, 3> in{p.coord_off_x, p.coord_off_y, fit_z_};
+    const std::array<float, 8> in = fitFeatureInputs(p);
     // The generation, not the pixel *count*. The features are the coordinates
     // of the pixels the mask selected, so they go stale the moment the mask
     // selects different ones -- and a crop tracking a face keeps almost exactly
@@ -354,7 +361,8 @@ mx::array Pond::render(int lh, int lw, double t, const PondParams& p) {
         coords, last_src_, p.ring_freq, p.decay,
         p.z_amp * std::sin(z_in), p.z_amp * std::cos(z_in),
         p.warp, p.core_rolloff ? p.core_radius : 0.f, offx, offy,
-        reg, p.z_amp * std::sin(p.z), p.z_amp * std::cos(p.z), field);
+        reg, p.z_amp * std::sin(p.z), p.z_amp * std::cos(p.z), field,
+        p.shift_falloff);
     auto feats = outs[0];
 
     // A fitted network is used as-is: its weights were learned, not derived

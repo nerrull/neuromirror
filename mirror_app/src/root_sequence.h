@@ -106,23 +106,32 @@ struct RootSequenceParams {
     float grow_rate_max      = 1200.f;
     // Per-hop framing. For the hop in flight the camera looks straight down
     // the outward normal of the mask the root is heading for, at that mask,
-    // from the distance that holds it, the growth tip and the mask the root
-    // left (so the root's origin stays in frame) with grow_margin around
-    // them. Target and radius ease with cam_ease_seconds and the angles with
-    // the same ease, so each hop is one travel-out move that ends square on
-    // the face just reached. The first hop's swing off the Face pose (down
-    // the anchor's normal) is the same ease, but its rate is faded in from
-    // nothing over grow_swing_ease_seconds: an exponential ease is fastest
-    // on its first frame, and off the held Face pose that read as a jolt.
-    // Nothing frames the whole structure until the Turn.
+    // from the distance that holds it with grow_margin around it -- and,
+    // with grow_frame_previous, the growth tip and the mask the root left
+    // too (so the root's origin stays in frame), which is a pull-out on
+    // every hop and a push back in on arrival; off, the camera stays close
+    // and travels from face to face. Target and radius ease with
+    // cam_ease_seconds and the angles with the same ease, so each hop is
+    // one move that ends square on the face just reached. Every hop's
+    // departure -- the first off the Face pose (down the anchor's normal),
+    // each later one off the face just settled on -- has the ease's rate
+    // faded in from nothing over grow_swing_ease_seconds: an exponential
+    // ease is fastest on its first frame, and off a held pose that read as
+    // a jolt. Nothing frames the whole structure until the Turn.
     //
     // While the root travels, the target point sits this far from the mask
     // toward the tip (0 pins the mask centre, 1 follows the tip); once the
     // root has arrived it is the mask.
     float grow_hop_lead      = 0.3f;
     float grow_swing_ease_seconds = 4.0f;
-    // Margin around the target mask / tip / previous mask, as a fraction of
-    // their extent.
+    bool  grow_frame_previous = false;
+    // A fresh random seed for every sitting's plant (main.mm hands
+    // RootScene::setSeedOffset a new offset at Transition entry), on top of
+    // the roots preset's own seed. Off, every visitor grows the preset's
+    // seed exactly -- the same root system each time.
+    bool  vary_seed          = true;
+    // Margin around the target mask (and tip / previous mask when framed),
+    // as a fraction of their extent.
     float grow_margin        = 0.35f;
     // Guard: Grow ends at grow_face_seconds x (N-1) x this even if the sim
     // has not reported done().
@@ -281,6 +290,17 @@ struct RootSequenceParams {
     // mesh's centroid, cm (FaceReplayConfig::pivotBackCm/DownCm).
     float head_pivot_back_cm = 8.f;
     float head_pivot_down_cm = 5.f;
+    // Seconds mask 0 takes to settle from the last frame the visitor drove
+    // (posed, live) onto the frame it holds from Grow on (squared, jaw
+    // open) -- RootFaceSequence::holdTo. The two are never the same mesh:
+    // the live one carries the head's tilt, the held one has it undone,
+    // and the cut between them read as a jump. The settle runs over the
+    // *last* seconds of Face (main.mm's holdMaskAheadOfGrow, off
+    // faceEndsAt), so the mask is already still on its held frame when
+    // Grow's first sim step measures where its mouth is -- a mask still
+    // moving under a root that has already left it reads as the root
+    // having missed. 0 snaps, the old behaviour.
+    float hold_settle_seconds = 0.75f;
 
     FaceReplayConfig replayConfig() const {
         FaceReplayConfig c;
@@ -444,10 +464,9 @@ public:
             curAz_ = az0_; curEl_ = el0_; curR_ = tightR_;
             for (int k = 0; k < 3; ++k) curT_[k] = anchor_.pos[k];
             if (in.clothCleared && clothClearAt_ < 0.0) clothClearAt_ = clock;
-            const double end = (clothClearAt_ >= 0.0)
-                ? std::max((double)P.face_seconds, clothClearAt_ + (double)P.face_hold_after_cloth_seconds)
-                : 1e30;   // never leaves Face until the cloth has cleared at least once
-            if (clock >= end) enter(Stage::Grow, clock);
+            const double end = faceEndsAt(P);
+            // never leaves Face until the cloth has cleared at least once
+            if (end >= 0.0 && clock >= end) enter(Stage::Grow, clock);
             break;
         }
         case Stage::Grow: {
@@ -471,9 +490,13 @@ public:
             // Down the target mask's own normal: the move ends looking
             // square at the face the root has just reached, and the next
             // hop's move starts from there.
-            // The ease's rate itself eased in over the stage's first
-            // seconds, so the camera leaves the Face pose from rest.
-            const float kG = kEase * smoothstep(tIn / std::max(1e-3, (double)P.grow_swing_ease_seconds));
+            // The ease's rate itself eased in over each hop's first
+            // seconds, so the camera leaves the pose it settled on from
+            // rest -- the Face pose for the first hop, the face just
+            // reached for every later one.
+            if (cm != hopMask_) { hopMask_ = cm; hopStart_ = clock; }
+            const float kG = kEase * smoothstep((clock - hopStart_) /
+                                                std::max(1e-3, (double)P.grow_swing_ease_seconds));
             float wantAz, wantEl;
             azelFromDir(tm.normal, wantAz, wantEl);
             easeAngle(curAz_, wantAz, kG);
@@ -488,14 +511,17 @@ public:
             }
             for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kG);
 
-            // The radius that holds the target mask, the tip and the mask
-            // the root left, at this frame's angles and target -- in as
-            // well as out, so the camera comes in on each new face.
+            // The radius that holds the target mask (and, when framed, the
+            // tip and the mask the root left), at this frame's angles and
+            // target -- in as well as out, so the camera comes in on each
+            // new face.
             Bound pts[3];
             int np = 0;
             pts[np++] = {{tm.pos[0], tm.pos[1], tm.pos[2]}, std::max(tm.rWidth, tm.rHeight)};
-            pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
-            if (haveTip) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
+            if (P.grow_frame_previous) {
+                pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
+                if (haveTip) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
+            }
             const float need = fitRadius(roots, curT_, curAz_, curEl_, pts, np, P.grow_margin);
             easeTo(curR_, std::max(need, tightR_), kG);
 
@@ -828,12 +854,20 @@ public:
     // only computes the ramp, not the override itself, since the two places
     // that apply it (main.mm's live path, RootFaceSequence's replay) reach
     // the mesh differently.
+    // The clock Face ends on (Grow begins), known from the moment the cloth
+    // clears; < 0 until then. What the mouth-open ramp and the mask's hold
+    // (main.mm's holdMaskAheadOfGrow) count back from.
+    double faceEndsAt(const RootSequenceParams& P) const {
+        if (clothClearAt_ < 0.0) return -1.0;
+        return std::max((double)P.face_seconds,
+                        clothClearAt_ + (double)P.face_hold_after_cloth_seconds);
+    }
+
     float mouthOpenRamp(double clock, const RootSequenceParams& P) {
         const double ease = std::max(0.01f, P.mouth_open_seconds);
         double start;
         if (clothClearAt_ >= 0.0) {
-            const double end = std::max((double)P.face_seconds,
-                                        clothClearAt_ + (double)P.face_hold_after_cloth_seconds);
+            const double end = faceEndsAt(P);
             // Floored at `ease`, not just `lead`: the ease should actually be
             // done by the time Grow starts whenever it is the longer of the
             // two knobs (a sub-2s ease against a many-second face hold is the
@@ -883,6 +917,7 @@ private:
         // skips Face's ordinary cloth-clear detection still has something to
         // start the ramp from.
         if (stage_ == Stage::Face && s != Stage::Face) faceLeftAt_ = clock;
+        if (s == Stage::Grow) hopMask_ = -1;   // the first hop's ease-in starts here
         stage_ = s; stageT0_ = clock;
     }
 
@@ -1042,9 +1077,11 @@ private:
         Bound pts[3];
         int np = 0;
         pts[np++] = {{tm.pos[0], tm.pos[1], tm.pos[2]}, std::max(tm.rWidth, tm.rHeight)};
-        pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
         float tip[3];
-        if (roots.growthTip(tip)) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
+        if (P.grow_frame_previous) {
+            pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
+            if (roots.growthTip(tip)) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
+        }
         curR_ = std::max(fitRadius(roots, curT_, curAz_, curEl_, pts, np, P.grow_margin), tightR_);
     }
     static float smoothstep(double u) {
@@ -1236,6 +1273,10 @@ private:
     Stage  stage_ = Stage::Face;
     double stageT0_ = 0.0;         // clock at the current stage's entry
     double clothClearAt_ = -1.0;   // first clock clothCleared was seen true, -1 until then
+    // The hop in flight (the mask the root is heading for) and the clock it
+    // began on -- what each hop's ease-in counts from. See the Grow case.
+    int    hopMask_  = -1;
+    double hopStart_ = 0.0;
     float  fade_ = 0.f;
     bool   moshFired_ = false;
 

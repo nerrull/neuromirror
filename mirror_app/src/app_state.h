@@ -272,6 +272,11 @@ extern float g_head_smooth;
 // than jumping back to zero (see UpdateInputShift in main.mm).
 extern float g_shift_gain_fit;    // how much of the head's motion the field follows, fitting
 extern float g_shift_gain_idle;   // the same, in Idle -- a small nudge of interactivity
+// The shift's reach from the head (mirror::ShiftFalloff): whole within the
+// radius, `far` of it past the fade. Radius 0 = the whole field shifts.
+extern float g_shift_radius;
+extern float g_shift_fade;
+extern float g_shift_far;
 extern float g_stab_size_mul;     // on-screen face size, as a multiple of the camera's
 extern bool  g_head_valid;
 extern float g_head_cx, g_head_cy;

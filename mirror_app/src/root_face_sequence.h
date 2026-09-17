@@ -307,43 +307,140 @@ private:
 
 // Mask 0: the sitting that just came through Transition, replayed on the
 // anchor through setFittedFace (which only ever touches mask 0).
+//
+// The hold is a settle, not a cut. The frame mask 0 freezes on from Grow
+// onward (squared, jaw open) is never the frame the visitor left it on:
+// the live upload carries the head's tilt about the neck, the fitter's own
+// smoothing and whatever the tracker last saw, and the held frame has the
+// tilt undone. Uploading one over the other in a single frame was the
+// jump at the Face -> Grow edge. So holdTo() eases from the mesh the mask
+// is wearing (noteMaskVerts, fed by every live upload) onto the target
+// over a given settle, and only then holds. Ordinarily main.mm starts it
+// ahead of Grow (holdMaskAheadOfGrow), so the settle is over -- the mask
+// still -- by the time the sim measures where the mouth is and grows out
+// of it; a cut that arrives unannounced (a jump) snaps, since a mask still
+// moving under a root that has already left it reads as a miss. Whatever
+// produced the target -- the fitter's last solve, or a recording's last
+// frame -- the hold is reached the same way.
 class RootFaceSequence {
 public:
+    // A hold already under way is kept: the recording then only serves
+    // valid() (and the bank); the mask is already settling onto the frame
+    // Grow needs. reset() is what lets go of a hold.
     void begin(const mirror::FaceTrack& track, const mirror::FaceBasis& basis,
                const FaceReplayConfig& cfg = {}) {
         player_.begin(track, basis, cfg);
         basis_ = &basis;
+        if (held_ || settling_) return;
         uploadedTris_ = false;
-        held_ = false;
     }
     // Back to "nothing to play", so the live tracker drives mask 0 again.
-    void reset() { player_.reset(); }
+    void reset() {
+        player_.reset();
+        held_ = false;
+        settling_ = false;
+        last_.clear();
+    }
 
-    // `mouthOpen` is the sequence's ramp having reached full: the mask is
-    // sampled one last time, jaw open and *squared* (no pose delta, so the
-    // mouth sits where the sim's spawn point expects it -- a held frame
-    // mid-turn put the hole off to one side of the root), and then holds
-    // that frame for the rest of the sitting -- the roots leave a face the
-    // visitor has left, not one still moving. The replay only ever runs
-    // through the ramp.
+    // The mesh mask 0 is wearing right now, in the fitter's model units,
+    // from whichever path uploaded it (main.mm's uploadLiveFace) -- the
+    // frame holdTo() settles from. Ignored once the hold has started: from
+    // then on this class is what poses the mask.
+    void noteMaskVerts(const std::vector<float>& verts) {
+        if (!held_ && !settling_) last_ = verts;
+    }
+
+    // Freeze mask 0 on `target` (fitter units, squared, jaw open), easing
+    // there from the last noted mesh over `settleSeconds`; a snap when
+    // there is nothing to ease from (no live frame noted, a different mesh
+    // size) or the settle is 0. step() runs the ease. Usable without a
+    // begin(): a sitting whose recording never made it still holds.
+    void holdTo(const std::vector<float>& target, const mirror::FaceBasis& basis,
+                double settleSeconds) {
+        if (target.size() < 9) return;
+        basis_ = &basis;
+        held_ = false;
+        settling_ = false;
+        verts_ = target;
+        settleSeconds_ = std::max(0.0, settleSeconds);
+        settleT_ = 0.0;
+        if (settleSeconds_ > 0.0 && last_.size() == verts_.size()) {
+            from_ = last_;
+            settling_ = true;
+        } else {
+            settleT_ = settleSeconds_;   // finishes on the first step
+            settling_ = true;
+        }
+    }
+
+    // `mouthOpen` is the sequence's ramp having reached full without a hold
+    // having been started ahead of it (a jump into Grow): the mask snaps
+    // onto the recording's *last* frame -- the most recent thing the
+    // tracker saw of the visitor, whether that was the frame before this
+    // one or well before they stepped away -- jaw open and *squared* (no
+    // pose delta, so the mouth sits where the sim's spawn point expects it
+    // -- a held frame mid-turn put the hole off to one side of the root),
+    // and then holds that frame for the rest of the sitting -- the roots
+    // leave a face the visitor has left, not one still moving. The replay
+    // only ever runs through the ramp.
     void step(RootScene& roots, double phaseTime, double dt,
               const mirror::MouthOpen& mouthOpenTarget = {}, bool mouthOpen = false) {
-        (void)dt;
         if (held_) return;
-        if (!player_.sample(phaseTime, mouthOpenTarget, verts_, /*squared=*/mouthOpen)) return;
-        roots.setFittedFace(verts_, uploadedTris_ ? std::vector<int>() : basis_->triangles());
-        uploadedTris_ = true;
-        held_ = mouthOpen;
+        if (settling_) { stepSettle(roots, dt); return; }
+        if (!player_.valid()) return;
+        if (mouthOpen) {
+            if (!player_.sample(double(player_.duration()), mouthOpenTarget, verts_,
+                                /*squared=*/true))
+                return;
+            holdTo(verts_, *basis_, 0.0);
+            stepSettle(roots, 0.0);
+            return;
+        }
+        if (!player_.sample(phaseTime, mouthOpenTarget, verts_)) return;
+        upload(roots, verts_);
+        last_ = verts_;
     }
 
     bool valid() const { return player_.valid(); }
+    // Whether this class is posing mask 0 at all: a replay, a settle in
+    // progress, or a held frame. What main.mm gates step() and the live
+    // upload on; valid() alone misses a hold with no recording behind it.
+    bool active() const { return player_.valid() || settling_ || held_; }
 
 private:
+    void upload(RootScene& roots, const std::vector<float>& verts) {
+        roots.setFittedFace(verts, uploadedTris_ ? std::vector<int>() : basis_->triangles());
+        uploadedTris_ = true;
+    }
+    // One frame of the ease, from_ -> verts_ on a smoothstep; the last
+    // frame uploads the target exactly and holds.
+    void stepSettle(RootScene& roots, double dt) {
+        settleT_ += dt;
+        const double u = settleSeconds_ > 0.0 ? std::clamp(settleT_ / settleSeconds_, 0.0, 1.0) : 1.0;
+        if (u >= 1.0 || from_.size() != verts_.size()) {
+            upload(roots, verts_);
+            settling_ = false;
+            held_ = true;
+            return;
+        }
+        const float w = float(u * u * (3.0 - 2.0 * u));
+        blend_.resize(verts_.size());
+        for (size_t i = 0; i < verts_.size(); ++i)
+            blend_[i] = from_[i] + (verts_[i] - from_[i]) * w;
+        upload(roots, blend_);
+    }
+
     FaceTrackPlayer player_;
     const mirror::FaceBasis* basis_ = nullptr;
     bool uploadedTris_ = false;
     bool held_ = false;
-    std::vector<float> verts_;
+    bool settling_ = false;
+    double settleSeconds_ = 0.0;
+    double settleT_ = 0.0;
+    std::vector<float> verts_;    // the replayed frame, or the hold target
+    std::vector<float> last_;     // what mask 0 wears, see noteMaskVerts
+    std::vector<float> from_;     // the settle's start, a copy of last_
+    std::vector<float> blend_;
 };
 
 // The bank's masks: one player per bank capture (index-parallel to the

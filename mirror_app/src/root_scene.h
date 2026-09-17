@@ -206,6 +206,19 @@ public:
     // seed change go through the same door.
     rootsim::SimParams& simParams() { return simParams_; }
     const rootsim::SimParams& simParams() const { return simParams_; }
+    // Per-sitting variety: the plant grows from simParams().seed + this,
+    // so the preset's seed stays the base look (and what the panel saves)
+    // while each visitor's root system differs. 0 grows the preset's seed
+    // exactly. Set before replant(); the hood's seeded variations and ring
+    // stay on the base seed, stable across sittings. A change invalidates
+    // growthStepEstimate(): the step count is the seed's own.
+    void setSeedOffset(unsigned offset) {
+        if (offset == seedOffset_) return;
+        seedOffset_ = offset;
+        growthStepEstimate_ = -1;
+    }
+    unsigned seedOffset() const { return seedOffset_; }
+    unsigned effectiveSeed() const { return simParams_.seed + seedOffset_; }
     // How many sim steps a full growth run takes for the current simParams_,
     // for pacing the live timeline against (see RootSequence::begin()).
     // Computed once by actually growing a throwaway sim to completion, then
@@ -667,6 +680,7 @@ public:
 
 private:
     void buildSyntheticRoots(uint32_t seed);
+    rootsim::SimParams liveSimParams() const;   // see setSeedOffset()
     void uploadFaceFromMasks();      // build face verts from the live sim's masks
     // faceScale and the face mesh's half-extents into simParams_ -- what the
     // sim sizes every mask's cavity from (root_sim.h, SimParams::faceScale).
@@ -758,6 +772,7 @@ private:
     std::unique_ptr<rootsim::RootSim>  sim_;
     rootsim::SimParams simParams_;
     mutable int growthStepEstimate_ = -1;   // -1 = not computed yet; see growthStepEstimate()
+    unsigned seedOffset_ = 0;               // see setSeedOffset()
     // The baked variations -- see ensureVariations. Emptied by regrow().
     struct Variation {
         std::vector<float> nodes, radii;

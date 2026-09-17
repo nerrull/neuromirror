@@ -100,6 +100,29 @@ struct FitRegion {
 // (tests/ripple_parity_test).
 float region_weight(const FitRegion& r, const float* field, float x, float y);
 
+// How far the input shift reaches. Uniform, the shift moves the whole field
+// with the head, background included -- the world glued to the person. With
+// a falloff the field moves whole within `radius` of (cx, cy) -- the head,
+// so the face still lands on the same network input, which is what the
+// stabilised fit mode is for -- and past the fade only `far` of it, so the
+// far field stays put and the picture stretches between: a parallax, the
+// near moving more than the far. radius 0 is off (a multiplier of exactly 1
+// everywhere).
+//
+// The shift is then a warp rather than a translation, and a warp folds where
+// its gradient passes 1 -- a shift of more than `fade` coord units across the
+// band. The fade is measured from the RAW coords like the region is.
+struct ShiftFalloff {
+    float cx = 0.f, cy = 0.f;   // where the shift is whole (coord space)
+    float radius = 0.f;         // whole shift within this distance; 0 = uniform
+    float fade = 0.5f;          // over how many coord units it falls to `far`
+    float far = 0.f;            // fraction of the shift left past the fade
+};
+
+// The shift's multiplier at (x, y): 1 within the radius, `far` past the
+// fade, smoothstep between. Mirrors the kernel (tests/ripple_parity_test).
+float shift_weight(const ShiftFalloff& f, float x, float y);
+
 // (H*W, 2) row-major grid of (x, y) coords in the given ranges (fp16).
 mx::array make_coord_grid(int h, int w,
                           float x0 = -1.f, float x1 = 1.f,
@@ -117,7 +140,8 @@ mx::array multi_ripple_features(const mx::array& coords,
                                 float ring_freq = 3.f, float decay = 1.6f,
                                 float z = 0.f, float z_cos = 0.f,
                                 float warp = 0.f, float core_radius = 0.f,
-                                float x_offset = 0.f, float y_offset = 0.f);
+                                float x_offset = 0.f, float y_offset = 0.f,
+                                const ShiftFalloff& shift = {});
 
 // The same, with a fit region: `z`/`z_cos` are the latent inside it and
 // `z_out`/`z_cos_out` the latent outside, crossfaded by the region weight. The
@@ -137,7 +161,8 @@ std::vector<mx::array> multi_ripple_features_region(
     float ring_freq, float decay, float z, float z_cos, float warp,
     float core_radius, float x_offset, float y_offset,
     const FitRegion& region, float z_out, float z_cos_out,
-    const std::optional<mx::array>& field = std::nullopt);
+    const std::optional<mx::array>& field = std::nullopt,
+    const ShiftFalloff& shift = {});
 
 // The original op-graph implementation, kept as the readable reference the
 // kernel is checked against (see tests/ripple_parity_test.cpp) and as the path
@@ -149,7 +174,8 @@ mx::array multi_ripple_features_ops(const mx::array& coords,
                                     float warp = 0.f, float core_radius = 0.f,
                                     float x_offset = 0.f, float y_offset = 0.f,
                                     const FitRegion& region = {},
-                                    float z_out = 0.f, float z_cos_out = 0.f);
+                                    float z_out = 0.f, float z_cos_out = 0.f,
+                                    const ShiftFalloff& shift = {});
 
 // The region weight as the op graph computes it, for the same parity check.
 mx::array region_weight_ops(const mx::array& coords, const FitRegion& region);

@@ -115,6 +115,9 @@ struct PondParams {
     // colour travel adds to it. Applied to render and fit alike -- the two
     // disagreeing would mean training one function and drawing another.
     float coord_off_x = 0.0f, coord_off_y = 0.0f;
+    // How far that shift reaches from the head -- see ShiftFalloff. Applied
+    // to render and fit alike for the same reason as the shift itself.
+    ShiftFalloff shift_falloff;
     // mask emergence transition
     float transition = 0.0f;
     bool  trans_auto = false;
@@ -274,7 +277,7 @@ private:
     // are *of*. Without these in the key, moving either would leave training
     // running against the features built for the old ones -- silently, since
     // nothing else notices.
-    std::array<float, 3> fit_feats_in_{0.f, 0.f, 0.f};
+    std::array<float, 8> fit_feats_in_{};
     // The latent the fit was begun at, held for as long as the fit lives.
     float fit_z_ = 0.f;
     std::vector<RippleSource> last_src_;
@@ -284,6 +287,7 @@ private:
     float z_boost_env_ = 0.f;
     float last_z_drop_boost_ = 0.02f;
     void rebuildFitFeatures(const PondParams& p);
+    std::array<float, 8> fitFeatureInputs(const PondParams& p) const;
     const mx::array& coord_grid(int lh, int lw, float asp);
 
     // Changing the split changes both the kernel (a template parameter) and

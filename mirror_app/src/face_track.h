@@ -68,6 +68,8 @@ public:
     // `out`. False, leaving `out` untouched, if fewer than two frames were
     // recorded -- a track needs at least a start and an end to play back.
     bool finish(const FaceFitter& fitter, FaceTrack& out);
+    // Frames recorded so far this sitting.
+    size_t frames() const { return frames_.size(); }
 
 private:
     std::vector<FaceTrackFrame> frames_;
