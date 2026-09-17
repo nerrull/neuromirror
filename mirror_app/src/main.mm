@@ -1391,6 +1391,13 @@ int main(int argc, char** argv) {
     layer.framebufferOnly = YES;
     nswin.contentView.layer = layer;
     nswin.contentView.wantsLayer = YES;
+    // Black behind the layer, not AppKit's light grey: where the compositor
+    // filters the layer's edge against the window (a one-pixel ring at the
+    // border of the fullscreen window), what shows through must be black.
+    nswin.backgroundColor = [NSColor blackColor];
+    nswin.opaque = YES;
+    layer.opaque = YES;
+    layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
 
     // ImGui
     IMGUI_CHECKVERSION();
