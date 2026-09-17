@@ -98,19 +98,19 @@ public:
         // see face_basis.h's jawOpenModeIndex. Looked up once per sitting
         // rather than logged here: main.mm logs the choice once at startup,
         // against the same basis.
-        jawIdx_ = valid_ ? mirror::jawOpenModeIndex(*basis_) : -1;
+        mouthModes_ = valid_ ? mirror::mouthOpenModes(*basis_) : mirror::MouthOpenModes{};
     }
     void reset() { valid_ = false; track_ = mirror::FaceTrack{}; }
 
-    // `mouthOpenTarget` is RootSequence::mouthOpenRamp(...) * mouth_open_amount
-    // for this frame, precomputed by the caller (main.mm) -- this class does
-    // not know about RootSequenceParams. Applied as
-    // expr[jawOpen] = max(recorded, mouthOpenTarget): raises the jaw, never
-    // clamps it, so a visitor caught mid-word on the recording still reads.
+    // `mouthOpen` is RootSequence::mouthOpenRamp(...) and the mouth_open_*
+    // amounts for this frame, assembled by the caller (main.mm) -- this
+    // class does not know about RootSequenceParams. Applied by
+    // applyMouthOpen: raises the openers, never clamps them, so a visitor
+    // caught mid-word on the recording still reads; fades the closers.
     // False (verts untouched) when there is nothing to play.
     // `squared`: skip the pose delta -- the frame at the recording's own
     // mean pose, aligned with the mask's nest and the sim's mouth point.
-    bool sample(double phaseTime, float mouthOpenTarget, std::vector<float>& verts,
+    bool sample(double phaseTime, const mirror::MouthOpen& mouthOpen, std::vector<float>& verts,
                 bool squared = false) {
         if (!valid_) return false;
 
@@ -144,11 +144,8 @@ public:
             const float eb = i < b.expr.size() ? b.expr[i] : 0.f;
             exprScratch_[i] = ea + (eb - ea) * u;
         }
-        // Raises the jaw, never clamps it -- see the comment on this method.
-        if (jawIdx_ >= 0 && mouthOpenTarget > 0.f) {
-            if ((int)exprScratch_.size() <= jawIdx_) exprScratch_.resize(size_t(jawIdx_) + 1, 0.f);
-            exprScratch_[size_t(jawIdx_)] = std::max(exprScratch_[size_t(jawIdx_)], mouthOpenTarget);
-        }
+        // Raises the openers, never clamps them -- see the comment on this method.
+        mirror::applyMouthOpen(mouthModes_, mouthOpen, exprScratch_);
         basis_->addExpression(identityBase_, exprScratch_, verts);
         // Delta from the recording's own mean pose, not the frame's raw
         // (absolute) rotation -- see the file comment. rot' = frame.rot *
@@ -304,7 +301,7 @@ private:
     bool valid_ = false;
     std::vector<float> identityBase_;   // neutral + identity, once per begin()
     float meanRot_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-    int jawIdx_ = -1;                 // see begin()/jawOpenModeIndex
+    mirror::MouthOpenModes mouthModes_;   // see begin()/mouthOpenModes
     std::vector<float> exprScratch_;   // scratch for the forced-open copy, see sample()
 };
 
@@ -329,8 +326,8 @@ public:
     // that frame for the rest of the sitting -- the roots leave a face the
     // visitor has left, not one still moving. The replay only ever runs
     // through the ramp.
-    void step(RootScene& roots, double phaseTime, double dt, float mouthOpenTarget = 0.f,
-              bool mouthOpen = false) {
+    void step(RootScene& roots, double phaseTime, double dt,
+              const mirror::MouthOpen& mouthOpenTarget = {}, bool mouthOpen = false) {
         (void)dt;
         if (held_) return;
         if (!player_.sample(phaseTime, mouthOpenTarget, verts_, /*squared=*/mouthOpen)) return;
@@ -386,7 +383,7 @@ public:
         for (size_t i = 0; i < players_.size() && i < drawn_.size(); ++i) {
             if (!drawn_[i] || !players_[i].valid()) continue;
             if ((frame_ + int(i)) % kStride != 0) continue;
-            if (!players_[i].sample(phaseTime + double(i) * 1.7, 0.f, verts_)) continue;
+            if (!players_[i].sample(phaseTime + double(i) * 1.7, {}, verts_)) continue;
             roots.setBankFaceVerts(int(i), verts_);
         }
     }

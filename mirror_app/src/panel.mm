@@ -708,6 +708,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "follows the tip); on arrival it is the face.");
                                 }
                                 ui::SliderFloat("grow margin", &S.grow_margin, 0.f, 1.5f, "%.2f");
+                                ui::SliderFloat("grow swing ease-in (s)", &S.grow_swing_ease_seconds, 0.f, 10.f, "%.1f");
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "The first hop's swing off the Face pose: the camera\n"
+                                        "ease's rate is faded in from zero over this long, so\n"
+                                        "it leaves the held face from rest instead of at full\n"
+                                        "speed. 0 = the plain ease.");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
                                         "Margin around the target face / growth tip /\n"
@@ -747,6 +754,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                         "clamped shut. The spawn point itself tracks this\n"
                                         "opened mouth, not the neutral one.");
                                 }
+                                ui::SliderFloat("mouth open width", &S.mouth_open_width, 0.f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "mouthStretch_L/R at full open: the corners pulled\n"
+                                        "wide, on top of the jaw.");
+                                ui::SliderFloat("mouth open lips", &S.mouth_open_lips, 0.f, 1.5f, "%.2f");
+                                if (ImGui::IsItemHovered())
+                                    ImGui::SetTooltip(
+                                        "mouthUpperUp/LowerDown_L/R at full open: the lips\n"
+                                        "parted off the teeth. Whatever the fit or the\n"
+                                        "recording has closing the mouth (mouthClose,\n"
+                                        "pucker, funnel, press, roll, shrug) fades out\n"
+                                        "with the ramp -- a jaw dropped under pressed lips\n"
+                                        "read as a mouth half shut.");
                                 ui::SliderFloat("mouth open seconds", &S.mouth_open_seconds, 0.1f, 5.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(

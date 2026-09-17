@@ -293,4 +293,35 @@ int jawOpenModeIndex(const FaceBasis& basis, bool* usedFallback) {
     return best;
 }
 
+MouthOpenModes mouthOpenModes(const FaceBasis& basis, bool* usedFallback) {
+    MouthOpenModes m;
+    m.jaw = jawOpenModeIndex(basis, usedFallback);
+    auto add = [&](std::vector<int>& to, const char* name) {
+        const int i = basis.expressionIndex(name);
+        if (i >= 0) to.push_back(i);
+    };
+    add(m.width, "mouthStretch_L");  add(m.width, "mouthStretch_R");
+    add(m.lips, "mouthUpperUp_L");   add(m.lips, "mouthUpperUp_R");
+    add(m.lips, "mouthLowerDown_L"); add(m.lips, "mouthLowerDown_R");
+    for (const char* n : {"mouthClose", "mouthPucker", "mouthFunnel", "mouthPress_L", "mouthPress_R",
+                          "mouthRollLower", "mouthRollUpper", "mouthShrugLower", "mouthShrugUpper"})
+        add(m.closers, n);
+    return m;
+}
+
+void applyMouthOpen(const MouthOpenModes& modes, const MouthOpen& open, std::vector<float>& expr) {
+    const float ramp = std::clamp(open.ramp, 0.f, 1.f);
+    if (ramp <= 0.f) return;
+    auto raise = [&](int i, float to) {
+        if (i < 0 || to <= 0.f) return;
+        if ((int)expr.size() <= i) expr.resize(size_t(i) + 1, 0.f);
+        expr[size_t(i)] = std::max(expr[size_t(i)], to);
+    };
+    raise(modes.jaw, ramp * open.jaw);
+    for (int i : modes.width) raise(i, ramp * open.width);
+    for (int i : modes.lips)  raise(i, ramp * open.lips);
+    for (int i : modes.closers)
+        if (i < (int)expr.size()) expr[size_t(i)] *= 1.f - ramp;
+}
+
 }  // namespace mirror

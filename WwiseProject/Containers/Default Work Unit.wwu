@@ -10582,7 +10582,7 @@
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="Lowpass" Type="int16">
 													<ValueList>
-														<Value>60</Value>
+														<Value>47</Value>
 													</ValueList>
 												</Property>
 												<Property Name="UserAuxSendVolume0" Type="Real64">

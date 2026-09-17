@@ -2280,14 +2280,21 @@ int seqshot(const char* prefix, int W, int H,
         std::string err;
         mouthBasis.load(std::string(MIRROR_APP_EXTERNAL_DIR) + "/face_basis.bin", err);
     }
-    const int mouthJawIdx = mouthBasis.valid() ? mirror::jawOpenModeIndex(mouthBasis) : -1;
+    const mirror::MouthOpenModes mouthModes =
+        mouthBasis.valid() ? mirror::mouthOpenModes(mouthBasis) : mirror::MouthOpenModes{};
+    const int mouthJawIdx = mouthModes.jaw;
     bool mouthTrisUploaded = false;
-    float mouthTargetLast = 0.f;   // this frame's forced coefficient, for the checks below
+    float mouthTargetLast = 0.f;   // this frame's forced jaw coefficient, for the checks below
     auto driveMouth = [&](double clockNow) {
         if (mouthJawIdx < 0) return;
-        mouthTargetLast = seq.mouthOpenRamp(clockNow, sp) * std::max(0.f, sp.mouth_open_amount);
-        std::vector<float> expr(size_t(mouthJawIdx) + 1, 0.f);
-        expr[size_t(mouthJawIdx)] = mouthTargetLast;
+        mirror::MouthOpen open;
+        open.ramp  = seq.mouthOpenRamp(clockNow, sp);
+        open.jaw   = std::max(0.f, sp.mouth_open_amount);
+        open.width = std::max(0.f, sp.mouth_open_width);
+        open.lips  = std::max(0.f, sp.mouth_open_lips);
+        mouthTargetLast = open.ramp * open.jaw;
+        std::vector<float> expr;
+        mirror::applyMouthOpen(mouthModes, open, expr);
         std::vector<float> verts;
         mouthBasis.reconstruct({}, expr, verts);
         roots.setFittedFace(verts, mouthTrisUploaded ? std::vector<int>() : mouthBasis.triangles());

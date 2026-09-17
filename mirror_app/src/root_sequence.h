@@ -109,15 +109,18 @@ struct RootSequenceParams {
     // from the distance that holds it, the growth tip and the mask the root
     // left (so the root's origin stays in frame) with grow_margin around
     // them. Target and radius ease with cam_ease_seconds and the angles with
-    // the same ease under the angular clamp, so each hop is one travel-out
-    // move that ends square on the face just reached -- the first hop's
-    // swing off the Face pose (down the anchor's normal) is the same ease.
+    // the same ease, so each hop is one travel-out move that ends square on
+    // the face just reached. The first hop's swing off the Face pose (down
+    // the anchor's normal) is the same ease, but its rate is faded in from
+    // nothing over grow_swing_ease_seconds: an exponential ease is fastest
+    // on its first frame, and off the held Face pose that read as a jolt.
     // Nothing frames the whole structure until the Turn.
     //
     // While the root travels, the target point sits this far from the mask
     // toward the tip (0 pins the mask centre, 1 follows the tip); once the
     // root has arrived it is the mask.
     float grow_hop_lead      = 0.3f;
+    float grow_swing_ease_seconds = 4.0f;
     // Margin around the target mask / tip / previous mask, as a fraction of
     // their extent.
     float grow_margin        = 0.35f;
@@ -242,11 +245,12 @@ struct RootSequenceParams {
     // The root leaves mask 0 through its mouth (root_scene.mm's
     // mouthOffsetFromBasis), so the jaw is forced open as the root is about
     // to emerge -- otherwise the hole it grows out of is a closed mouth the
-    // root clips through. Applied each frame as
-    // expr[jawOpen] = max(replayed_or_live, ramp * mouth_open_amount): the
-    // override only ever raises the jaw, so a visitor already talking is not
-    // clamped shut. Held open through Grow/Turn/Orbit (the root is coming out
-    // of it the whole time).
+    // root clips through. Applied each frame by face_basis.h's
+    // applyMouthOpen: the jaw, the width and the lips raised to ramp x
+    // their amounts (max against the replayed/live value, so a visitor
+    // already talking is not clamped shut), and the modes that close the
+    // mouth faded out with the ramp. Held open through Grow/Turn/Orbit (the
+    // root is coming out of it the whole time).
     //
     // The ramp starts mouth_open_lead seconds before Grow -- floored at
     // mouth_open_seconds so the ease actually finishes by the time Grow
@@ -260,6 +264,8 @@ struct RootSequenceParams {
     // moment Face was left instead -- logged once, since that is the "not
     // knowable" fallback the plan calls for.
     float mouth_open_amount  = 0.8f;   // the jawOpen coefficient at full open
+    float mouth_open_width   = 0.6f;   // mouthStretch_L/R at full open
+    float mouth_open_lips    = 0.4f;   // mouthUpperUp/LowerDown_L/R at full open
     float mouth_open_seconds = 3.f;    // the ease-in
     float mouth_open_lead    = 3.f;    // seconds before Grow the ease starts
     // Time constant, seconds, of the exponential smoothing run over the
@@ -320,12 +326,15 @@ public:
     //   markerHit     a "fire reverb drop" cue (a FirePlucker marker) came in
     //                 this frame. The Orbit's lighting trigger: the next
     //                 structure's top mask.
+    //   markerStrength the strongest such cue's strength, 0..1 (MarkerHit::
+    //                 strength) -- the pluck flash's level.
     //   tracked*      the tracked face's centre, [0,1] from the top-left
     //                 (FaceResult::centre_x/y), for the head pan.
     struct Inputs {
         bool  wantOutro    = false;
         bool  clothCleared = false;
         bool  markerHit    = false;
+        float markerStrength = 1.f;
         bool  trackedValid = false;
         float trackedX = 0.5f, trackedY = 0.5f;
     };
@@ -462,10 +471,13 @@ public:
             // Down the target mask's own normal: the move ends looking
             // square at the face the root has just reached, and the next
             // hop's move starts from there.
+            // The ease's rate itself eased in over the stage's first
+            // seconds, so the camera leaves the Face pose from rest.
+            const float kG = kEase * smoothstep(tIn / std::max(1e-3, (double)P.grow_swing_ease_seconds));
             float wantAz, wantEl;
             azelFromDir(tm.normal, wantAz, wantEl);
-            easeAngle(curAz_, wantAz, kEase);
-            easeTo(curEl_, wantEl, kEase);
+            easeAngle(curAz_, wantAz, kG);
+            easeTo(curEl_, wantEl, kG);
 
             // At the mask, leaning toward the tip while the root is still on
             // its way, so the travel is followed and the arrival settles.
@@ -474,7 +486,7 @@ public:
                 const float lead = std::clamp(P.grow_hop_lead, 0.f, 1.f);
                 for (int k = 0; k < 3; ++k) wantT[k] += (tip[k] - tm.pos[k]) * lead;
             }
-            for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kEase);
+            for (int k = 0; k < 3; ++k) easeTo(curT_[k], wantT[k], kG);
 
             // The radius that holds the target mask, the tip and the mask
             // the root left, at this frame's angles and target -- in as
@@ -485,7 +497,7 @@ public:
             pts[np++] = {{fm.pos[0], fm.pos[1], fm.pos[2]}, std::max(fm.rWidth, fm.rHeight)};
             if (haveTip) pts[np++] = {{tip[0], tip[1], tip[2]}, 0.f};
             const float need = fitRadius(roots, curT_, curAz_, curEl_, pts, np, P.grow_margin);
-            easeTo(curR_, std::max(need, tightR_), kEase);
+            easeTo(curR_, std::max(need, tightR_), kG);
 
             if (roots.simDone() || tIn >= (double)growTimeout_) {
                 turnFromAz_ = curAz_; turnFromEl_ = curEl_; turnFromR_ = curR_;
@@ -541,9 +553,10 @@ public:
             stepGrowth(roots, fdt);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
-            // The pluck flash, on the same marker the Reveal fires on --
-            // Orbit only; the Outro is the mosh's, not a light show's.
-            if (in.markerHit && stage_ == Stage::Orbit) roots.triggerFlash();
+            // The pluck flash, on the same marker the Reveal fires on, as
+            // bright as the pluck was -- Orbit only; the Outro is the
+            // mosh's, not a light show's.
+            if (in.markerHit && stage_ == Stage::Orbit) roots.triggerFlash(in.markerStrength);
             if (P.hood_enabled) {
                 stepLighting(roots, P, in, clock);
                 easeAngle(curEl_, wantEl, kEase);

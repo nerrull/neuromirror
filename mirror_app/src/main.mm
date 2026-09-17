@@ -1570,6 +1570,7 @@ int main(int argc, char** argv) {
     // runs instead.
     bool rootFaceSeqBegunForSitting = false;
     double rootsClock = 0.0;          // seconds since Transition entry; RootSequence's own clock
+    bool   rootsBedStopped = false;   // Stop_Amb_Roots already posted for this Roots visit
     // The last g_show.phaseTime() seen while still in Transition -- captured
     // every Transition frame, read once at the Roots cut so
     // faceTrackRec.record() can keep using a clock continuous with what it
@@ -2663,7 +2664,13 @@ int main(int argc, char** argv) {
                                 g_audio.post("Stop_FirePlucker");
                                 g_audio.postFirePlucker();
                                 g_audio.post("Stop_Pad");
-                                g_audio.post("Stop_Amb_Roots");
+                                // The roots bed is normally already fading --
+                                // stopped at the Outro's start, below, so it
+                                // is gone by the time the mirror fades back
+                                // in. This catches a jump here from
+                                // anywhere else.
+                                if (!rootsBedStopped) g_audio.post("Stop_Amb_Roots");
+                                rootsBedStopped = true;
                                 break;
                             case show::Phase::Fitting:
                                 // The pluck keeps running underneath -- this is
@@ -2686,6 +2693,7 @@ int main(int argc, char** argv) {
                                 break;
                             case show::Phase::Roots:
                                 g_audio.post("Play_Amb_Roots");
+                                rootsBedStopped = false;
                                 g_audio.post("Stop_Pad");
                                 // FirePlucker is left running (still at the
                                 // Transition hand-off's low register, below)
@@ -3051,6 +3059,9 @@ int main(int argc, char** argv) {
             // is showing would land the whole backlog at once on return.
             const std::vector<mirror::MarkerHit> pluckHits = g_audio.pollFirePluckerMarkers();
             const bool rootMarkerHit = !pluckHits.empty();
+            float rootMarkerStrength = 0.f;
+            for (const mirror::MarkerHit& e : pluckHits)
+                rootMarkerStrength = std::max(rootMarkerStrength, e.strength);
             {
                 const bool active = g_pluck_drops && mirror.valid() &&
                                      dropPhase == show::Phase::Idle;
@@ -3309,10 +3320,14 @@ int main(int argc, char** argv) {
             // Shared by uploadLiveFace() and both rootFaceSeq.step() calls
             // below, so the live path and the replay path apply exactly the
             // same target -- see RootSequenceParams' mouth_open_* comment.
-            auto rootMouthOpenTarget = [&]() -> float {
-                if (!rootSeq.valid()) return 0.f;
-                return rootSeq.mouthOpenRamp(rootsClock, g_root_seq) *
-                       std::max(0.f, g_root_seq.mouth_open_amount);
+            auto rootMouthOpenTarget = [&]() -> mirror::MouthOpen {
+                mirror::MouthOpen m;
+                if (!rootSeq.valid()) return m;
+                m.ramp  = rootSeq.mouthOpenRamp(rootsClock, g_root_seq);
+                m.jaw   = std::max(0.f, g_root_seq.mouth_open_amount);
+                m.width = std::max(0.f, g_root_seq.mouth_open_width);
+                m.lips  = std::max(0.f, g_root_seq.mouth_open_lips);
+                return m;
             };
             // The live tracker's mesh onto mask 0, with the jaw forced open
             // once the sequence's mouth-open ramp calls for it (root_sequence.h's
@@ -3323,32 +3338,30 @@ int main(int argc, char** argv) {
             // RootFaceSequence's replay, overridden the same way in its own
             // step() call below.
             //
-            // expr[jawOpen] = max(live, ramp * amount): raises the jaw,
-            // never clamps it, so a visitor still talking through the ramp's
-            // start is not cut off. When no override is needed (ramp at 0, or
-            // the basis's live expression is already past the target) this
-            // is exactly the old setFittedFace(g_fitter.vertices(), ...) call.
+            // applyMouthOpen over the live expression: raises the openers,
+            // never clamps them, so a visitor still talking through the
+            // ramp's start is not cut off; fades the closers. When it
+            // changes nothing (ramp at 0, or the live expression already
+            // past every target) this is exactly the old
+            // setFittedFace(g_fitter.vertices(), ...) call.
             auto uploadLiveFace = [&]() {
-                static int jawIdx = -1;
-                static bool jawTried = false;
-                if (!jawTried) {
-                    jawTried = true;
-                    if (g_fitter.valid()) jawIdx = mirror::jawOpenModeIndex(g_fitter.basis());
+                static mirror::MouthOpenModes mouthModes;
+                static bool mouthTried = false;
+                if (!mouthTried) {
+                    mouthTried = true;
+                    if (g_fitter.valid()) mouthModes = mirror::mouthOpenModes(g_fitter.basis());
                 }
-                const float target = rootMouthOpenTarget();
+                const mirror::MouthOpen target = rootMouthOpenTarget();
                 const std::vector<float>& liveExpr = g_fitter.expression();
-                const bool needOverride =
-                    jawIdx >= 0 && target > 0.f &&
-                    (jawIdx >= (int)liveExpr.size() || liveExpr[size_t(jawIdx)] < target);
+                std::vector<float> expr = liveExpr;
+                mirror::applyMouthOpen(mouthModes, target, expr);
+                const bool needOverride = expr != liveExpr;
                 // The fitter poses its mesh about the centroid (the middle
                 // of the face); on the mask it turns about the neck, the
                 // same pivot the replay uses (FaceReplayConfig), or the live
                 // head and the replayed one would move differently.
                 std::vector<float> verts;
                 if (needOverride) {
-                    std::vector<float> expr = liveExpr;
-                    if ((int)expr.size() <= jawIdx) expr.resize(size_t(jawIdx) + 1, 0.f);
-                    expr[size_t(jawIdx)] = std::max(expr[size_t(jawIdx)], target);
                     g_fitter.basis().reconstruct(g_fitter.alpha(), expr, verts);
                     mirror::RotateAboutCentroid(verts, g_fitter.rotation());
                 } else {
@@ -3384,7 +3397,7 @@ int main(int argc, char** argv) {
             // opened it in one frame. Keep driving mask 0 from the fitter's
             // last pose so the ramp still plays.
             auto uploadLiveFaceForRamp = [&]() {
-                if (g_fitter.valid() && rootFaceTrisUploaded && rootMouthOpenTarget() > 0.f)
+                if (g_fitter.valid() && rootFaceTrisUploaded && rootMouthOpenTarget().ramp > 0.f)
                     uploadLiveFace();
             };
             auto uploadFaceColorsIfFresh = [&]() {
@@ -3508,6 +3521,7 @@ int main(int argc, char** argv) {
                     RootSequence::Inputs in;
                     in.clothCleared = roots.clothCleared();
                     in.markerHit    = rootMarkerHit;
+                    in.markerStrength = rootMarkerStrength;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
                 } else {
@@ -3615,11 +3629,23 @@ int main(int argc, char** argv) {
                     // still behaves sanely.
                     in.clothCleared = roots.clothCleared();
                     in.markerHit    = rootMarkerHit;
+                    in.markerStrength = rootMarkerStrength;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
                     // fade() is 0 outside the outro, so this also takes the
                     // fade back off after a jump out of the Outro.
                     g_screen_fade = rootSeq.fade();
+                    // The bed starts dying with the datamosh, not on Idle's
+                    // entry: its Stop fade (Wwise's) is about the length of
+                    // the whole outro, so it is essentially silent as the
+                    // mirror fades back in, rather than hanging on under
+                    // the first seconds of the pluck.
+                    if (g_audio_on && g_audio_auto && !rootsBedStopped &&
+                        stageBefore != RootSequence::Stage::Outro &&
+                        rootSeq.stage() == RootSequence::Stage::Outro) {
+                        g_audio.post("Stop_Amb_Roots");
+                        rootsBedStopped = true;
+                    }
                     // The sequence has run its whole arc -- the orbit timed
                     // out, or the visitor left and the fade has landed. Move
                     // the show on if its own timeline has not already: the

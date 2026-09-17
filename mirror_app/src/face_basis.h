@@ -108,4 +108,27 @@ private:
 // silent guess.
 int jawOpenModeIndex(const FaceBasis& basis, bool* usedFallback = nullptr);
 
+// The forced mouth-open, as a whole: the jaw dropped, the corners pulled
+// wide and the lips parted, with everything that would close the mouth
+// again (mouthClose, the pucker/funnel/press/roll/shrug modes -- a fit or
+// a recording caught mid-word carries them, and jawOpen alone on top of
+// them still reads as a mouth half shut) faded out as the open comes in.
+// `ramp` is 0..1, how far in the forcing is; the rest are the coefficients
+// at full. Openers are raised (max against the live/recorded value), never
+// clamped; closers are scaled by 1 - ramp.
+struct MouthOpen {
+    float ramp  = 0.f;
+    float jaw   = 0.f;   // jawOpen
+    float width = 0.f;   // mouthStretch_L/R
+    float lips  = 0.f;   // mouthUpperUp_L/R, mouthLowerDown_L/R
+};
+struct MouthOpenModes {
+    int jaw = -1;                 // jawOpenModeIndex
+    std::vector<int> width, lips, closers;
+    bool any() const { return jaw >= 0 || !width.empty() || !lips.empty(); }
+};
+MouthOpenModes mouthOpenModes(const FaceBasis& basis, bool* usedFallback = nullptr);
+// expr is resized up if a mode index is past its end.
+void applyMouthOpen(const MouthOpenModes& modes, const MouthOpen& open, std::vector<float>& expr);
+
 }  // namespace mirror

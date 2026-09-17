@@ -93,11 +93,11 @@ void normalizeMesh(std::vector<float>& v) {
 // mouthFromMesh.
 static std::vector<int> g_lipVerts;
 
-bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
+bool mouthOffsetFromBasis(float out[3], const mirror::MouthOpen& open = {}) {
     static bool tried = false, ok = false;
     static mirror::FaceBasis basis;
     static double neutralCx = 0, neutralCy = 0, neutralCz = 0, neutralM = 1e-9;
-    static int jawIdx = -1;
+    static mirror::MouthOpenModes mouthModes;
     if (!tried) {
         tried = true;
         std::string err;
@@ -128,7 +128,8 @@ bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
                     g_lipVerts.push_back((int)best);
                 }
                 bool usedFallback = false;
-                jawIdx = mirror::jawOpenModeIndex(basis, &usedFallback);
+                mouthModes = mirror::mouthOpenModes(basis, &usedFallback);
+                const int jawIdx = mouthModes.jaw;
                 fprintf(stderr,
                     "mouth-open: spawn point tracks expression mode %d (%s)%s\n", jawIdx,
                     (jawIdx >= 0 && jawIdx < (int)basis.expressionNames().size())
@@ -145,10 +146,7 @@ bool mouthOffsetFromBasis(float out[3], float jawOpenAmount = 0.f) {
     if (!ok) { out[0] = out[1] = out[2] = 0.f; return false; }
 
     std::vector<float> expr;
-    if (jawIdx >= 0) {
-        expr.assign(size_t(jawIdx) + 1, 0.f);
-        expr[size_t(jawIdx)] = jawOpenAmount;
-    }
+    mirror::applyMouthOpen(mouthModes, open, expr);
     std::vector<float> lm;
     basis.reconstructLandmarks({}, expr, lm);
     double mx = 0, my = 0, mz = 0;
@@ -492,7 +490,12 @@ void RootScene::syncFaceParams() {
     // mouth's centroid sits. syncFaceParams runs at reset()/replant(), before
     // any of that sitting's growth, so this is the one point to pick it up.
     float mouth[3];
-    mouthOffsetFromBasis(mouth, g_root_seq.mouth_open_amount);
+    mirror::MouthOpen open;
+    open.ramp  = 1.f;
+    open.jaw   = std::max(0.f, g_root_seq.mouth_open_amount);
+    open.width = std::max(0.f, g_root_seq.mouth_open_width);
+    open.lips  = std::max(0.f, g_root_seq.mouth_open_lips);
+    mouthOffsetFromBasis(mouth, open);
     simParams_.faceMouthU = mouth[0];
     simParams_.faceMouthV = mouth[1];
     simParams_.faceMouthN = mouth[2];
@@ -1126,11 +1129,14 @@ bool RootScene::flashAllowed(const FaceBlock& fb) const {
     return rr_->flash.mask0 || !(fb.structure == -1 && fb.slot == 0);
 }
 
-void RootScene::triggerFlash() {
+void RootScene::triggerFlash(float strength) {
     if (!rr_ || faceBlocks_.empty()) return;
+    strength = std::clamp(strength, 0.f, 1.f);
     if (rr_->flash.all) {
         flashStructure_ = -3; flashSlot_ = -1;
-        flashLevel_ = 1.f;
+        // Same lights either way, so a soft pluck landing on the tail of a
+        // hard one does not dim it.
+        flashLevel_ = std::max(flashLevel_, strength);
         return;
     }
     int pick = -1;
@@ -1158,7 +1164,7 @@ void RootScene::triggerFlash() {
     if (pick < 0) return;
     flashStructure_ = faceBlocks_[size_t(pick)].structure;
     flashSlot_      = faceBlocks_[size_t(pick)].slot;
-    flashLevel_     = 1.f;
+    flashLevel_     = strength;
 }
 
 // The flash's envelope and positions, once a frame. Positions are looked

@@ -366,7 +366,9 @@ public:
     // and light it from inside for a moment. Positions are re-read from the
     // masks every frame in advance(), so they follow the masks wherever the
     // placement puts them.
-    void triggerFlash();
+    // `strength` 0..1 is the flash's starting level (the marker's own
+    // strength); 1 is the full panel intensity.
+    void triggerFlash(float strength = 1.f);
 
     // --- debug: spawn-point markers ------------------------------------------
     // Small coloured spheres at every mask's spawn point (RootSim::hopSpawn,
