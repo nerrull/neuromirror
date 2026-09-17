@@ -29,7 +29,7 @@ Paths are from the repo root. Two trees live on this machine:
       `DE5193F0519AD4207DA3778BABC7E3EE0EFA7892` (team `B6C64D8M6K`, valid
       to 2027-04). `racine build` uses it by default. No self-signed cert needed.
 - [x] `--roottest` passes on the show build.
-- [x] `dev` git remote in the show tree -> the dev checkout.
+- [x] `dev` git remote in the show tree -> the dev checkout; the show branch tracks it.
 
 ### The kiosk account
 
@@ -94,9 +94,13 @@ Paths are from the repo root. Two trees live on this machine:
 Tune in the dev tree, commit, then:
 
     cd /Users/Shared/racine/jardins_racine
-    git pull dev mirror/cloth-in-roots        # or whatever the show branch is
+    git pull                                   # tracks dev/mirror/cloth-in-roots
     mirror_app/install/racine build            # cmake + codesign, same identity
     mirror_app/install/racine restart
+
+`dev` is a git remote pointing at the dev checkout (`git remote -v`), and the
+show branch tracks it, so nothing goes through GitHub. To run a different
+branch: `git checkout -t dev/<branch>`.
 
 `racine build` must be used, not bare `cmake --build`: an unsigned rebuild
 gets a new identity and the camera prompt comes back behind the fullscreen
