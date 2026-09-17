@@ -17,12 +17,13 @@ the less trustworthy source for a fit.
 
 So: fit against ICT's landmarks, draw with Maxine's triangles. That is the
 bridge neuromirror/emotion/nvf_live.py validated live, and this exporter bakes
-it in -- the render basis is ICT's identity/expression modes resampled onto the
-NVF vertex positions by nearest neighbour, so one (alpha, expression) pair
-drives both bases consistently and the C++ side needs no mapping table.
+it in -- the render basis is Maxine's own vertices carrying ICT's identity/
+expression modes, interpolated at the closest point on ICT's surface, so one
+(alpha, expression) pair drives both bases consistently and the C++ side needs
+no mapping table.
 
-    # Maxine topology (default when the .nvf is present)
-    python3 tools/export_face_basis.py --nvf ../../neuromirror/emotion/face_assets/face_model2.nvf
+    # Maxine topology (default when the .nvf is present; needs scipy)
+    ../../neuromirror/.venv/bin/python tools/export_face_basis.py --nvf ../../neuromirror/emotion/face_assets/face_model2.nvf
 
     # ICT topology, no Maxine needed
     python3 tools/export_face_basis.py
@@ -44,19 +45,68 @@ MAGIC = b"FBAS"
 VERSION = 1
 
 
-def nearest_map(src_pts: np.ndarray, dst_pts: np.ndarray) -> np.ndarray:
-    """For each dst point, the index of the nearest src point.
+def surface_map(src_pts: np.ndarray, src_tris: np.ndarray, dst_pts: np.ndarray):
+    """For each dst point, the closest point on the src triangle surface, as
+    (triangle index, barycentric weights).
 
-    Chunked because the full distance matrix is len(dst) x len(src); at
-    2056 x 7801 that is fine, but a denser render mesh would not be.
+    Nearest *vertex* was what this did before, and it was the wrong resample:
+    Maxine's mesh is denser than ICT's around the nose wings and the lips, so
+    several Maxine vertices snapped to one ICT vertex -- 2056 landed on 1532
+    distinct positions, which collapsed 828 of the 4048 triangles to zero
+    area and flipped 409 more. Interpolating on the surface keeps every
+    vertex where Maxine put it.
+
+    Candidates come from the nearest triangle centroids (a KD-tree over
+    them), then the exact closest point is taken over those candidates.
     """
-    out = np.empty(len(dst_pts), np.int64)
-    step = 256
-    for i in range(0, len(dst_pts), step):
-        blk = dst_pts[i:i + step]
-        d2 = ((blk[:, None, :] - src_pts[None, :, :]) ** 2).sum(-1)
-        out[i:i + step] = d2.argmin(1)
-    return out
+    from scipy.spatial import cKDTree
+    A, Bv, C = src_pts[src_tris[:, 0]], src_pts[src_tris[:, 1]], src_pts[src_tris[:, 2]]
+    tree = cKDTree((A + Bv + C) / 3.0)
+    _, cand = tree.query(dst_pts, k=32)
+    tri = np.empty(len(dst_pts), np.int64)
+    bary = np.empty((len(dst_pts), 3), np.float64)
+    for i, p in enumerate(dst_pts):
+        best = (np.inf, 0, None)
+        for t in cand[i]:
+            w = closest_point_bary(p, A[t], Bv[t], C[t])
+            q = w[0] * A[t] + w[1] * Bv[t] + w[2] * C[t]
+            d2 = float(((q - p) ** 2).sum())
+            if d2 < best[0]:
+                best = (d2, t, w)
+        tri[i], bary[i] = best[1], best[2]
+    return tri, bary
+
+
+def closest_point_bary(p, a, b, c):
+    """Barycentric weights of the point of triangle abc closest to p
+    (Ericson, Real-Time Collision Detection 5.1.5)."""
+    ab, ac, ap = b - a, c - a, p - a
+    d1, d2 = ab @ ap, ac @ ap
+    if d1 <= 0 and d2 <= 0:
+        return np.array([1.0, 0.0, 0.0])
+    bp = p - b
+    d3, d4 = ab @ bp, ac @ bp
+    if d3 >= 0 and d4 <= d3:
+        return np.array([0.0, 1.0, 0.0])
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        v = d1 / (d1 - d3)
+        return np.array([1 - v, v, 0.0])
+    cp = p - c
+    d5, d6 = ab @ cp, ac @ cp
+    if d6 >= 0 and d5 <= d6:
+        return np.array([0.0, 0.0, 1.0])
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        w = d2 / (d2 - d6)
+        return np.array([1 - w, 0.0, w])
+    va = d3 * d6 - d5 * d4
+    if va <= 0 and (d4 - d3) >= 0 and (d5 - d6) >= 0:
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        return np.array([0.0, 1 - w, w])
+    denom = 1.0 / (va + vb + vc)
+    v, w = vb * denom, vc * denom
+    return np.array([1 - v - w, v, w])
 
 
 def load_ict(path: str):
@@ -134,22 +184,37 @@ def main() -> int:
         nvf_neutral, tris = load_nvf(args.nvf, args.neuromirror)
         # Both meshes are y-up and in the same units, aligned closely enough that
         # no transform is needed (neuromirror measured nose tips agreeing to
-        # <0.02 mm), so nearest neighbour against ICT's face region is a
-        # resample, not a registration.
+        # <0.02 mm), so this is a resample, not a registration.
+        #
+        # Only ICT's face-region triangles are candidates, so a Maxine
+        # vertex near the mask's edge cannot land on the neck or the scalp.
         region = ict["region"]
-        pick = region[nearest_map(ict["neutral"][region], nvf_neutral)]
-        resid = np.linalg.norm(ict["neutral"][pick] - nvf_neutral, axis=1)
+        in_region = np.zeros(len(ict["neutral"]), bool)
+        in_region[region] = True
+        rtris = ict["faces"][np.all(in_region[ict["faces"]], axis=1)]
+        tri, bary = surface_map(ict["neutral"], rtris, nvf_neutral)
+        corners = rtris[tri]                                   # (n_v, 3)
+        def resample(a):                                       # (..., n_ict, 3) -> (..., n_v, 3)
+            return np.einsum("...vkc,vk->...vc", a[..., corners, :], bary).astype(np.float32)
+        on_surface = resample(ict["neutral"])
+        resid = np.linalg.norm(on_surface - nvf_neutral, axis=1)
         print(f"render mesh: NVF (Maxine) -- {len(nvf_neutral)} verts, {len(tris)} tris")
-        print(f"  ICT->NVF resample residual: mean {resid.mean():.3f} "
+        print(f"  NVF -> ICT surface distance: mean {resid.mean():.3f} "
               f"max {resid.max():.3f} (model units, ~cm)")
+        # The neutral is Maxine's own -- the modes are ICT's, interpolated at
+        # the closest surface point. Both are y-up in the same units and the
+        # surfaces sit ~0.1 cm apart, so a mode delta carries straight over.
+        neutral = nvf_neutral
+        id_modes = resample(ict["id_modes"])
+        ex_modes = resample(ict["ex_modes"])
         source = "nvf"
     else:
         pick, tris = ict_render_mesh(ict)
+        neutral = ict["neutral"][pick]
+        id_modes = ict["id_modes"][:, pick, :]
+        ex_modes = ict["ex_modes"][:, pick, :]
         source = "ict"
 
-    neutral = ict["neutral"][pick]
-    id_modes = ict["id_modes"][:, pick, :]
-    ex_modes = ict["ex_modes"][:, pick, :]
     n_v = len(neutral)
 
     out = os.path.abspath(args.out)

@@ -139,6 +139,11 @@ bool FaceBasis::load(const std::string& path, std::string& err) {
 // own edge stays (a threshold of 0.2 took the whole roll, a third of the
 // mesh, and trimmed the lips visibly). Finally any triangle
 // left with two of its three edges on the rim is a flap, and goes too.
+// Last, only the largest connected piece is kept: the mesh carries the
+// mouth's lining (a strip behind each lip) and a scrap inside one eye,
+// which the loop cut severs from the skin but never reaches, and with
+// the jaw open the lower lining stands in the hole as a bright shelf, a
+// second lip inside the lip.
 // Tested frontally (xy, z is toward the viewer) with the jaw open -- the
 // neutral mouth is closed and its inner-lip loop has no area.
 void FaceBasis::punchHoles() {
@@ -215,10 +220,32 @@ void FaceBasis::punchHoles() {
         }
     }
 
+    // Islands: union-find over shared edges among what is left, then keep
+    // the largest set.
+    std::vector<int> root(nt);
+    for (size_t t = 0; t < nt; ++t) root[t] = int(t);
+    auto find = [&](int a) {
+        while (root[size_t(a)] != a) { root[size_t(a)] = root[size_t(root[size_t(a)])]; a = root[size_t(a)]; }
+        return a;
+    };
+    for (const auto& e : edges) {
+        const int a = e.second[0], b = e.second[1];
+        if (a < 0 || b < 0 || cut[size_t(a)] || cut[size_t(b)]) continue;
+        root[size_t(find(a))] = find(b);
+    }
+    std::unordered_map<int, int> count;
+    int mainRoot = -1, mainCount = 0;
+    for (size_t t = 0; t < nt; ++t) {
+        if (cut[t]) continue;
+        const int c = ++count[find(int(t))];
+        if (c > mainCount) { mainCount = c; mainRoot = find(int(t)); }
+    }
+
     std::vector<int> kept;
     kept.reserve(tris_.size());
     for (size_t t = 0; t < nt; ++t)
-        if (!cut[t]) kept.insert(kept.end(), {tris_[t * 3], tris_[t * 3 + 1], tris_[t * 3 + 2]});
+        if (!cut[t] && find(int(t)) == mainRoot)
+            kept.insert(kept.end(), {tris_[t * 3], tris_[t * 3 + 1], tris_[t * 3 + 2]});
     n_tris_ = int(kept.size() / 3);
     tris_ = std::move(kept);
 }

@@ -147,6 +147,18 @@ Authoring copy `WwiseProject/GeneratedSoundBanks/` across too.
     rsync -a --delete ~/Documents/Development/jardins_racine/WwiseProject/GeneratedSoundBanks/ \
         /Users/Shared/racine/jardins_racine/WwiseProject/GeneratedSoundBanks/
 
+`mirror_app/external/face_basis.bin` is gitignored too. If
+`tools/export_face_basis.py` changed (it did on 2026-09-17: the resample that
+was collapsing a fifth of the mask's triangles), copy the regenerated file
+across the same way, or regenerate it there with the sibling `neuromirror`'s
+venv:
+
+    rsync -a ~/Documents/Development/jardins_racine/mirror_app/external/face_basis.bin \
+        /Users/Shared/racine/jardins_racine/mirror_app/external/face_basis.bin
+
+Captures made before that keep the old mesh in their `mesh.bin`; a replayed
+track rebuilds from the basis and is fine.
+
 Presets saved from the panel *in the show tree* stay in the show tree
 (`setup-kiosk.sh` made `mirror_app/presets/` writable by `expo`); copy them
 back to dev if they're keepers.
