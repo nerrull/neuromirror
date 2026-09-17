@@ -60,8 +60,11 @@ Paths are from the repo root. Two trees live on this machine:
       `/Users/Shared/racine/display.sh` (a displayplacer command captured with
       `racine display save`) before exec'ing mirror_app. macOS forgets the
       per-user rotation across user switches; this does not depend on it.
-      Screens are applied one at a time, so the Jump Desktop virtual display
-      (in the saved arrangement, absent outside a session) does not block it.
+      Screens are applied one at a time, so the SimpleDisplay virtual display
+      (in the saved arrangement, absent when that app is not running) does
+      not block it.
+- [x] Same at login of the artist's account: `racine display install` put a
+      LaunchAgent in `~/Library/LaunchAgents` that runs `rotate.sh`.
 
 ### Permissions (a human, once)
 

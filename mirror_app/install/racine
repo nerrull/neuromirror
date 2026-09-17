@@ -8,7 +8,8 @@
 #   racine start | stop | restart | status | log | build
 #   racine days                 -- is today a show day, and what is scheduled
 #   racine keep-awake on | off  -- override the show-day gate while working
-#   racine display [save]       -- the display arrangement launch.sh applies
+#   racine display [save|install] -- the arrangement launch.sh applies;
+#                                  install = apply it at *this* account's login too
 #
 set -euo pipefail
 
@@ -83,6 +84,15 @@ display)
             "${AS[@]}" tee "$ARR" >/dev/null <<<"$cmd"
             "${AS[@]}" chmod 644 "$ARR"
             echo "saved to $ARR:"; echo "  $cmd";;
+        install)
+            # A LaunchAgent for the account running this, in its own domain
+            # -- launch.sh already covers the kiosk account.
+            dst="$HOME/Library/LaunchAgents/net.jardinsracine.display.plist"
+            mkdir -p "$(dirname "$dst")"
+            sed "s|@ROTATE_SH@|$HERE/rotate.sh|g" "$HERE/net.jardinsracine.display.plist.in" > "$dst"
+            launchctl bootout "gui/$(id -u)/net.jardinsracine.display" 2>/dev/null || true
+            launchctl bootstrap "gui/$(id -u)" "$dst"
+            echo "installed $dst -- rotation applied at each login of $(id -un)";;
         *)
             [ -r "$ARR" ] && { echo "$ARR:"; sed 's/^/  /' "$ARR"; } \
                 || echo "none saved -- racine display save";;

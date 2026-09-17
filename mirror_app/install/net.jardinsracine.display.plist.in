@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- For accounts other than the kiosk one (whose launch.sh does this
+         itself): apply the saved display arrangement at login, because
+         macOS does not reliably keep the per-user rotation across a user
+         switch. Installed by `racine display install`. -->
+    <key>Label</key>
+    <string>net.jardinsracine.display</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@ROTATE_SH@</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/net.jardinsracine.display.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/net.jardinsracine.display.log</string>
+</dict>
+</plist>
