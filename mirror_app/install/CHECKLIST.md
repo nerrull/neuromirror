@@ -2,7 +2,7 @@
 
 The authoritative list. [README.md](README.md) explains *why* each step is
 the way it is; this is *what to do, in order*, and where things stand.
-Tick boxes are the state as of 2026-09-16.
+Tick boxes are the state as of 2026-09-16, late evening.
 
 Paths are from the repo root. Two trees live on this machine:
 
@@ -33,30 +33,39 @@ Paths are from the repo root. Two trees live on this machine:
 
 ### The kiosk account
 
-- [ ] Create **`expo`**: Standard (not admin), no Apple Account, no iCloud.
-- [ ] Users & Groups -> Login Options -> Automatic login: `expo`.
+- [x] Create **`expo`**: Standard (not admin), no Apple Account, no iCloud.
+- [x] Users & Groups -> Login Options -> Automatic login: `expo`.
       Requires **FileVault off** (System Settings -> Privacy & Security).
-- [ ] Disable the Guest account; hide the fast-user-switching menu.
+- [x] Disable the Guest account; hide the fast-user-switching menu.
 
 ### Wire it up
 
-- [ ] Dry run and read it:
+- [x] Dry run and read it:
       `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only`
-- [ ] `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only --apply`
+- [x] `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only --apply`
       (tree perms, `/Users/Shared/racine/logs`, LaunchAgent in
       `~expo/Library/LaunchAgents`, Start/Stop shortcuts on expo's Desktop,
       no idle sleep, wake for network). Without `--launch-only` it also installs the show-day
       gate, autorestart and the schedule notes -- later, if wanted.
 
+### Display
+
+- [x] Rotation set in expo's session (Displays -> Rotation).
+- [x] Login screen rotated: your per-user
+      `~/Library/Preferences/ByHost/com.apple.windowserver.displays.<uuid>.plist`
+      copied over `/Library/Preferences/com.apple.windowserver.displays.plist`
+      (original kept as `.bak` beside it).
+- [x] Menu bar / Dock hidden by the app itself while fullscreen (5a2b226).
+
 ### Permissions (a human, once)
 
-- [ ] Log in as `expo`, open Terminal, run
+- [x] Log in as `expo`, open Terminal, run
       `/Users/Shared/racine/jardins_racine/build/mirror_app/mirror_app`,
       click **Allow** for camera and microphone, quit, log out.
 
 ### Remote access
 
-- [ ] Jump Desktop Connect, installed *for all users*, signed into your account.
+- [x] Jump Desktop Connect, installed *for all users*, signed into your account.
 - [ ] Grant it Screen Recording + Accessibility **while logged in as `expo`**.
 - [ ] SSH to your account works from your laptop (Remote Login on; `womp` is
       set by the script).
