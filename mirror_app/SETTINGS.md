@@ -113,7 +113,6 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/log phase changes` | bool | -- | 1 |
 | `show/mesh fit residual, diagnostic (px)` | float | 1 .. 20 | 6 |
 | `show/phase CC` | int | 0 .. 127 | 101 |
-| `show/readout (F2)` | bool | -- | 0 |
 | `show/roots` | int | 0 .. 4 | 1 |
 | `show/roots/absent_hold` | float | 0 .. 30 | 8 |
 | `show/roots/bank faces replay` | bool | -- | 1 |

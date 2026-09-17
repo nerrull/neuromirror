@@ -16,7 +16,6 @@ p show/idle/min = 0
 p show/log phase changes = 1
 p show/mesh fit residual, diagnostic (px) = 6
 p show/phase CC = 101
-p show/readout (F2) = 1
 p show/roots = 1
 p show/roots/absent_hold = 8
 p show/roots/bank faces replay = 1

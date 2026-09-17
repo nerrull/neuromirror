@@ -462,7 +462,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 if (ImGui::Button("restart")) g_show.restart();
                 ImGui::EndDisabled();
                 ImGui::SameLine();
-                ui::Checkbox("readout (F2)", &g_show_hud);
+                // Plain ImGui, not a ui:: control: the readout is UI state,
+                // like the panel itself, not a parameter -- a show preset
+                // that carried it on put the diagnostics over the piece at
+                // every launch. Off at start, F2 (or this) turns it on.
+                ImGui::Checkbox("readout (F2)", &g_show_hud);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "Phase, what it is waiting for, and how the fit is\n"
