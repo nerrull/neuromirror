@@ -197,6 +197,50 @@
 						</ObjectList>
 					</ObjectLists>
 				</Effect>
+				<Effect Name="Roots_Rumble_LP" ID="{910CCB0F-FF4F-4B93-B31F-E7DA36E70C79}" PluginName="Wwise Parametric EQ" CompanyID="0" PluginID="105" PluginType="3">
+					<PropertyList>
+						<Property Name="FilterTypeBand1" Type="int32" Value="0"/>
+						<Property Name="FrequencyBand1" Type="Real32" Value="40"/>
+						<Property Name="OnOffBand2" Type="bool" Value="False"/>
+						<Property Name="RolloffRateBand1" Type="int32" Value="24"/>
+					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{66552662-FC9C-475F-994B-032EA5AF4D8F}" ShortID="984900824">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="FrequencyBand1"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Movement" ID="{8B8E8DDD-D331-4736-9C06-93D35A3225E3}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{E5B006BF-C22D-4237-BC12-5A57A624E937}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="5"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>40</YPos>
+														<Flags>5</Flags>
+														<SegmentShape>Log1</SegmentShape>
+													</Point>
+													<Point>
+														<XPos>1</XPos>
+														<YPos>400</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
+				</Effect>
 			</ChildrenList>
 		</WorkUnit>
 	</Effects>

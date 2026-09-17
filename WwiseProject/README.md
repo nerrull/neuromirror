@@ -45,6 +45,16 @@ Parameters/`, `States/`, ...) plus:
   `Originals/SFX/NHU05008080.wav`, pitch-shifted, Time-Stretched, with `Pitch`
   bound to the `FitLevel` RTPC. Its cue markers (loud-onset-only, see the
   Originals note above) drive `mirror_app`'s pluck-triggered raindrops.
+  Re-importing the WAV after the markers change adds a new source under the
+  Sound each time -- delete the stale ones, or the bank keeps converting
+  six copies.
+- **`Roots_Rumble`** (`Racine > Roots > Amb_Roots`) -- the same recording
+  looped under the Roots ambience (`Play_Amb_Roots` covers it), bus `Roots`,
+  -6 dB, through the `Roots_Rumble_LP` Effect ShareSet: a Wwise Parametric
+  EQ with one 24 dB/oct low-pass band whose frequency follows the `Movement`
+  RTPC, 40 Hz when the viewer is still (Log1 curve) up to 400 Hz at full
+  movement. The built-in `Lowpass` property was not used because its 0..100
+  scale has no documented Hz mapping.
 - **`OnsetTap`** — a custom effect plug-in (`../wwise_plugins/OnsetTap`) for
   live transient detection on any bus, published to `mirror_app` over shared
   memory. Not currently inserted anywhere in this project; the
