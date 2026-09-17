@@ -41,10 +41,12 @@ Paths are from the repo root. Two trees live on this machine:
 ### Wire it up
 
 - [ ] Dry run and read it:
-      `sudo mirror_app/install/setup-kiosk.sh --user expo`
-- [ ] `sudo mirror_app/install/setup-kiosk.sh --user expo --apply`
+      `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only`
+- [ ] `sudo mirror_app/install/setup-kiosk.sh --user expo --launch-only --apply`
       (tree perms, `/Users/Shared/racine/logs`, LaunchAgent in
-      `~expo/Library/LaunchAgents`, show-day gate LaunchDaemon, pmset).
+      `~expo/Library/LaunchAgents`, Start/Stop shortcuts on expo's Desktop,
+      no idle sleep). Without `--launch-only` it also installs the show-day
+      gate, autorestart and the schedule notes -- later, if wanted.
 
 ### Permissions (a human, once)
 
@@ -122,6 +124,12 @@ If the CMake config was ever wiped (`rm build/CMakeCache.txt`), reconfigure with
 output says `Wwise sound engine enabled`.
 
 ## 3. Day-to-day
+
+**As `expo`, to get out:** Cmd-Tab to Finder, double-click **Stop Racine**
+on the Desktop. The agent is unloaded for this login session, so nothing
+respawns; log out freely. **Start Racine** brings it back, and so does the
+next login. Same from Terminal: `racine stop` / `racine start` (no sudo
+needed from the expo account).
 
     mirror_app/install/racine start | stop | restart | status | log
     mirror_app/install/racine days                # is today a show day? + pmset

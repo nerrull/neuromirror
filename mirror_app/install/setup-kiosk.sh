@@ -5,6 +5,11 @@
 # --apply to actually do it. Everything here is idempotent.
 #
 #   ./setup-kiosk.sh [--apply] [--user expo] [--from 09:30] [--to 18:30]
+#   ./setup-kiosk.sh [--apply] [--user expo] --launch-only
+#
+# --launch-only is the half of this that makes the piece come up at login and
+# stay up: readable tree, LaunchAgent, no idle sleep, and Start/Stop shortcuts
+# on the kiosk user's desktop. No show-day gate, no autorestart, no schedule.
 #
 # What it does NOT do, because it cannot or should not be scripted:
 #   * create the kiosk account, or set automatic login
@@ -18,12 +23,14 @@ APPLY=0
 KIOSK_USER=expo
 FROM=09:30
 TO=22:00
+LAUNCH_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --apply) APPLY=1; shift;;
         --user)  KIOSK_USER="$2"; shift 2;;
         --from)  FROM="$2"; shift 2;;
         --to)    TO="$2"; shift 2;;
+        --launch-only) LAUNCH_ONLY=1; shift;;
         *) echo "unknown argument: $1" >&2; exit 1;;
     esac
 done
@@ -91,6 +98,42 @@ else
     sed 's/^/    | /' "$tmp"
 fi
 rm -f "$tmp"
+
+echo
+echo "== desktop shortcuts"
+# Double-clickable from the kiosk desktop: Cmd-Tab out of the piece (it is a
+# borderless window, not a video mode, so the desktop is still there), open
+# the shortcut, done. Stop unloads the agent for this login session, so
+# KeepAlive does not bring the piece back and the user can log out; the
+# agent is still in LaunchAgents, so the next login starts it again.
+DESKTOP="$HOME_DIR/Desktop"
+for action in start stop; do
+    f="$DESKTOP/$(tr a-z A-Z <<<"${action:0:1}")${action:1} Racine.command"
+    if [ "$APPLY" = 1 ]; then
+        printf '#!/bin/bash\n"%s/racine" %s\n' "$HERE" "$action" > "$f"
+        chmod 755 "$f"; chown "$KIOSK_USER" "$f"
+        echo "+ wrote $f"
+    else
+        echo "  would write $f -> racine $action"
+    fi
+done
+
+if [ "$LAUNCH_ONLY" = 1 ]; then
+    echo
+    echo "== power behaviour (launch-only: no idle sleep, nothing else)"
+    run pmset -a displaysleep 0 sleep 0
+    echo
+    echo "== not done here -- see README.md"
+    cat <<NOTE
+  1. Automatic login for $KIOSK_USER (System Settings > Users & Groups),
+     which requires FileVault to be OFF.
+  2. Camera + microphone permission: log in as $KIOSK_USER, run
+     $BIN once from Terminal, click Allow.
+  Skipped (--launch-only): the show-day gate, autorestart, wake-for-network,
+  and the daily wake/sleep schedule. Run again without --launch-only for those.
+NOTE
+    exit 0
+fi
 
 echo
 echo "== show-day gate"
