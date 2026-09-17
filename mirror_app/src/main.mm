@@ -713,6 +713,10 @@ int main(int argc, char** argv) {
         if (a == "--reset-panel")  { g_panel_reset = true; g_panel_cli = true; continue; }
         if (a == "--panel-window") { g_ui_detached = true; g_panel_cli = true; continue; }
         if (a == "--no-panel")     { g_ui_visible = false; continue; }
+        // The mic only scales the root scene's key light, and opening any
+        // audio input puts macOS's orange recording dot in the corner of the
+        // piece, which no one can switch off. The show runs without it.
+        if (a == "--no-mic")       { g_no_mic = true; continue; }
         // Fullscreen is the default now (see app_state.mm); --fullscreen is
         // kept accepted, as a no-op, so existing launch scripts and the
         // launchd plist keep working unchanged. --windowed is the dev-build
@@ -1895,7 +1899,9 @@ int main(int argc, char** argv) {
     // just race that reset. Best-effort, same as everything else here: no
     // Kinect built, no sensor plugged in, or a denied OS permission all just
     // mean a still light -- mic_level.mm logs which.
-    if (!g_mic.start(g_mic_err))
+    if (g_no_mic)
+        g_mic_err = "--no-mic";
+    else if (!g_mic.start(g_mic_err))
         fprintf(stderr, "mic: %s\n", g_mic_err.c_str());
 
     int downscale = 4;       // mirror render-resolution divisor (low-res + upsample)

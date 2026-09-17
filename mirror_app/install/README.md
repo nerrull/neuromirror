@@ -315,7 +315,10 @@ One card, laminated, near the machine:
       |    no -> pmset sleepnow, and the day is over
       -> automatic login as expo (no password, FileVault off)
         -> launchd loads ~expo/Library/LaunchAgents/net.jardinsracine.mirror.plist
-          -> mirror_app --fullscreen --no-panel, cwd = the checkout
+          -> launch.sh: rotate.sh, then
+             mirror_app --fullscreen --no-panel --no-mic, cwd = the checkout
+             (--no-mic: an open audio input puts macOS's orange recording
+             dot on the piece; the mic only scales the roots' key light)
             -> exits or is quit? KeepAlive starts it again, 10s throttle
       ...
     22:00 -> scheduled sleep. The process is never killed, so tomorrow's wake

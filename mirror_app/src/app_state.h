@@ -120,6 +120,7 @@ extern std::string g_midi_err;
 // scene's key light; see mic_level.h and RootScene::setAmbientLevel.
 extern mirror::MicLevel g_mic;
 extern std::string g_mic_err;
+extern bool g_no_mic;
 
 // The pluck bed's own crackle onsets (Wwise cue markers on Play_FirePlucker,
 // see wwise_audio.h), Idle only -- the one phase with rain. This is the only

@@ -103,6 +103,7 @@ float g_pluck_drop_gain = 1.0f;   // scales a marker hit's strength before it is
 
 mirror::MicLevel g_mic;
 std::string g_mic_err;
+bool g_no_mic = false;       // --no-mic: never open it (see main.mm)
 mirror::FaceTracker g_tracker;
 mirror::FaceResult  g_face;
 mirror::FaceFitter  g_fitter;

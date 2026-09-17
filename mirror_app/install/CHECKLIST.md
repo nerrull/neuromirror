@@ -55,7 +55,9 @@ Paths are from the repo root. Two trees live on this machine:
       `~/Library/Preferences/ByHost/com.apple.windowserver.displays.<uuid>.plist`
       copied over `/Library/Preferences/com.apple.windowserver.displays.plist`
       (original kept as `.bak` beside it).
-- [x] Menu bar / Dock hidden by the app itself while fullscreen (5a2b226).
+- [x] Menu bar / Dock hidden by the app itself while fullscreen (5a2b226);
+      cursor hidden while the UI is; `--no-mic` so macOS's orange recording
+      dot never appears (the mic only scaled the roots' key light).
 - [x] Rotation applied by the piece itself at every launch: `launch.sh` runs
       `/Users/Shared/racine/display.sh` (a displayplacer command captured with
       `racine display save`) before exec'ing mirror_app. macOS forgets the
