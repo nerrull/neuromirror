@@ -81,16 +81,20 @@ Paths are from the repo root. Two trees live on this machine:
 - [ ] SSH to your account works from your laptop (Remote Login on; `womp` is
       set by the script).
 
-### Schedule
+### Power plan: plug / unplug
 
-- [ ] `mirror_app/install/show-days.txt` -- confirm the real dates. Today it
-      lists 2026-09-12..13, 19..20, 26..27, 10-03.
-- [ ] Daily wake/sleep, to the venue's hours:
-      `sudo pmset repeat wakeorpoweron MTWRFSU 09:30:00 sleep MTWRFSU 22:00:00`
-- [ ] Test the gate once: move `show-days.txt` aside,
-      `sudo mirror_app/install/show-gate.sh` -- it should sleep the machine in
-      ~45 s. Put the file back. `racine keep-awake on` while you're working
-      in front of it; `off` before you leave.
+The chosen operation: power on = plug in, power off = pull the plug (or a
+mechanical timer on the socket). No schedule, no show-day gate.
+
+- [ ] `sudo pmset -a autorestart 1 autorestartatconnect 1` -- boot when power
+      returns after a cut, and when power is connected. (`--launch-only` does
+      not set these.)
+- [ ] Test once: unplug while the piece runs, wait 10 s, plug in. Auto-login
+      and the piece up within about a minute.
+- Unplugging is an unclean shutdown. APFS copes; the piece only writes small
+  files (log, imgui.ini, a saved preset). Acceptable for the run.
+- If a clean end of day is wanted later: `sudo pmset repeat sleep MTWRFSU
+  22:00:00` with the timer cutting power after it -- README, "The wall timer".
 
 ### Dress rehearsal
 
