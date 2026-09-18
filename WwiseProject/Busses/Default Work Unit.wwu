@@ -172,14 +172,21 @@
 					</ReferenceList>
 					<ObjectLists>
 						<ObjectList Name="Effects">
-							<EffectSlot Name="" ID="{DFA85C5E-3450-498B-868D-640036DA1B74}" ShortID="825199483">
+							<EffectSlot Name="" ID="{9DE41BF8-218E-4663-BE92-157111BE4063}" ShortID="348850268">
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Convolution Reverb" CompanyID="0" PluginID="127" PluginType="3">
 										<ObjectRef Name="Colossal_Cathedral_Stereo" ID="{512A7648-07B6-486E-9D3E-8B7323C79E8C}" WorkUnitID="{9D68BE5F-8CA6-43E0-BCE2-C7D59F63E582}"/>
 									</Reference>
 								</ReferenceList>
 							</EffectSlot>
-							<EffectSlot Name="" ID="{6A2EC83A-7C8F-41C4-9436-52F43BC1F9B4}" ShortID="278484958">
+							<EffectSlot Name="" ID="{99D49B54-8E37-41ED-A99A-CED78E9D4A58}" ShortID="997001796">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Racine Shimmer" CompanyID="64" PluginID="23742" PluginType="3">
+										<ObjectRef Name="Strum_Shimmer" ID="{1A8D387F-2B52-4FFC-B4EA-C6D5FACE8E16}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{94810F14-918F-4DC8-B19A-D61B5A55EC8E}" ShortID="903845739">
 								<ReferenceList>
 									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
 										<ObjectRef Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>

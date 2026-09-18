@@ -272,6 +272,14 @@
 						</ObjectList>
 					</ObjectLists>
 				</Effect>
+				<Effect Name="Strum_Shimmer" ID="{1A8D387F-2B52-4FFC-B4EA-C6D5FACE8E16}" PluginName="Racine Shimmer" CompanyID="64" PluginID="23742" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="57.5"/>
+						<Property Name="Decay" Type="Real32" Value="2.9"/>
+						<Property Name="Shimmer" Type="Real32" Value="57"/>
+						<Property Name="WetDryMix" Type="Real32" Value="41"/>
+					</PropertyList>
+				</Effect>
 			</ChildrenList>
 		</WorkUnit>
 	</Effects>
