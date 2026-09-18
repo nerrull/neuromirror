@@ -47,6 +47,12 @@ if [ -n "${2:-}" ]; then
     (cd "$OUT" && ./onset_test "$2")
 fi
 
+# The two Racine effects: no MI code either.
+build_and_run comb_test "$HERE/comb_response_test.cpp" \
+    "$ROOT/RacineComb/SoundEnginePlugin/RacineCombDSP.cpp"
+build_and_run shimmer_test "$HERE/shimmer_response_test.cpp" \
+    "$ROOT/RacineShimmer/SoundEnginePlugin/RacineShimmerDSP.cpp"
+
 # Everything below drives the Mutable Instruments cores.
 if [ ! -d "$MI/stmlib" ]; then
     echo

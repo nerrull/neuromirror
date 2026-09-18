@@ -13,6 +13,7 @@ plug-in appear in the Wwise UI) is built separately on Windows — see
 | Modal Voice | Effect | Elements | 32 kHz, resampled | Bus audio feeds the exciter inputs |
 | Macro Oscillator | Source | Plaits | 48 kHz native | All 24 synthesis engines |
 | Drum Synth | Source | Peaks | 48 kHz native | Bass drum, snare, hi-hat, FM drum |
+| Racine Shimmer | Effect | (none) | Any | Shimmer reverb: an FDN with a pitch shifter in its feedback, for the strum |
 | Signal Scope | Effect | (none) | Any | Pure audio tap -- publishes whatever passes through it to shared memory for the external `scope_monitor` app; doesn't touch the signal |
 | Onset Tap | Effect | (none) | Any | Pure analysis tap -- detects transients against a self-adjusting threshold and publishes the events to shared memory for a program outside Wwise; doesn't touch the signal |
 
@@ -61,7 +62,7 @@ export WWISESDK=$WWISEROOT/SDK
 export AK_XCODE_DEVELOPER_DIR_2600=/Applications/Xcode.app/Contents/Developer
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-for P in RacineComb ModalResonator MacroOscillator GranularTexture ModalVoice DrumSynth SignalScope OnsetTap; do
+for P in RacineComb RacineShimmer ModalResonator MacroOscillator GranularTexture ModalVoice DrumSynth SignalScope OnsetTap; do
   (cd $P \
     && python3 $WWISEROOT/Scripts/Build/Plugins/wp.py premake Mac \
     && xcodebuild -workspace ${P}_Mac.xcworkspace -scheme All \
@@ -369,7 +370,7 @@ set WWISEROOT=Q:\Development\Audiokinetic\Wwise_2025.1.10.9233
 set WWISESDK=%WWISEROOT%\SDK
 set MI_EURORACK_DIR=Q:\Development\git\eurorack
 
-for %P in (RacineComb ModalResonator GranularTexture MacroOscillator ModalVoice DrumSynth SignalScope OnsetTap) do (
+for %P in (RacineComb RacineShimmer ModalResonator GranularTexture MacroOscillator ModalVoice DrumSynth SignalScope OnsetTap) do (
   cd %P
   python %WWISEROOT%\Scripts\Build\Plugins\wp.py premake Authoring
   python %WWISEROOT%\Scripts\Build\Plugins\wp.py build Authoring -t vc170 -c Release
@@ -377,12 +378,16 @@ for %P in (RacineComb ModalResonator GranularTexture MacroOscillator ModalVoice 
 )
 ```
 
-Signal Scope and Onset Tap have no `eurorack`/MI dependency (they don't need
-`MI_EURORACK_DIR`) and also build for the plain Windows sound-engine target, same as
+Racine Comb, Racine Shimmer, Signal Scope and Onset Tap have no `eurorack`/MI
+dependency (they don't need `MI_EURORACK_DIR`) and also build for the plain Windows sound-engine target, same as
 the other plug-ins: `wp.py build Windows_vc170 -c Release` from inside the plug-in's
 directory. Onset Tap's Windows authoring DLL has **not** been built yet -- only the
 macOS sound-engine side (`libOnsetTap.dylib` / `libOnsetTapFX.a`) has, so it does not
 appear in `dist/` alongside the others.
+Racine Shimmer's is in the same state: the Mac side is built and linked into
+`mirror_app`, but the authoring DLL is still to be built on Windows (the loop
+above), copied into `dist/` and installed -- until then the effect cannot be
+placed in the project.
 
 `build Authoring` compiles both the sound-engine static lib and the authoring
 DLL and drops the DLL straight into

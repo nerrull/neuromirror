@@ -69,6 +69,7 @@ void WwiseAudio::stopCapture() {}
 #include "DrumSynthSourceFactory.h"
 #include "ModalVoiceFXFactory.h"
 #include "RacineCombFXFactory.h"
+#include "RacineShimmerFXFactory.h"
 
 #ifndef AK_OPTIMIZED
 #include <AK/Comm/AkCommunication.h>

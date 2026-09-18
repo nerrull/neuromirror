@@ -252,7 +252,8 @@ if(_ak_have_all)
         ${_mi_plugins}/MacroOscillator/SoundEnginePlugin
         ${_mi_plugins}/DrumSynth/SoundEnginePlugin
         ${_mi_plugins}/ModalVoice/SoundEnginePlugin
-        ${_mi_plugins}/RacineComb/SoundEnginePlugin)
+        ${_mi_plugins}/RacineComb/SoundEnginePlugin
+        ${_mi_plugins}/RacineShimmer/SoundEnginePlugin)
     # The plug-ins before the engine: they call into it, not the other way
     # round, and a static link resolves left to right.
     target_link_libraries(mirror_app PRIVATE
@@ -260,6 +261,7 @@ if(_ak_have_all)
         ${_ak_lib}/libDrumSynthSource.a
         ${_ak_lib}/libModalVoiceFX.a
         ${_ak_lib}/libRacineCombFX.a
+        ${_ak_lib}/libRacineShimmerFX.a
         ${_ak_lib}/libAkRoomVerbFX.a
         # Factory effects the project authors and the engine therefore has to
         # carry: an unregistered plug-in loads without error and processes
