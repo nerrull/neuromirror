@@ -1608,7 +1608,8 @@ int main(int argc, char** argv) {
         return sc.n;
     };
     // The wires (RootScene::setHarpWires): one per string, at rest at
-    // g_strum_wire_glow, and on a pluck flaring by g_strum_wire_pluck_glow,
+    // g_strum_wire_glow and g_strum_wire_px wide, and on a pluck flaring by
+    // g_strum_wire_pluck_glow and widening by g_strum_wire_pluck_width,
     // decaying over g_strum_wire_decay_s and pulsing at the note's frequency
     // over g_strum_wire_pulse_div -- a slow beat of the pitch itself.
     float strumWireEnv[kMaxStrings] = {};    // the pluck's flare, 1 -> 0
@@ -3203,21 +3204,21 @@ int main(int argc, char** argv) {
                     const int n = strumScale().n;
                     const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
                     const float gap = 2.f * span / std::max(n - 1, 1);
-                    float yaw[kMaxStrings], glow[kMaxStrings];
+                    float yaw[kMaxStrings], glow[kMaxStrings], width[kMaxStrings];
                     for (int i = 0; i < n; ++i) {
                         const float q = -span + gap * i;
                         yaw[i] = q + (q > 0.f ? g_strum_dead_deg : q < 0.f ? -g_strum_dead_deg : 0.f);
                         strumWireEnv[i] *= std::exp(-(float)dt / std::max(g_strum_wire_decay_s, 0.01f));
                         strumWirePhase[i] = std::fmod(strumWirePhase[i] + (float)dt * strumWireHz[i], 1.f);
                         const float beat = 0.5f + 0.5f * std::cos(strumWirePhase[i] * 6.2831853f);
-                        glow[i] = strumWireVis *
-                            (g_strum_wire_glow + g_strum_wire_pluck_glow * strumWireEnv[i] * beat);
+                        const float flare = strumWireEnv[i] * beat;
+                        glow[i] = g_strum_wire_glow + g_strum_wire_pluck_glow * flare;
+                        width[i] = strumWireVis * g_strum_wire_px * (1.f + g_strum_wire_pluck_width * flare);
                     }
-                    roots.renderer().wire.widthPx = g_strum_wire_px;
                     std::memcpy(roots.renderer().wire.color, g_strum_wire_color, sizeof(g_strum_wire_color));
                     roots.harpWireRadius = g_strum_wire_radius;
                     roots.harpWireHeight = g_strum_wire_height;
-                    roots.setHarpWires(yaw, glow, strumWireVis > 0.f ? n : 0);
+                    roots.setHarpWires(yaw, glow, width, strumWireVis > 0.f ? n : 0);
                 }
             }
 

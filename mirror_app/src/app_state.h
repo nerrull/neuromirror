@@ -223,6 +223,7 @@ extern float g_strum_wire_height;     // 0.5..4, x the mask's half-height
 extern float g_strum_wire_px;         // 0.25..8, half-width in pixels
 extern float g_strum_wire_glow;       // 0..4, at rest
 extern float g_strum_wire_pluck_glow; // 0..10, the pluck's flare
+extern float g_strum_wire_pluck_width; // 0..4, how much wider the flare is, x the width
 extern float g_strum_wire_decay_s;    // 0.05..5, the flare's decay
 extern float g_strum_wire_pulse_div;  // 1..512, the flare beats at the note's Hz / this
 extern float g_strum_wire_color[3];

@@ -1,6 +1,23 @@
 next todo
 
-FACE TEXTURE is off
+try multiple captures for the mesh fit
+use best face texture fit
+framerate unstable during root growth
+x dial in TAA settings  - currently too mushy
+
+turn off all notifications
+turn on do not disturb
+turn off apple updates
+test remote desktop connect 
+
+x glitch face?
+dial in rumble (new sound?)
+
+fix mask lighting
+fade notes in more during fit
+finish fit with final chord during capture ( add some sort of music?) and switch to root drone when the roots appear
+
+x head/ mouth jump on grow
 
 Adjust size of things for shit monitor
 x control panel is offscreen
@@ -22,6 +39,9 @@ x Faces not quite fitting in nests
   New roots are spawning below mask instead of just behind it.
   stretch goal :would be nice to have 3 root types each with custom dwell setting
 
+cloth
+- could try to fix jank in the wobbles
+- freeze time a bit long
 
 Mirror
 There'se still fucking weakass marker triggers. sometimes feels perfect but often ripples seem random.
@@ -53,3 +73,12 @@ Build
 - cam angle
 - bolts for frame
 - spacers for frame
+
+
+working root sysyems 
+pea/kale
+
+
+almost working
+sunflower
+pimpernel but needs more dwell

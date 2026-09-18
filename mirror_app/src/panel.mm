@@ -2224,8 +2224,11 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("wire width (px)", &g_strum_wire_px, 0.25f, 8.f);
                     ui::SliderFloat("wire glow", &g_strum_wire_glow, 0.f, 4.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("A resting wire's brightness, in scene radiance -- above the\nbloom threshold it halos.");
+                        ImGui::SetTooltip("A resting wire's brightness, in scene radiance: low is a\ndark thread against the field, above the bloom threshold\nit halos. The wire replaces what is behind it, not adds.");
                     ui::SliderFloat("wire pluck glow", &g_strum_wire_pluck_glow, 0.f, 10.f);
+                    ui::SliderFloat("wire pluck width (x)", &g_strum_wire_pluck_width, 0.f, 4.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How much wider a plucked wire flares, as a multiple of its\nwidth, beating with the glow.");
                     ui::SliderFloat("wire pluck decay (s)", &g_strum_wire_decay_s, 0.05f, 5.f);
                     ui::SliderFloat("wire pulse divisor", &g_strum_wire_pulse_div, 1.f, 512.f, "%.0f");
                     if (ImGui::IsItemHovered())

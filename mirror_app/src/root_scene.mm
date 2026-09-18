@@ -2563,15 +2563,17 @@ void RootScene::advance(double dt) {
     packHarpWires();
 }
 
-void RootScene::setHarpWires(const float* yawDeg, const float* glow, int n) {
+void RootScene::setHarpWires(const float* yawDeg, const float* glow, const float* widthPx, int n) {
     harpWireCount_ = std::clamp(n, 0, kMaxHarpWires);
-    for (int i = 0; i < harpWireCount_; ++i) { harpYaw_[i] = yawDeg[i]; harpGlow_[i] = glow[i]; }
+    for (int i = 0; i < harpWireCount_; ++i) {
+        harpYaw_[i] = yawDeg[i]; harpGlow_[i] = glow[i]; harpWidth_[i] = widthPx[i];
+    }
 }
 
 // The wires' geometry, in the anchor's frame (refreshClothAnchor): wire i
 // stands at pos + r (cos yaw N + sin yaw T), running r_h either way along
 // the bitangent -- the mask's up. Six vertices a wire, MetalRootRenderer::
-// kWireFloats each; the strip's width is the renderer's, in pixels.
+// kWireFloats each; the strip's width rides on the vertex, in pixels.
 void RootScene::packHarpWires() {
     if (!rr_) return;
     std::vector<float> data;
@@ -2581,13 +2583,14 @@ void RootScene::packHarpWires() {
         const float rh = harpWireHeight * clothAnchorRH_;
         data.reserve(size_t(harpWireCount_) * 6 * MetalRootRenderer::kWireFloats);
         for (int i = 0; i < harpWireCount_; ++i) {
-            if (harpGlow_[i] <= 0.f) continue;
+            if (harpGlow_[i] <= 0.f || harpWidth_[i] <= 0.f) continue;
             const float th = harpYaw_[i] * 3.14159265f / 180.f;
             const simd_float3 c = clothAnchorPos_ +
                 r * (std::cos(th) * clothAnchorN_ + std::sin(th) * clothAnchorT_);
             const simd_float3 a = c - rh * clothAnchorB_, b = c + rh * clothAnchorB_;
             auto put = [&](float side, float t) {
-                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t, harpGlow_[i]});
+                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t,
+                                         harpGlow_[i], harpWidth_[i]});
             };
             put(-1.f, 0.f); put(1.f, 0.f); put(1.f, 1.f);
             put(-1.f, 0.f); put(1.f, 1.f); put(-1.f, 1.f);

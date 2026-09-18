@@ -6,6 +6,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include "imgui.h"
+#include "app_state.h"
 #include "metal_context.h"
 #include "mirror_scene.h"
 #include "fit_target.h"
@@ -198,6 +199,23 @@ int rootshot(const char* path, float az, float el, float rad, int mode, bool ove
 // Post-processing overrides by name, shared by the headless shots (defined
 // below, with the table of keys).
 static void applyPostOverride(RootScene& roots, const char* spec);
+// <n>: the harp's wires (RootScene::setHarpWires), n of them across +-37
+// degrees at the show's resting glow, the odd ones flared as if just
+// plucked -- to look at the wire pass without a sitting. Unset = none.
+static void applyWiresOverride(RootScene& roots, const char* spec) {
+    if (!spec) return;
+    const int n = std::clamp(atoi(spec), 1, RootScene::kMaxHarpWires);
+    float yaw[RootScene::kMaxHarpWires], glow[RootScene::kMaxHarpWires], width[RootScene::kMaxHarpWires];
+    for (int i = 0; i < n; ++i) {
+        yaw[i] = n > 1 ? -37.f + 74.f * (float)i / (float)(n - 1) : 0.f;
+        glow[i] = g_strum_wire_glow + ((i & 1) ? g_strum_wire_pluck_glow : 0.f);
+        width[i] = g_strum_wire_px * (1.f + ((i & 1) ? g_strum_wire_pluck_width : 0.f));
+    }
+    std::memcpy(roots.renderer().wire.color, g_strum_wire_color, sizeof(g_strum_wire_color));
+    roots.harpWireRadius = g_strum_wire_radius;
+    roots.harpWireHeight = g_strum_wire_height;
+    roots.setHarpWires(yaw, glow, width, n);
+}
 
 // Headless live-growth check: steps the CPlantBox sim `steps` frames, then
 // renders to a PPM. Usage:
@@ -257,18 +275,7 @@ int growshot(const char* path, int steps, float az, float el, float rad,
     // matters is that the masks are visibly different people.
     if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
 
-    // GROWSHOT_WIRES=<n>: the harp's wires (RootScene::setHarpWires), n of
-    // them across +-37 degrees, the odd ones flared -- to look at the wire
-    // pass without a sitting. Best with focus=0.
-    if (const char* w = getenv("GROWSHOT_WIRES")) {
-        const int n = std::clamp(atoi(w), 1, RootScene::kMaxHarpWires);
-        float yaw[RootScene::kMaxHarpWires], glow[RootScene::kMaxHarpWires];
-        for (int i = 0; i < n; ++i) {
-            yaw[i] = n > 1 ? -37.f + 74.f * (float)i / (float)(n - 1) : 0.f;
-            glow[i] = (i & 1) ? 4.f : 0.6f;
-        }
-        roots.setHarpWires(yaw, glow, n);
-    }
+    applyWiresOverride(roots, getenv("GROWSHOT_WIRES"));   // best with focus=0
 
     id<MTLTexture> tex = nil;
     for (int i = 0; i < steps; ++i) roots.advance(1.0 / 60.0);   // grow (no GPU work)
@@ -2339,6 +2346,7 @@ int seqshot(const char* prefix, int W, int H,
     }
     applyGrowthFields(roots, fields);
     applyPostOverride(roots, getenv("SEQSHOT_POST"));
+    applyWiresOverride(roots, getenv("SEQSHOT_WIRES"));   // in the face_end still
     // The per-hop spawn/mouth/first-node log line (task: verify the mouth
     // spawn on the live path) always runs in seqshot, regardless of the
     // panel toggle -- see RootScene::rebuildDebugMarkers. SEQSHOT_DEBUG_MARKERS=1

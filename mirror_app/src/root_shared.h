@@ -254,7 +254,7 @@ struct RootWireU {
     RS_F4X4 viewProj;
     RS_F4   color;      // xyz, scene radiance at glow 1
     RS_F2   res;        // the scene target's size, for the pixel width
-    float   widthPx;    // half-width of the strip in pixels
+    float   pxScale;    // scene pixels per output pixel (the supersample)
     float   _pad0;
 };
 

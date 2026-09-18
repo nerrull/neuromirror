@@ -297,14 +297,15 @@ float g_strum_drop_glide_ms = 1500.f;
 int   g_strum_scale = 1;
 bool  g_strum_shuffle = false;
 bool  g_strum_wires = true;
-float g_strum_wire_radius = 1.8f;
-float g_strum_wire_height = 1.6f;
+float g_strum_wire_radius = 1.25f;
+float g_strum_wire_height = 1.1f;
 float g_strum_wire_px = 1.5f;
-float g_strum_wire_glow = 0.6f;
-float g_strum_wire_pluck_glow = 4.f;
+float g_strum_wire_glow = 0.25f;
+float g_strum_wire_pluck_glow = 3.f;
+float g_strum_wire_pluck_width = 1.5f;
 float g_strum_wire_decay_s = 1.2f;
 float g_strum_wire_pulse_div = 64.f;
-float g_strum_wire_color[3] = {0.70f, 0.85f, 1.00f};
+float g_strum_wire_color[3] = {0.35f, 0.75f, 1.00f};
 
 std::string g_audio_err;
 

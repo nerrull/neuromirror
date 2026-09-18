@@ -491,13 +491,13 @@ public:
     // where the head plucks it: yaw 0 straight out along the mask's normal,
     // + toward its tangent -- frame right, for the camera the Face stage
     // puts straight down that normal. `glow[i]` is the wire's brightness
-    // this frame, in units of MetalRootRenderer::wire.color (0 = off).
-    // n = 0 clears them. Packed for the renderer in advance(), after the
-    // framing, like the cloth.
+    // this frame, in units of MetalRootRenderer::wire.color, `widthPx[i]`
+    // its half-width in output pixels. n = 0 clears them. Packed for the
+    // renderer in advance(), after the framing, like the cloth.
     static constexpr int kMaxHarpWires = 8;
-    void setHarpWires(const float* yawDeg, const float* glow, int n);
-    float harpWireRadius = 1.8f;   // x the anchor's rWidth, the arc's radius
-    float harpWireHeight = 1.6f;   // x the anchor's rHeight, the wire's length
+    void setHarpWires(const float* yawDeg, const float* glow, const float* widthPx, int n);
+    float harpWireRadius = 1.25f;   // x the anchor's rWidth, the arc's radius
+    float harpWireHeight = 1.1f;   // x the anchor's rHeight, the wire's length
 
     // Begin the hold->release->fall timeline from t=0, with a fresh,
     // fully-pinned flat sheet -- the RootScene analogue of
@@ -770,6 +770,7 @@ private:
     // See setHarpWires / packHarpWires.
     float harpYaw_[kMaxHarpWires] = {};
     float harpGlow_[kMaxHarpWires] = {};
+    float harpWidth_[kMaxHarpWires] = {};
     int   harpWireCount_ = 0;
     void  packHarpWires();
 

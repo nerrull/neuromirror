@@ -4,14 +4,17 @@
 //
 // Same targets and depth convention as the other mid-geometry passes (face,
 // leaf, cloth) so the wires depth-composite against the mask and roots and
-// are fogged with them -- but additive, depth-tested and not depth-written,
-// and unlit: a wire is a light, not a lit object. Bloom does the halo.
+// are fogged with them -- but unlit: a wire is a light, not a lit object.
+// Blended over, not added: the show's
+// field behind the mask is near white, and a light added to white is
+// nothing, so the wire replaces what is behind it with its own colour --
+// dark against the field at rest, bright and wide when plucked.
 //
 // A wire is two world endpoints and a screen-space width. The vertex shader
 // projects both ends and pushes each corner out perpendicular to the wire's
-// screen direction by `widthPx` pixels, so the wire stays a hair thin
-// however far the camera is; `side` (-1..1 across it) reaches the fragment
-// shader as the filament's profile.
+// screen direction by the wire's `width` pixels, so the wire stays a hair
+// thin however far the camera is; `side` (-1..1 across it) reaches the
+// fragment shader as the filament's profile.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -21,11 +24,13 @@ struct WireVertex {
     float         side;   // -1 / +1, which edge of the strip
     float         t;      // 0 = a, 1 = b
     float         glow;   // brightness this frame, 0 = off
+    float         width;  // half-width in output pixels
 };
 
 struct WireVOut {
     float4 pos [[position]];
     float  side;
+    float  t;
     float  glow;
 };
 
@@ -41,20 +46,24 @@ vertex WireVOut root_wire_vs(uint vid [[vertex_id]],
     d = dot(d, d) > 1e-8 ? normalize(d) : float2(0.0, 1.0);
     const float2 n = float2(-d.y, d.x);
     float4 c = mix(ca, cb, v.t);
-    // `widthPx` pixels either side: NDC moves by px * 2/res, clip by that x w.
-    c.xy += n * v.side * U.widthPx * (2.0 / U.res) * c.w;
+    // `width` pixels either side: NDC moves by px * 2/res, clip by that x w.
+    c.xy += n * v.side * v.width * U.pxScale * (2.0 / U.res) * c.w;
     c.z = (c.z + c.w) * 0.5;   // GL [-1,1] clip-z -> Metal [0,1], matches the capsule depth
     WireVOut o;
     o.pos = c;
     o.side = v.side;
+    o.t = v.t;
     o.glow = v.glow;
     return o;
 }
 
 fragment float4 root_wire_fs(WireVOut in [[stage_in]],
                              constant RootWireU& U [[buffer(1)]]) {
-    // A filament: bright core, soft to the strip's edge. Additive, and the
-    // colour mask leaves alpha (the fog's AO share) as the surface beneath.
+    // A filament: solid core, soft to the strip's edge. The alpha here is
+    // only the blend's coverage -- the colour mask keeps the target's own
+    // alpha (the fog's AO share) as the surface beneath.
+    // Its ends fade over the last fifth, so it hangs rather than stands.
     const float k = saturate(1.0 - in.side * in.side);
-    return float4(U.color.xyz * (in.glow * k * k), 0.0);
+    const float ends = saturate((1.0 - abs(2.0 * in.t - 1.0)) * 5.0);
+    return float4(U.color.xyz * in.glow, k * k * ends);
 }

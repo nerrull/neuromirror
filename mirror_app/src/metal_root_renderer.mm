@@ -146,16 +146,17 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         if (!clothPipe_) { NSLog(@"cloth pipeline failed: %@", err); return; }
     }
     {
-        // Additive on rgb only: alpha is the fog's AO share / the cloth's
-        // film mark (see root_fog.metal), and a light adds nothing to it.
+        // Blended over, on rgb only: the fragment's alpha is the filament's
+        // coverage, while the target's alpha is the fog's AO share / the
+        // cloth's film mark (see root_fog.metal) and stays what it was.
         MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
         d.vertexFunction   = [wireLib newFunctionWithName:@"root_wire_vs"];
         d.fragmentFunction = [wireLib newFunctionWithName:@"root_wire_fs"];
         d.colorAttachments[0].pixelFormat = kColorFmt;
         d.colorAttachments[0].blendingEnabled = YES;
         d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-        d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
-        d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
         d.colorAttachments[0].writeMask = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
         d.depthAttachmentPixelFormat = kDepthFmt;
         wirePipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
@@ -218,10 +219,6 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         dd.depthCompareFunction = MTLCompareFunctionLess;
         dd.depthWriteEnabled = YES;
         depthState_ = [device_ newDepthStencilStateWithDescriptor:dd];
-        // The wires: hidden behind what is nearer, but too thin and too
-        // additive to hide anything themselves.
-        dd.depthWriteEnabled = NO;
-        depthReadState_ = [device_ newDepthStencilStateWithDescriptor:dd];
     }
 
     buildTargets();
@@ -1283,9 +1280,13 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         wu.viewProj = vpJ;
         wu.color = (simd_float4){wire.color[0], wire.color[1], wire.color[2], 0};
         wu.res = gu.res;
-        wu.widthPx = std::max(wire.widthPx, 0.25f) * (float)sw_ / (float)w_;   // in scene pixels
+        wu.pxScale = (float)sw_ / (float)w_;
+        // Depth is written: the fog pass fogs a pixel by the depth under
+        // it, and a wire against the empty field would otherwise be fogged
+        // as the far plane -- gone. The last mid-geometry drawn, so its
+        // depth hides nothing.
         [ge setRenderPipelineState:wirePipe_];
-        [ge setDepthStencilState:depthReadState_];
+        [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];
         [ge setVertexBuffer:wireBuf_ offset:0 atIndex:0];
         [ge setVertexBytes:&wu length:sizeof(wu) atIndex:1];
