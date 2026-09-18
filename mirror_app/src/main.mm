@@ -1559,6 +1559,34 @@ int main(int argc, char** argv) {
     // and the growth pacing each frame the scene is up in those phases.
     RootSequence rootSeq;
     bool rootSeqActive = false;
+    // The resolved window (Transition entry -> mouth starts opening): the
+    // audio block below computes `resolvedWindowActive` and drives the
+    // pad/pluck/flanger from it, and also runs the strum -- the harp that a
+    // head movement sweeps while the window holds (see WwiseAudio::postStrum).
+    // Declared here, above the audio block, in case anything else ever needs
+    // to read the window's state at the same frame's value.
+    bool resolvedWindowActive = false;
+    bool wasResolvedWindow = false;
+    float tResolvedWindow = 0.f;   // seconds since the window opened
+    // The strum's strings lie across the head's yaw: this is how many of
+    // them sat to the nose's left last frame, so a crossing on the next can
+    // pluck the strings passed over. -1 = take the nose's position silently
+    // on the next frame (the window's entry), or the first frame would strum.
+    int strumString = -1;
+    float strumPrevYaw = 0.f;   // last frame's yaw, for the turn's speed
+    float strumRate = 0.f;      // deg/s, smoothed -- see the strum block
+    bool strumDropPending = false;   // the send-off's second frame, see the exit edge
+    // The harp's strings: the major pentatonic over the resolved chord --
+    // root, 9th, 3rd, 5th, 6th -- every one consonant over the pad's major
+    // triad and none an octave leap, so a sweep is a run, not a jump. In the
+    // pluck's register (visitorNote), g_strum_octave up. Filled by
+    // strumStrings() whenever the harp sounds.
+    static const float kStrumTones[] = {0.f, 2.f, 4.f, 7.f, 9.f};
+    constexpr int kStrings = sizeof(kStrumTones) / sizeof(kStrumTones[0]);
+    auto strumStrings = [&](float out[kStrings]) {
+        for (int i = 0; i < kStrings; ++i)
+            out[i] = g_chord.visitorNote() + kStrumTones[i] + 12.f * (float)g_strum_octave;
+    };
     // The visitor's own head movement, recorded through Transition and
     // played back once Roots takes over -- see face_track.h/root_face_sequence.h.
     // Recorder accumulates through one Transition; the sequence plays
@@ -1593,7 +1621,7 @@ int main(int argc, char** argv) {
     double g_track_absent_t = 0.0;
 
     // RootScene now renders continuously from Transition entry onward -- the
-    // cloth press/settle/release/fall that used to live in a separate
+    // cloth hold/release/fall that used to live in a separate
     // TransitionScene, composited as Transition's background, is now a state
     // machine inside RootScene itself (RootScene::restartCloth/advanceCloth),
     // pressing against and draping off the very mask RootScene places and
@@ -2333,7 +2361,7 @@ int main(int argc, char** argv) {
                 // requires to call it "left" in Roots (the same absentHold
                 // debounce, reused rather than duplicated) -- deliberately
                 // decoupled from trans.capturePending()/the lock instant, so
-                // the whole press/settle/release/fall and early Roots gets
+                // the whole hold/release/fall and early Roots gets
                 // recorded, not just the ~0.5s hold stage. The capture's
                 // own single-instant snapshot is separate, taken at the
                 // Transition -> Roots cut (autoCaptureAtCut, above).
@@ -2767,14 +2795,24 @@ int main(int argc, char** argv) {
                                 // keeps ringing through Roots too now (see
                                 // the Phase::Roots case): its own marker
                                 // stream, run through the same effect bus, is
-                                // what paces the beat 3/4 mask switches.
+                                // what paces the beat 3/4 mask switches. The
+                                // pad is left running too now, not stopped
+                                // here: it rides through the cloth and the
+                                // face capture, resolved, and is stopped
+                                // explicitly on the resolved window's exit
+                                // edge below instead (see `resolved`).
                                 g_audio.post("Play_Transition");
-                                g_audio.post("Stop_Pad");
                                 break;
                             case show::Phase::Roots:
                                 g_audio.post("Play_Amb_Roots");
                                 rootsBedStopped = false;
-                                g_audio.post("Stop_Pad");
+                                // The pad is not stopped here either, for the
+                                // same reason as the Transition case above:
+                                // Roots is entered mid-Face while the chord is
+                                // still resolved, and stopping it here would
+                                // cut it out from under the resolved window
+                                // rather than letting the exit edge do it.
+                                //
                                 // FirePlucker is left running (still at the
                                 // Transition hand-off's low register, below)
                                 // rather than stopped: its markers are the
@@ -2963,19 +3001,147 @@ int main(int argc, char** argv) {
                 ap.flanger_rate = g_flanger_rate_min +
                     (g_flanger_rate_max - g_flanger_rate_min) * ap.fit_level;
 
-                // The Transition handoff drops the pluck to a very low
-                // register -- not a chord tone, so it bypasses Chord
-                // entirely. The pluck event itself keeps playing (see the
-                // Phase::Transition and Phase::Roots cases above); the
-                // effect's own Glide portamentos down to this from wherever
-                // the pluck was, and it holds there through Roots too, since
-                // the pluck is still ringing (and still the source of the
-                // beat 3/4 marker cues) rather than reverting to the Fitting
-                // register it never actually left musically.
-                if (g_show.phase() == show::Phase::Transition ||
-                    g_show.phase() == show::Phase::Roots) {
-                    constexpr float kTransitionCombHz = 25.f;  // 20-40 Hz
-                    ap.comb_hz = kTransitionCombHz;
+                // The resolved window: from Transition's entry until the mouth
+                // starts to open, spanning the cloth's fall and the whole of
+                // the Face stage's capture. While it holds, the chord that
+                // `g_chord.resolve()` locked in at Transition entry rides
+                // through both -- the pad keeps playing (see the entry
+                // switch's Transition/Roots cases above, which no longer stop
+                // it), the pluck holds the resolved note instead of dropping
+                // to the low Roots register below, and a head movement can
+                // strum the chord (its own source, see postStrum -- it never
+                // retunes the pluck).
+                const float mouthRamp = rootSeq.valid()
+                    ? rootSeq.mouthOpenRamp(rootsClock, g_root_seq) : 0.f;
+                resolvedWindowActive =
+                    (g_show.phase() == show::Phase::Transition ||
+                     (g_show.phase() == show::Phase::Roots && rootSeqActive &&
+                      rootSeq.valid() &&
+                      rootSeq.stage() == RootSequence::Stage::Face)) &&
+                    mouthRamp <= 0.f;
+                if (resolvedWindowActive && !wasResolvedWindow) {
+                    tResolvedWindow = 0.f;
+                    strumString = -1;
+                    strumPrevYaw = ap.head_yaw;
+                    strumRate = 0.f;
+                } else if (resolvedWindowActive) {
+                    tResolvedWindow += (float)dt;
+                }
+                if (!resolvedWindowActive && wasResolvedWindow && g_audio_on && g_audio_auto) {
+                    // The window just closed -- the mouth started opening, or
+                    // the phase left Transition/Roots-Face some other way
+                    // (a navigator jump, a visitor lost mid-fit). This is now
+                    // the pad's only Stop_Pad outside Idle's. The harp's
+                    // send-off: every string plucked once, then (next frame,
+                    // once the voices have started at their notes) their
+                    // glide opened up and their tuning dropped to the floor,
+                    // so the chord slides down into the roots as they grow.
+                    g_audio.post("Stop_Pad");
+                    float notes[kStrings];
+                    strumStrings(notes);
+                    for (int i = 0; i < kStrings; ++i)
+                        g_audio.postStrum(440.f * std::pow(2.f, (notes[i] - 69.f) / 12.f), 1.f);
+                    strumDropPending = true;
+                } else if (strumDropPending) {
+                    g_audio.dropStrums(g_strum_drop_glide_ms, 20.f);
+                    strumDropPending = false;
+                }
+                wasResolvedWindow = resolvedWindowActive;
+
+                if (resolvedWindowActive) {
+                    // In the pluck's own register -- the visitor's note, the
+                    // one it rang through the idle wait and climbed from
+                    // during the fit -- not the chord's root, which
+                    // `chord octave` drops by up to five octaves and which
+                    // is where the pad sits, not the pluck. `update()` is
+                    // what lands this on the Stage4 note already, via
+                    // g_chord's own voicing.
+                    ap.comb_hz = g_chord.voicing().comb_hz;
+                    ap.comb_glide_ms = g_resolved_glide_ms;
+                    ap.flanger_mix = 54.f *
+                        (1.f - std::clamp(tResolvedWindow / g_resolved_flanger_fade_s, 0.f, 1.f));
+                    // Held at the slow end -- fit_level is already 0 here (the
+                    // pond isn't training), so ap.flanger_rate above already
+                    // landed on g_flanger_rate_min; this just makes that
+                    // explicit rather than relying on it.
+                    ap.flanger_rate = g_flanger_rate_min;
+                    // The pluck steps aside for the harp -- both are combs,
+                    // and the pluck's held note muddies the strings -- and
+                    // comes back (the `else` below) as the roots start.
+                    ap.pluck_mute = g_strum_mute_pluck ? 1.f : 0.f;
+                    ap.pluck_mute_fade_ms = g_strum_mute_fade_ms;
+
+                    // The strum: a harp lying across the head's yaw. The
+                    // pentatonic's tones (strumStrings above) are its
+                    // strings, the lowest at full-left (-g_strum_range_deg),
+                    // the highest at full-right, the rest evenly between --
+                    // with the face-on dead zone cut out of the middle, so a
+                    // nose at rest sits on nothing. Turning across a string
+                    // plucks it, each on its own Wwise voice (postStrum) so
+                    // it never touches the pluck's comb above.
+                    float notes[kStrings];
+                    strumStrings(notes);
+                    // q: the nose's position with the dead zone removed, in
+                    // degrees, -span..span; string i sits at q_i.
+                    const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
+                    const float gap = 2.f * span / (kStrings - 1);   // between strings
+                    const float yaw = ap.head_yaw;
+                    const float q = std::fabs(yaw) > g_strum_dead_deg
+                        ? (yaw > 0.f ? yaw - g_strum_dead_deg : yaw + g_strum_dead_deg) : 0.f;
+                    auto stringAt = [&](int i) { return -span + gap * i; };
+                    // Hysteresis: a string only counts as crossed once the
+                    // nose is g_strum_hysteresis of a gap past it, so tracker
+                    // jitter on a string doesn't re-pluck it.
+                    const float h = g_strum_hysteresis * gap;
+                    // Loudness from how fast the head is turning: full at
+                    // g_strum_full_vel deg/s, quieter below (the Strum_Velocity
+                    // curve in Wwise sets the floor). The raw frame-to-frame
+                    // rate is all tracker jitter -- a degree of wobble at 60
+                    // fps reads as 60 deg/s -- so it is smoothed over
+                    // g_strum_vel_smooth_ms before it sets the loudness.
+                    const float rate = dt > 0.0 ? std::fabs(yaw - strumPrevYaw) / (float)dt : 0.f;
+                    strumRate += (rate - strumRate) *
+                        (1.f - std::exp(-(float)dt / std::max(g_strum_vel_smooth_ms, 1.f) * 1000.f));
+                    const float vel = std::clamp(strumRate / std::max(g_strum_full_vel, 1.f), 0.f, 1.f);
+                    strumPrevYaw = yaw;
+                    if (strumString < 0) {
+                        strumString = 0;
+                        while (strumString < kStrings && q > stringAt(strumString)) ++strumString;
+                    }
+                    // strumString counts the strings to the nose's left. Step
+                    // it one string at a time toward the nose, plucking each
+                    // string crossed in the order it was passed.
+                    for (;;) {
+                        int plucked;
+                        if (strumString < kStrings && q > stringAt(strumString) + h)
+                            plucked = strumString++;
+                        else if (strumString > 0 && q < stringAt(strumString - 1) - h)
+                            plucked = --strumString;
+                        else
+                            break;
+                        if (!g_audio_on) continue;
+                        g_audio.postStrum(440.f * std::pow(2.f, (notes[plucked] - 69.f) / 12.f), vel);
+                    }
+                } else {
+                    ap.comb_glide_ms = 265.f;
+                    ap.flanger_mix = 54.f;
+                    ap.pluck_mute = 0.f;
+                    ap.pluck_mute_fade_ms = g_strum_mute_fade_ms;
+                    // The Transition handoff drops the pluck to a very low
+                    // register -- not a chord tone, so it bypasses Chord
+                    // entirely. The pluck event itself keeps playing (see the
+                    // Phase::Transition and Phase::Roots cases above); the
+                    // effect's own Glide portamentos down to this from
+                    // wherever the pluck was, and it holds there through the
+                    // rest of Roots too, since the pluck is still ringing
+                    // (and still the source of the beat 3/4 marker cues)
+                    // rather than reverting to the Fitting register it never
+                    // actually left musically.
+                    if (g_show.phase() == show::Phase::Transition ||
+                        g_show.phase() == show::Phase::Roots) {
+                        constexpr float kTransitionCombHz = 25.f;  // 20-40 Hz
+                        ap.comb_hz = kTransitionCombHz;
+                    }
                 }
 
                 g_audio.update(ap);
@@ -3263,9 +3429,9 @@ int main(int argc, char** argv) {
             // panel greys the row out otherwise, but the request is cleared
             // regardless so a click from an inactive phase cannot fire later.
             auto honourRootJump = [&]() {
-                // Key 5 (below) asks for Grow from *outside* Roots: the
-                // request waits here until the sequence is up, then rides
-                // the same path as the panel's row.
+                // Keys 5/6 (below) ask for Grow/Orbit from *outside* Roots:
+                // the request waits here until the sequence is up, then
+                // rides the same path as the panel's row.
                 if (g_root_jump_on_entry >= 0 && rootSeqActive && rootSeq.valid()) {
                     g_root_jump = g_root_jump_on_entry;
                     g_root_jump_on_entry = -1;
@@ -3593,12 +3759,21 @@ int main(int argc, char** argv) {
                 // The transition is driven by the mirror, so the mirror keeps
                 // rendering underneath it -- that texture is the film the
                 // cloth (now RootScene's own, see root_scene.h's "the cloth"
-                // section) samples. Its training is left alone: the effect is
-                // a handoff, and a fit that kept moving during it would
-                // change the sheet's skin mid-fall.
+                // section) samples. It trains for as long as the sheet is
+                // still pinned -- renderMirror() is the same trained-and-
+                // rendered path Scene::Mirror uses, and it also samples face
+                // colours, which uploadFaceColorsIfFresh() below already
+                // expects. Once the pins let go the film has to stop
+                // changing mid-fall, so from there it is just re-rendered
+                // without another training step: the last trained frame is
+                // the skin the sheet falls away with.
                 mirror.ensureSize(compW / std::max(1, downscale), compH / std::max(1, downscale));
-                if (!rootHold) mirror.advance(dt);
-                roots.setPondTexture(mirror.render());
+                if (roots.clothPinned() && !rootHold) {
+                    roots.setPondTexture(renderMirror());
+                } else {
+                    if (!rootHold) mirror.advance(dt);
+                    roots.setPondTexture(mirror.render());
+                }
 
                 // The mask's *shape*, re-sent every frame rather than latched
                 // when the phase opened, so an expression keeps moving
@@ -3658,6 +3833,7 @@ int main(int argc, char** argv) {
                     in.markerHit    = rootMarkerHit;
                     in.markerStrength = rootMarkerStrength;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
+                    in.movement     = g_presence.signals().movement;
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
                 } else {
                     // The sequence owns simPaused and re-decides it on the
@@ -3767,6 +3943,7 @@ int main(int argc, char** argv) {
                     in.markerHit    = rootMarkerHit;
                     in.markerStrength = rootMarkerStrength;
                     in.trackedValid = roots.trackedPosition(in.trackedX, in.trackedY);
+                    in.movement     = g_presence.signals().movement;
                     rootSeq.step(roots, rootsClock, dt, g_root_seq, in);
                     // fade() is 0 outside the outro, so this also takes the
                     // fade back off after a jump out of the Outro.
@@ -3875,7 +4052,8 @@ int main(int argc, char** argv) {
 
             // Keyboard cues, for rehearsal without a controller: 1-4 force a
             // phase, 5 is Roots straight into Grow (skipping the Face stage),
-            // space fires the "go" cue. Guarded on WantCaptureKeyboard, or
+            // 6 straight into Orbit (the chain finished at once, the hood
+            // placed -- RootSequence::jumpTo), space fires the "go" cue. Guarded on WantCaptureKeyboard, or
             // typing a caption into the text field would jump the show
             // around. Read after NewFrame so the key state is this frame's.
             if (g_show_on && !ImGui::GetIO().WantCaptureKeyboard) {
@@ -3885,6 +4063,10 @@ int main(int argc, char** argv) {
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_5, false)) {
                     g_root_jump_on_entry = (int)RootSequence::Stage::Grow;
+                    if (g_show.phase() != show::Phase::Roots) g_show.goTo(show::Phase::Roots);
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_6, false)) {
+                    g_root_jump_on_entry = (int)RootSequence::Stage::Orbit;
                     if (g_show.phase() != show::Phase::Roots) g_show.goTo(show::Phase::Roots);
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_Space, false))

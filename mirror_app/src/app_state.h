@@ -167,7 +167,7 @@ extern int g_view_override;
 extern bool g_show_paused;
 extern int  g_root_stage;   // RootSequence::Stage while it runs, else -1 (readout)
 extern int  g_root_jump;    // RootSequence::Stage the panel asked to jump to, else -1
-extern int  g_root_jump_on_entry;   // ...and one to take as soon as Roots is up (key 5)
+extern int  g_root_jump_on_entry;   // ...and one to take as soon as Roots is up (keys 5/6)
 extern float g_show_fit_px;
 extern float g_show_fit_loss_half;
 extern float g_show_fit_score;
@@ -197,6 +197,23 @@ extern float g_shepherd_phase;  // semitones, 0..12 -- the Fitting-phase glissan
 // "the room is responding" idea as the shepherd's rate above.
 extern float g_flanger_rate_min;  // Hz, at fit_level 0
 extern float g_flanger_rate_max;  // Hz, at fit_level 1
+
+// The resolved window (main.mm's `resolvedWindowActive`): the chord holds
+// through the cloth's fall and the Face stage's capture, and these shape how.
+extern float g_resolved_glide_ms;        // ms, 0..2000 -- the pluck's Comb_Glide
+extern float g_resolved_flanger_fade_s;  // s, 0.1..30 -- how long the flanger takes to clear
+
+// The resolved window's strum (its own source, `WwiseAudio::postStrum`): a
+// head movement sweeps the resolved chord's strings.
+extern float g_strum_dead_deg;    // 0..45, yaw either side of face-on with no string
+extern float g_strum_range_deg;   // 10..90, yaw at which the last string sits
+extern int   g_strum_octave;      // -2..4, octaves above the pluck's register
+extern float g_strum_hysteresis;  // 0..0.5, string widths past a string before it counts as crossed
+extern float g_strum_drop_glide_ms; // 0..2000, the send-off's slide down to the floor
+extern bool  g_strum_mute_pluck;    // mute the FirePlucker while the harp plays
+extern float g_strum_mute_fade_ms;  // 0..5000, the mute's fade in and out
+extern float g_strum_vel_smooth_ms; // 1..1000, smoothing on the turn's speed
+extern float g_strum_full_vel;    // 10..720, deg/s of head turn for a full-loudness pluck
 extern std::string g_audio_err;
 
 extern std::vector<float> g_face_colors;

@@ -155,6 +155,19 @@ struct SimParams {
     // gets stuck in it and never arrives.
     float coneShellThickness = 9.0f;
     float growthDt     = 0.75f;    // sim days advanced per step()
+    // A finished hop does not stop dead when the relay moves on: the last
+    // oldHopsAlive finished hops keep growing at oldHopsRate x the live
+    // step (their own system, dwell tropism and nest as they were left),
+    // then stop once they fall out of that window -- and everything
+    // stops when the relay is done. Each change of pace is eased: the
+    // hop's rate slews toward its target with a time constant of
+    // oldHopsEaseDays (sim days, on the relay's clock, so it holds at any
+    // show speed) -- down from the live pace on finishing, and down to
+    // nothing on leaving the window. 0 hops, or rate 0, is the old
+    // behaviour bar the ease out.
+    int   oldHopsAlive    = 1;
+    float oldHopsRate     = 0.5f;
+    float oldHopsEaseDays = 10.f;
     float targetLift   = 0.0f;
     // How far behind the mouth point (see faceMouthU/V/N below), along
     // -normal, a non-anchor hop starts. The root then heads for the next mask
@@ -274,6 +287,8 @@ void visitSimParams(SimParams& p, Fn&& f) {
     f("coneSurfaceTravel", p.coneSurfaceTravel);
     f("coneShellThickness", p.coneShellThickness);
     f("growthDt", p.growthDt);
+    f("oldHopsAlive", p.oldHopsAlive); f("oldHopsRate", p.oldHopsRate);
+    f("oldHopsEaseDays", p.oldHopsEaseDays);
     f("targetLift", p.targetLift); f("spawnBehind", p.spawnBehind);
     f("basalClear", p.basalClear);
     f("nestBehind", p.nestBehind); f("nestHitRadius", p.nestHitRadius);
@@ -327,7 +342,9 @@ public:
     // (Re)start growth. Returns false if the parameter file cannot be loaded.
     bool reset(const SimParams& p);
 
-    // Advance the live growth by one sim step (growthDt days). No-op once done.
+    // Advance the live growth by one sim step (growthDt days), and the
+    // finished hops still in the oldHopsAlive window by oldHopsRate x
+    // that. No-op once done.
     void step();
 
     bool valid() const;

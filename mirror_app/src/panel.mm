@@ -428,6 +428,33 @@ void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(90);
             ui::SliderInt("steps/frame", &roots.simStepsPerFrame, 1, 30);
+            ImGui::SetNextItemWidth(110);
+            ui::SliderInt("old hops alive", &SP.oldHopsAlive, 0, 5);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How many finished hops keep growing behind the\n"
+                    "hop in flight. A hop grows on while this many\n"
+                    "later ones run, then freezes; everything freezes\n"
+                    "when the relay is done. 0 = freeze on finishing.\n"
+                    "Takes effect at the next replant or regrow.");
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90);
+            ui::SliderFloat("old hops rate", &SP.oldHopsRate, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Their share of each live step (1 = the same pace).");
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90);
+            ui::SliderFloat("ease days", &SP.oldHopsEaseDays, 0.f, 60.f, "%.0f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "How gradually a hop changes pace, in sim days on\n"
+                    "the relay's clock: the slew's time constant, both\n"
+                    "down from the live pace when it finishes and down\n"
+                    "to nothing when it leaves the window. A hop is\n"
+                    "about 60 days.");
+            }
 
             if (ImGui::Button("regrow")) roots.regrow();
             ImGui::SameLine();
@@ -853,6 +880,13 @@ void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int 
             ui::SliderFloat("TAA blend", &R.post.taaBlend, 0.02f, 1.0f);
             ui::SliderFloat("TAA jitter", &R.post.taaJitter, 0.0f, 1.0f);
             ui::SliderFloat("TAA clip", &R.post.taaClip, 0.0f, 3.0f);
+            ui::SliderFloat("TAA sharpen", &R.post.taaSharpen, 0.0f, 1.0f);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Unsharp mask on the TAA's output, giving back the\n"
+                    "edge the temporal blend takes. Clamped to the\n"
+                    "neighbours so it does not ring. Only with TAA on.");
+            }
             ui::Checkbox("filmic tonemap", &R.post.tonemap);
             ui::SliderFloat("exposure", &R.post.exposure, 0.1f, 4.0f);
             ImGui::Separator();
@@ -1036,6 +1070,19 @@ void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int 
             ui::Checkbox("flash nearest mask", &R.flash.nearest);
             ui::Checkbox("flash mask 0", &R.flash.mask0);
             ImGui::TextDisabled("mask 0 = the visitor's own face");
+            ui::Checkbox("glitch mask", &R.flash.glitch);
+            ui::SliderFloat("glitch duration (s)", &R.flash.glitchSeconds, 0.05f, 4.0f);
+            ui::SliderFloat("glitch amount", &R.flash.glitchAmount, 0.0f, 1.0f);
+            ui::SliderFloat("glitch noise", &R.flash.glitchNoise, 0.0f, 2.0f);
+            ui::SliderFloat("glitch noise share", &R.flash.glitchNoiseShare, 0.0f, 1.0f);
+            ui::Checkbox("glitch swaps mask", &R.flash.glitchSwap);
+            ImGui::TextDisabled("the flashed mask's triangles get random vertex\n"
+                                "indices, redrawn every frame, on a 0-1-0 wave\n"
+                                "over the duration; amount = the share torn at\n"
+                                "the peak. noise = how far (world units) a\n"
+                                "share of the torn corners are pushed, both on\n"
+                                "the wave. swap: at the peak it is dealt another\n"
+                                "bank face (never mask 0)");
             if (ImGui::Button("fire flash")) roots.triggerFlash();
         }
         ui::EndHeader();
@@ -1612,6 +1659,14 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
                                 ui::SliderFloat("grow rate max (steps-s)", &S.grow_rate_max, 1.f, 2000.f,
                                                 "%.0f", ImGuiSliderFlags_Logarithmic);
+                                ui::SliderFloat("movement boosts rate", &S.grow_move_boost, 0.f, 4.f, "%.2f");
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip(
+                                        "The growth rate x (1 + this x the visitor's\n"
+                                        "movement, 0..1). At 1 someone in full motion\n"
+                                        "grows the plant twice as fast; sitting still\n"
+                                        "is the authored pace.");
+                                }
                                 ui::SliderFloat("grow hop lead", &S.grow_hop_lead, 0.f, 1.f, "%.2f");
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::SetTooltip(
@@ -2106,6 +2161,63 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "shepherd's rate above.");
                 }
 
+                ui::PushSection("resolved");
+                ui::BeginHeader("resolved (cloth + face)", /*default_open=*/false);
+                {
+                    ui::SliderFloat("strum dead zone (deg)", &g_strum_dead_deg, 0.f, 45.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "While the resolved window holds (Transition entry\n"
+                            "through the Face stage, until the mouth starts to\n"
+                            "open), the strings of the resolved chord lie across\n"
+                            "the head's yaw, lowest at full-left, highest at\n"
+                            "full-right, this dead zone cut out of the middle;\n"
+                            "turning across a string plucks it. Its own source\n"
+                            "(postStrum), so it never retunes the pluck.");
+                    }
+                    ui::SliderFloat("strum range (deg)", &g_strum_range_deg, 10.f, 90.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Yaw at which the outermost strings sit, each side.");
+                    ui::SliderInt("strum octave", &g_strum_octave, -2, 4);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The chord's tones in the pluck's register, this many octaves up.");
+                    ui::SliderFloat("strum hysteresis", &g_strum_hysteresis, 0.f, 0.5f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How far past a string (in string widths) the nose must go\nbefore it counts as crossed, so jitter on a string doesn't re-pluck it.");
+                    ui::SliderFloat("strum full velocity (deg/s)", &g_strum_full_vel, 10.f, 720.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Head turn speed for a full-loudness pluck; slower turns\nare quieter (Strum_Velocity -> the Strum sound's volume).");
+                    ui::SliderFloat("strum velocity smooth (ms)", &g_strum_vel_smooth_ms, 1.f, 1000.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Smoothing on the head's turn rate before it sets the loudness;\nthe tracker's frame-to-frame jitter alone reads as a fast turn.");
+                    ui::Checkbox("strum mutes pluck", &g_strum_mute_pluck);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Fades the FirePlucker out while the harp plays (PluckMute)\nand back in as the roots start.");
+                    ui::SliderFloat("strum mute fade (ms)", &g_strum_mute_fade_ms, 0.f, 5000.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The mute's fade, out and back in, run by Wwise.");
+                    ui::SliderFloat("strum drop glide (ms)", &g_strum_drop_glide_ms, 0.f, 2000.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("When the mouth opens and the roots start, every string is\nplucked once and slides down to 20 Hz at this glide.");
+                    ui::SliderFloat("pluck glide (ms)", &g_resolved_glide_ms, 0.f, 2000.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Comb_Glide while the window holds, short so the\n"
+                            "pluck lands on the resolved note rather than\n"
+                            "sliding into it. 265ms (Metallic_Ring's authored\n"
+                            "default) the rest of the time.");
+                    }
+                    ui::SliderFloat("flanger fade (s)", &g_resolved_flanger_fade_s, 0.1f, 30.f);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "How long, from the window's entry, FlangerMix takes\n"
+                            "to fade from 54 to 0 -- the pad clearing as the\n"
+                            "chord settles.");
+                    }
+                }
+                ui::EndHeader();
+                ui::PopSection();
+
                 if (ui::Visible()) {
                     ImGui::SeparatorText("post");
                     if (ImGui::Button("pluck bed")) g_audio.postFirePlucker();
@@ -2224,9 +2336,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                                    0, 7);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Drawn once per visitor, uniform over -N..+N\n"
-                            "semitones from the centre, so 3 lands anywhere\n"
-                            "within a minor third either way.");
+                            "Drawn once per visitor, uniform over 0..+N\n"
+                            "semitones above the centre (never below), so 3\n"
+                            "lands anywhere up to a minor third up.");
                     }
                     ui::SliderFloat("pluck climb (semitones)", &cc.pluck_climb,
                                      0.f, 36.f, "%.0f");
@@ -3405,19 +3517,20 @@ void DrawControlPanel(PanelFrameArgs& pf) {
             // retired TransitionScene, and the Look bank keys are built from
             // the section name -- so keeping the old name would make every
             // saved .set file quietly load TransitionScene-era numbers onto
-            // it. They are not interchangeable: that scene's settle was 0.3
-            // seconds against a sheet sized to its own small fixed frustum,
-            // where this one holds the drape over the face for 8. Renaming
-            // orphans those keys, which are then ignored on load, and
+            // it. They are not interchangeable: that scene pressed and settled
+            // the mask against a sheet sized to its own small fixed frustum;
+            // this one has no press or settle at all, only a hold before the
+            // release lets the film fall. Renaming orphans those keys, which
+            // are then ignored on load, and
             // RootScene keeps its own defaults until someone saves new ones.
             ui::PushSection("cloth");
             // The transition page is a category of settings, not a cue to
             // play one: what is on screen is the phase navigator's business,
             // so these declare and draw whenever the look tab is open.
             {
-                ImGui::Text("%s   t=%.2fs   press %.0f%%   release %.0f%%",
+                ImGui::Text("%s   t=%.2fs   release %.0f%%",
                             pf.roots.clothPhaseName(), pf.roots.clothClock(),
-                            pf.roots.clothPress() * 100.f, pf.roots.clothRelease() * 100.f);
+                            pf.roots.clothRelease() * 100.f);
                 ImGui::SameLine();
                 if (ImGui::Button("replay")) pf.roots.restartCloth();
 
@@ -3564,15 +3677,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 }
                 ImGui::SeparatorText("timing (seconds)");
                 ImGui::PushItemWidth(110);
-                // Settle runs to 20 rather than TransitionScene's 2: how long
-                // the film stays draped over the face is the whole of how the
-                // press reads, it is the first thing anyone reaches for, and a
-                // slider that tops out below the default value cannot express
-                // the default, let alone anything longer.
                 ui::SliderFloat("hold",    &pf.roots.clothTiming.hold,    0.f, 3.f);
-                ImGui::SameLine();
-                ui::SliderFloat("press",   &pf.roots.clothTiming.press,   0.2f, 6.f);
-                ui::SliderFloat("settle",  &pf.roots.clothTiming.settle,  0.f, 20.f);
                 ImGui::SameLine();
                 ui::SliderFloat("release", &pf.roots.clothTiming.release, 0.05f, 3.f);
                 ui::SliderFloat("fall",    &pf.roots.clothTiming.fall,    0.5f, 6.f);
@@ -3580,8 +3685,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
                         "hold: the flat film, which is the pond exactly.\n"
-                        "press: the mask advancing through it, tenting it.\n"
-                        "settle: held taut at full press.\n"
                         "release: the pins letting go, corners first.\n"
                         "fall: draping off the face and away.");
                 }
@@ -3636,12 +3739,6 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "half of what says surface rather than printed image.\n"
                         "Gated to the pressed area like the relief, so the\n"
                         "untouched film stays exactly the pond.");
-                }
-                ui::SliderFloat("press depth", &pf.roots.clothPressProud, 0.f, 0.4f);
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "How far proud of the film the mask ends up. More\n"
-                        "tents the fabric harder before the pins let go.");
                 }
                 ui::SliderFloat("mask relief", &pf.trans.depthScale, 0.2f, 4.f);
                 ui::SliderFloat("shading span", &pf.trans.shadeSpan, 1.f, 10.f);

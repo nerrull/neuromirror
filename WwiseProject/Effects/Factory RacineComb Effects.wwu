@@ -23,7 +23,7 @@
 									</Reference>
 									<Reference Name="Curve">
 										<Custom>
-											<Curve Name="" ID="{92CD3A6C-B3FA-4E5D-99DA-02CA804B95C6}">
+											<Curve Name="" ID="{902681D3-0B4C-4364-AE80-0F6BCF1BDD70}">
 												<PropertyList>
 													<Property Name="Flags" Type="int32" Value="5"/>
 												</PropertyList>
@@ -31,6 +31,37 @@
 													<Point>
 														<XPos>20</XPos>
 														<YPos>20</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>4000</XPos>
+														<YPos>4000</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+							<RTPC Name="" ID="{AF743DFB-D0C2-4D6A-A3DA-1A621B0B1302}" ShortID="145336657">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Glide"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Comb_Glide" ID="{35BD01F5-47AD-4EE8-8BD6-758125B3E432}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{2359711C-AA12-454F-A4E5-398D937AE3B4}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>0</YPos>
 														<Flags>5</Flags>
 													</Point>
 													<Point>
@@ -71,6 +102,81 @@
 						<Property Name="Frequency" Type="Real32" Value="637"/>
 						<Property Name="Glide" Type="Real32" Value="50"/>
 					</PropertyList>
+				</Effect>
+				<Effect Name="Strum_Ring" ID="{49896D20-1466-4EE4-A9FF-6661EBC083EF}" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+					<PropertyList>
+						<Property Name="Damping" Type="Real32" Value="10.5"/>
+						<Property Name="Feedback" Type="Real32" Value="98"/>
+						<Property Name="Frequency" Type="Real32" Value="62"/>
+						<Property Name="Glide" Type="Real32" Value="0"/>
+						<Property Name="OutputLevel" Type="Real32" Value="6.1"/>
+					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{58C472D9-555E-4A32-9521-28A6E9EC7783}" ShortID="305576097">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Frequency"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Strum_Tuning" ID="{033E3DB3-1A1B-48B4-AF27-CA60A9DBB820}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{E6281738-3F61-4FE6-BF43-43FB76D90DB9}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="5"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>20</XPos>
+														<YPos>20</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>4000</XPos>
+														<YPos>4000</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+							<RTPC Name="" ID="{47334641-ADA4-4E3A-BAC1-46E261997356}" ShortID="404759236">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Glide"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="Strum_Glide" ID="{7595FE19-4E39-4A97-A253-34CE0395401D}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{DAA3AD91-4751-4745-BDC6-D754E7904FC9}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>0</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>2000</XPos>
+														<YPos>2000</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
 				</Effect>
 			</ChildrenList>
 		</WorkUnit>

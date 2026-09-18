@@ -282,6 +282,19 @@ float g_shepherd_phase = 0.f;     // semitones, 0..12: Fitting-phase glissando p
 float g_flanger_rate_min = 0.1f;   // Hz, at fit_level 0
 float g_flanger_rate_max = 2.5f;   // Hz, at fit_level 1
 
+float g_resolved_glide_ms = 30.f;
+float g_resolved_flanger_fade_s = 6.f;
+
+float g_strum_dead_deg = 10.f;
+float g_strum_range_deg = 50.f;
+int   g_strum_octave = 1;
+float g_strum_hysteresis = 0.2f;
+float g_strum_full_vel = 200.f;
+float g_strum_vel_smooth_ms = 150.f;
+bool  g_strum_mute_pluck = true;
+float g_strum_mute_fade_ms = 500.f;
+float g_strum_drop_glide_ms = 1500.f;
+
 std::string g_audio_err;
 
 // The neural texture the mask wears: per-vertex RGB sampled from the mirror's

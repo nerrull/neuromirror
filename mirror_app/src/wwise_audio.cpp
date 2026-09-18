@@ -36,6 +36,8 @@ void WwiseAudio::post(const char*) {}
 void WwiseAudio::setState(const char*, const char*) {}
 void WwiseAudio::stopAll() {}
 void WwiseAudio::postFirePlucker() {}
+void WwiseAudio::postStrum(float, float) {}
+void WwiseAudio::dropStrums(float, float) {}
 std::vector<MarkerHit> WwiseAudio::pollFirePluckerMarkers() { return {}; }
 bool WwiseAudio::startCapture(const std::string&) { return false; }
 void WwiseAudio::stopCapture() {}
@@ -96,6 +98,13 @@ CAkDefaultIOHookDeferred g_lowLevelIO;
 // Routing, which the scene mixers have on for their aux sends.
 constexpr AkGameObjectID kRacineObj = 100;
 constexpr AkGameObjectID kListener = 1;
+
+// The strum's own pool: one game object per voice, round-robinned in
+// postStrum(), so up to kStrumVoices notes can ring at once each holding its
+// own Strum_Tuning -- Strum_Ring's comb is instanced per voice (unlike the
+// FirePlucker's shared Metallic_Ring), so this is what per-note pitch needs.
+constexpr AkGameObjectID kStrumObjBase = 200;
+constexpr unsigned kStrumVoices = 8;
 
 // Marker hits from Play_FirePlucker, queued here by the audio thread and
 // drained by pollFirePluckerMarkers() on the main thread. File-scope for the
@@ -203,6 +212,11 @@ bool WwiseAudio::init(const std::string& bank_dir, std::string& err) {
 
     AK::SoundEngine::RegisterGameObj(kListener, "Listener");
     AK::SoundEngine::RegisterGameObj(kRacineObj, "Racine");
+    for (unsigned i = 0; i < kStrumVoices; ++i) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "Strum%u", i);
+        AK::SoundEngine::RegisterGameObj(kStrumObjBase + i, name);
+    }
     AK::SoundEngine::SetDefaultListeners(&kListener, 1);
 
     ready_ = true;
@@ -265,8 +279,20 @@ void WwiseAudio::update(const AudioParams& p) {
     if (all || Moved(p.comb_hz, sent_.comb_hz))
         AK::SoundEngine::SetRTPCValue("Comb_Tuning", p.comb_hz);
 
+    if (all || Moved(p.comb_glide_ms, sent_.comb_glide_ms))
+        AK::SoundEngine::SetRTPCValue("Comb_Glide", p.comb_glide_ms);
+
     if (all || Moved(p.flanger_rate, sent_.flanger_rate))
         AK::SoundEngine::SetRTPCValue("FlangerRate", p.flanger_rate);
+
+    if (all || Moved(p.flanger_mix, sent_.flanger_mix))
+        AK::SoundEngine::SetRTPCValue("FlangerMix", p.flanger_mix);
+
+    // Faded by the engine rather than stepped here, so a single frame's flip
+    // is a ramp of pluck_mute_fade_ms.
+    if (all || Moved(p.pluck_mute, sent_.pluck_mute))
+        AK::SoundEngine::SetRTPCValue("PluckMute", p.pluck_mute, AK_INVALID_GAME_OBJECT,
+                                      (AkTimeMs)p.pluck_mute_fade_ms);
 
     sent_ = p;
     sent_any_ = true;
@@ -289,6 +315,25 @@ void WwiseAudio::postFirePlucker() {
     AK::SoundEngine::PostEvent("Play_FirePlucker", kRacineObj, AK_Marker,
                                 OnFirePluckerMarker, nullptr);
     ++posted_;
+}
+
+void WwiseAudio::postStrum(float hz, float velocity) {
+    if (!ready_) return;
+    const AkGameObjectID obj = kStrumObjBase + (strum_next_++ % kStrumVoices);
+    AK::SoundEngine::SetRTPCValue("Strum_Tuning", hz, obj);
+    AK::SoundEngine::SetRTPCValue("Strum_Glide", 0.f, obj);
+    AK::SoundEngine::SetRTPCValue("Strum_Velocity", velocity, obj);
+    AK::SoundEngine::PostEvent("Play_Strum", obj);
+    ++posted_;
+    std::fprintf(stderr, "[strum] obj %u  %.0f Hz  vel %.2f\n", (unsigned)obj, hz, velocity);
+}
+
+void WwiseAudio::dropStrums(float glide_ms, float hz) {
+    if (!ready_) return;
+    for (unsigned i = 0; i < kStrumVoices; ++i) {
+        AK::SoundEngine::SetRTPCValue("Strum_Glide", glide_ms, kStrumObjBase + i);
+        AK::SoundEngine::SetRTPCValue("Strum_Tuning", hz, kStrumObjBase + i);
+    }
 }
 
 std::vector<MarkerHit> WwiseAudio::pollFirePluckerMarkers() {

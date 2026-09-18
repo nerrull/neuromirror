@@ -104,6 +104,10 @@ struct RootSequenceParams {
     float grow_face_seconds  = 10.0f;
     float grow_rate_min      = 1.f;
     float grow_rate_max      = 1200.f;
+    // The visitor's movement (presence.h's 0..1 signal, Inputs::movement)
+    // can add to the hop in flight's rate: rate x (1 + this x movement).
+    // Off by default -- the live root is the timing's.
+    float grow_move_boost    = 0.f;
     // Per-hop framing. For the hop in flight the camera looks straight down
     // the outward normal of the mask the root is heading for, at that mask,
     // from the distance that holds it with grow_margin around it -- and,
@@ -357,6 +361,7 @@ public:
         float markerStrength = 1.f;
         bool  trackedValid = false;
         float trackedX = 0.5f, trackedY = 0.5f;
+        float movement = 0.f;   // presence signal, 0 still .. 1 moving; see grow_move_boost
     };
 
     // Read the planned layout and pick the anchor and the structure's
@@ -470,7 +475,7 @@ public:
             break;
         }
         case Stage::Grow: {
-            stepGrowth(roots, fdt);
+            stepGrowth(roots, fdt, P, in);
 
             // The hop in flight: the mask the root is heading for (or, once
             // the sim is done and the stage is about to end, the last one),
@@ -550,7 +555,7 @@ public:
             // itself uses (orbitBs_/orbitC_, computed for the just-placed
             // hood at Turn's entry -- see enterTurn). One smoothstep, one
             // shape, and nothing left to ease when Orbit takes over.
-            stepGrowth(roots, fdt);
+            stepGrowth(roots, fdt, P, in);
             const float u = smoothstep(tIn / std::max(1e-3, (double)P.turn_seconds));
             const float endEl = P.orbit_elevation_deg * kDeg;
             float endT[3];
@@ -576,7 +581,7 @@ public:
             // moment it fired would have nothing to smear -- and so does
             // the lighting, so a structure caught mid-front is not left
             // half dark.
-            stepGrowth(roots, fdt);
+            stepGrowth(roots, fdt, P, in);
             const float wantEl = P.orbit_elevation_deg * kDeg;
             curAz_ += P.orbit_rate * fdt;
             // The pluck flash, on the same marker the Reveal fires on, as
@@ -921,12 +926,14 @@ private:
         stage_ = s; stageT0_ = clock;
     }
 
-    // Deal this frame's sim steps: growStepsPerSec_ x dt, carried as a
-    // fraction between frames so the rate is honoured below one step per
-    // frame (RootScene::advance runs at least one step whenever the sim is
-    // not paused, so a frame owed none pauses it). dt of 0 holds the growth.
-    void stepGrowth(RootScene& roots, float dt) {
-        growStepAcc_ += growStepsPerSec_ * std::max(0.f, dt);
+    // Deal this frame's sim steps: growStepsPerSec_ x dt, lifted by the
+    // visitor's movement (grow_move_boost), carried as a fraction between
+    // frames so the rate is honoured below one step per frame
+    // (RootScene::advance runs at least one step whenever the sim is not
+    // paused, so a frame owed none pauses it). dt of 0 holds the growth.
+    void stepGrowth(RootScene& roots, float dt, const RootSequenceParams& P, const Inputs& in) {
+        const float boost = 1.f + std::max(0.f, P.grow_move_boost) * std::clamp(in.movement, 0.f, 1.f);
+        growStepAcc_ += growStepsPerSec_ * boost * std::max(0.f, dt);
         const int steps = (int)std::floor(growStepAcc_);
         growStepAcc_ -= float(steps);
         roots.simPaused = steps <= 0;

@@ -36,13 +36,17 @@
 //           Play_Amb_Roots  / Stop_Amb_Roots      the root scene's bed
 //           Play_Transition / Stop_Transition     the handoff
 //           Play_Pluck, Play_Bell, Play_Drop      one-shots
+//           Play_Strum                            the resolved window's harp, one shot per note
 //           Play_Amb_Mirror / Stop_Amb_Mirror     the old mirror bed, unused by
 //                                                 the show since the phase
 //                                                 became pluck + pad
 //   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt   (the room)
 //           FitLevel, SceneProgress                             (the piece)
 //           Key, Intensity, Transpose                            (the operator)
-//           Comb_Tuning, FlangerRate                              (the harmony)
+//           Comb_Tuning, Comb_Glide, FlangerRate, FlangerMix        (the harmony)
+//           Strum_Tuning                                          (the harp, per voice)
+//           Strum_Velocity 0..1, Strum_Glide ms                  (the harp, per voice: loudness, portamento)
+//           PluckMute 0..1                                       (the FirePlucker's volume, faded)
 //   States  Phase      = Idle | Fitting | Transition | Roots
 //           ChordStage = Stage0..Stage4
 //
@@ -91,7 +95,13 @@ struct AudioParams {
     // by `Key`, `Transpose`, and the `ChordStage` state (see chord.h and
     // `setState`). Only the comb, which has no State Group of its own, still
     // needs a value pushed every frame.
-    float comb_hz = 466.16f;    // Hz, 20..2000
+    float comb_hz = 466.16f;    // Hz, 20..4000
+
+    // The comb's portamento between Comb_Tuning steps, on Metallic_Ring's
+    // Glide. Authored default 265ms; main.mm shortens this while the resolved
+    // chord's pluck is arpeggiating, so the steps land in tune rather than
+    // sliding through them.
+    float comb_glide_ms = 265.f;  // ms, 0..2000
 
     // The pad's flanger, Hz -- how fast the LFO sweeps. Computed in main.mm as
     // a lerp between the panel's min/max sliders, driven by fit_level, so the
@@ -101,6 +111,17 @@ struct AudioParams {
     // already a decision made in code, not something a second curve should
     // remake.
     float flanger_rate = 0.1f;  // Hz, 0..5
+
+    // The pad's flanger, wet/dry mix on Mirror_Pad_Flanger's WetDryMix.
+    // Authored default 54; main.mm fades this to 0 while the resolved chord
+    // holds, so the pad clears as the chord settles.
+    float flanger_mix = 54.f;  // 0..100
+
+    // The FirePlucker's mute (PluckMute -> its Volume, 1 = -96 dB), with the
+    // fade Wwise runs it over. main.mm raises it while the harp plays so the
+    // two combs don't compete, and drops it as the roots start.
+    float pluck_mute = 0.f;         // 0..1
+    float pluck_mute_fade_ms = 500.f;
 };
 
 class WwiseAudio {
@@ -139,6 +160,17 @@ public:
     // re-registration needed.
     void postFirePlucker();
 
+    // The resolved window's strum: a one-shot per note (Play_Strum) at `hz`,
+    // via its own small pool of game objects rather than kRacineObj -- the
+    // strum's comb is instanced per voice (Strum_Ring, on the Strum sound),
+    // so each ringing note needs its own game object to hold its own
+    // Strum_Tuning, unlike the FirePlucker's single shared comb.
+    void postStrum(float hz, float velocity = 1.f);   // velocity 0..1 -> Strum_Velocity (loudness)
+    // Every strum voice, ringing or not: open its glide to `glide_ms` and
+    // retune it to `hz`, so whatever is sounding slides there together. The
+    // next postStrum on a voice puts its glide back to 0.
+    void dropStrums(float glide_ms, float hz);
+
     // Marker hits queued since the last call. Call every frame regardless of
     // phase: the callback keeps queuing while the bed plays, and leaving it
     // undrained would land a whole phase's worth of hits at once the next
@@ -172,6 +204,7 @@ private:
     std::string err_;
     AudioParams sent_;
     unsigned long posted_ = 0;
+    unsigned strum_next_ = 0;  // round-robins the strum voice pool, see postStrum()
 };
 
 }  // namespace mirror

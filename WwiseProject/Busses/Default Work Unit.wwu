@@ -164,6 +164,31 @@
 						</ObjectList>
 					</ObjectLists>
 				</Bus>
+				<Bus Name="StrumBus" ID="{FFAD8216-6FDC-424C-93B7-6109F5ED3444}">
+					<ReferenceList>
+						<Reference Name="AudioDevice" PluginName="System" CompanyID="0" PluginID="174" PluginType="7">
+							<ObjectRef Name="System" ID="{775F8540-BB93-46DD-B0A0-048AD29B7C80}" WorkUnitID="{059AB83F-9E8C-418F-825C-158C827AD634}"/>
+						</Reference>
+					</ReferenceList>
+					<ObjectLists>
+						<ObjectList Name="Effects">
+							<EffectSlot Name="" ID="{DFA85C5E-3450-498B-868D-640036DA1B74}" ShortID="825199483">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Convolution Reverb" CompanyID="0" PluginID="127" PluginType="3">
+										<ObjectRef Name="Colossal_Cathedral_Stereo" ID="{512A7648-07B6-486E-9D3E-8B7323C79E8C}" WorkUnitID="{9D68BE5F-8CA6-43E0-BCE2-C7D59F63E582}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+							<EffectSlot Name="" ID="{6A2EC83A-7C8F-41C4-9436-52F43BC1F9B4}" ShortID="278484958">
+								<ReferenceList>
+									<Reference Name="Effect" PluginName="Wwise Peak Limiter" CompanyID="0" PluginID="110" PluginType="3">
+										<ObjectRef Name="Output_Ceiling" ID="{A1F598EE-DF90-47C2-A3CE-647EC44FA23D}" WorkUnitID="{DF13E05C-D575-41F5-A34D-658BA1F0CD3D}"/>
+									</Reference>
+								</ReferenceList>
+							</EffectSlot>
+						</ObjectList>
+					</ObjectLists>
+				</Bus>
 			</ChildrenList>
 		</WorkUnit>
 	</Busses>

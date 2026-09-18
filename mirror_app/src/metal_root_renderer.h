@@ -179,6 +179,30 @@ public:
         bool  all          = false;  // every mask at once, rather than one
         bool  mask0        = true;   // the visitor's own mask (the live chain's
                                      // mask 0) may flash
+        // The glitch: on the flash, a share of the flashed mask's triangles
+        // get their vertex indices randomised, redrawn every frame
+        // (root_face.metal). Its envelope is a triangle wave, 0 -> 1 -> 0
+        // over glitchSeconds, run by the host (RootScene::stepFlash)
+        // alongside the light's own decay. glitchAmount is the share of
+        // triangles torn at the peak; of their corners, glitchNoiseShare
+        // (at the peak) are pushed off by up to glitchNoise world units,
+        // on the same wave. glitchSwap: at the peak the mask is dealt a
+        // different bank face (RootScene::swapFlashedFaces), so what the
+        // tear closes on is someone else; mask 0 (the visitor's live face)
+        // is never swapped.
+        bool  glitch           = false;
+        float glitchSeconds    = 0.6f;
+        float glitchAmount     = 0.3f;
+        float glitchNoise      = 0.f;
+        float glitchNoiseShare = 0.5f;
+        bool  glitchSwap       = false;
+        // Host-set every frame with pos/level: the wave's level this frame,
+        // the flashed masks' runs in the face mesh (first vertex, vertex
+        // count) and this frame's seed.
+        float glitchLevel  = 0.f;
+        int   glitchRun[ROOT_MAX_FLASH][2] = {};
+        int   glitchCount  = 0;
+        int   glitchSeed   = 0;
     };
     Flash flash;
     // Shading for the meshed leaves. Separate from FaceParams because a leaf is
@@ -320,6 +344,7 @@ public:
         float taaBlend       = 0.10f;  // the new frame's share; 1 = off in effect
         float taaJitter      = 1.0f;   // jitter amplitude, output pixels (1 = the pixel)
         float taaClip        = 1.25f;  // history clamp, neighbourhood std devs
+        float taaSharpen     = 0.3f;   // unsharp mask on the blend's output (RootPostU::sharpen)
 
         // --- lens ------------------------------------------------------------
         // Chromatic aberration, in pixels of channel separation at the image

@@ -141,6 +141,37 @@
 									</Reference>
 								</ReferenceList>
 							</RTPC>
+							<RTPC Name="" ID="{5137E443-60C4-4F45-A0CD-21A368D4868E}" ShortID="235223932">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="WetDryMix"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="FlangerMix" ID="{672C209E-67FA-45CC-8FD2-E520A93452E8}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{473022A2-798C-4680-BACB-FE2BF60C2B11}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>0</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>100</XPos>
+														<YPos>100</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
 						</ObjectList>
 					</ObjectLists>
 				</Effect>

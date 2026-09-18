@@ -1385,10 +1385,15 @@
 									</ReferenceList>
 									<ChildrenList>
 										<AudioFileSource Name="NHU05008080" ID="{440840C3-E7CC-4F49-97AC-B3D9F13A2925}">
+											<PropertyList>
+												<Property Name="OverrideWavLoop" Type="bool" Value="True"/>
+												<Property Name="TrimBegin" Type="Real64" Value="4.63146"/>
+												<Property Name="TrimEnd" Type="Real64" Value="112.9171"/>
+											</PropertyList>
 											<Language>SFX</Language>
 											<AudioFile>NHU05008080.wav</AudioFile>
 											<MediaIDList>
-												<MediaID ID="36978545"/>
+												<MediaID ID="265794693"/>
 											</MediaIDList>
 										</AudioFileSource>
 									</ChildrenList>
@@ -1489,6 +1494,37 @@
 																	<Point>
 																		<XPos>24</XPos>
 																		<YPos>2400</YPos>
+																		<Flags>37</Flags>
+																	</Point>
+																</PointList>
+															</Curve>
+														</Custom>
+													</Reference>
+												</ReferenceList>
+											</RTPC>
+											<RTPC Name="" ID="{524B82CC-903D-4AC9-B433-E0CB2EC1FF7E}" ShortID="820488701">
+												<PropertyList>
+													<Property Name="PropertyName" Type="string" Value="Volume"/>
+												</PropertyList>
+												<ReferenceList>
+													<Reference Name="ControlInput">
+														<ObjectRef Name="PluckMute" ID="{B3DF4250-F741-4A7D-BE2A-832F98514947}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+													</Reference>
+													<Reference Name="Curve">
+														<Custom>
+															<Curve Name="" ID="{7C8D29F6-36B0-4D73-A3AD-08EDC2A73F50}">
+																<PropertyList>
+																	<Property Name="Flags" Type="int32" Value="3"/>
+																</PropertyList>
+																<PointList>
+																	<Point>
+																		<XPos>0</XPos>
+																		<YPos>0</YPos>
+																		<Flags>5</Flags>
+																	</Point>
+																	<Point>
+																		<XPos>1</XPos>
+																		<YPos>-96</YPos>
 																		<Flags>37</Flags>
 																	</Point>
 																</PointList>
@@ -6506,6 +6542,96 @@
 										</BlendTrack>
 									</BlendTrackList>
 								</BlendContainer>
+								<Sound Name="Strum" ID="{77B63329-1DCE-4099-936F-AAA0257FD3F4}" ShortID="217995072">
+									<PropertyList>
+										<Property Name="OverrideEffect" Type="bool" Value="True"/>
+										<Property Name="OverrideOutput" Type="bool" Value="True"/>
+										<Property Name="UserAuxSendVolume0" Type="Real64">
+											<ValueList>
+												<Value>-12</Value>
+											</ValueList>
+										</Property>
+										<Property Name="Volume" Type="Real64">
+											<ValueList>
+												<Value>-5</Value>
+											</ValueList>
+										</Property>
+									</PropertyList>
+									<ReferenceList>
+										<Reference Name="Conversion">
+											<ObjectRef Name="Default Conversion Settings" ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}" WorkUnitID="{DB8B02E1-803B-4014-9350-4FA69AC3C862}"/>
+										</Reference>
+										<Reference Name="OutputBus">
+											<ObjectRef Name="StrumBus" ID="{FFAD8216-6FDC-424C-93B7-6109F5ED3444}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+										</Reference>
+										<Reference Name="UserAuxSend0">
+											<ObjectRef Name="Mirror_Verb" ID="{0BB50E19-4CE9-4784-B385-D54D488BC07D}" WorkUnitID="{2529ADEC-4896-444F-A149-D2621B74D725}"/>
+										</Reference>
+									</ReferenceList>
+									<ChildrenList>
+										<AudioFileSource Name="NHU05008080" ID="{9D674A09-006C-4648-90BB-238B17B4313E}">
+											<PropertyList>
+												<Property Name="FadeOutDuration" Type="Real64" Value="0.03"/>
+												<Property Name="OverrideWavLoop" Type="bool" Value="True"/>
+												<Property Name="TrimBegin" Type="Real64" Value="44.434"/>
+												<Property Name="TrimEnd" Type="Real64" Value="44.494"/>
+											</PropertyList>
+											<Language>SFX</Language>
+											<AudioFile>NHU05008080.wav</AudioFile>
+											<MediaIDList>
+												<MediaID ID="364664422"/>
+											</MediaIDList>
+										</AudioFileSource>
+									</ChildrenList>
+									<ObjectLists>
+										<ObjectList Name="Effects">
+											<EffectSlot Name="" ID="{A1FCBCE4-BC37-4BB7-B7A2-2895A116EDC5}" ShortID="371428514">
+												<ReferenceList>
+													<Reference Name="Effect" PluginName="Racine Comb" CompanyID="64" PluginID="23741" PluginType="3">
+														<ObjectRef Name="Strum_Ring" ID="{49896D20-1466-4EE4-A9FF-6661EBC083EF}" WorkUnitID="{12EC78BE-4E90-4DCF-B4FB-20A345EEF9E7}"/>
+													</Reference>
+												</ReferenceList>
+											</EffectSlot>
+										</ObjectList>
+										<ObjectList Name="RTPC">
+											<RTPC Name="" ID="{A2A6B3A7-D5D2-4196-B396-00130A103D64}" ShortID="581054575">
+												<PropertyList>
+													<Property Name="PropertyName" Type="string" Value="Volume"/>
+												</PropertyList>
+												<ReferenceList>
+													<Reference Name="ControlInput">
+														<ObjectRef Name="Strum_Velocity" ID="{F52962DF-072E-4924-988C-2931849F5977}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+													</Reference>
+													<Reference Name="Curve">
+														<Custom>
+															<Curve Name="" ID="{CF07DD26-22AB-4799-A454-EF5EFB37B12E}">
+																<PropertyList>
+																	<Property Name="Flags" Type="int32" Value="3"/>
+																</PropertyList>
+																<PointList>
+																	<Point>
+																		<XPos>0</XPos>
+																		<YPos>-30</YPos>
+																		<Flags>5</Flags>
+																		<SegmentShape>Log1</SegmentShape>
+																	</Point>
+																	<Point>
+																		<XPos>1</XPos>
+																		<YPos>0</YPos>
+																		<Flags>37</Flags>
+																	</Point>
+																</PointList>
+															</Curve>
+														</Custom>
+													</Reference>
+												</ReferenceList>
+											</RTPC>
+										</ObjectList>
+									</ObjectLists>
+									<ActiveSourceList>
+										<ActiveSource Name="NHU05008080" ID="{9D674A09-006C-4648-90BB-238B17B4313E}" Platform="Linked"/>
+									</ActiveSourceList>
+								</Sound>
 							</ChildrenList>
 							<ObjectLists>
 								<ObjectList Name="RTPC">
@@ -7409,6 +7535,7 @@
 										<Sound Name="Roots_Rumble" ID="{A7EBBD8E-C3C2-4D22-8C95-D792CCE97C3B}" ShortID="577959124">
 											<PropertyList>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
+												<Property Name="OverrideEffect" Type="bool" Value="True"/>
 												<Property Name="Volume" Type="Real64">
 													<ValueList>
 														<Value>-6</Value>
@@ -7428,7 +7555,7 @@
 													<Language>SFX</Language>
 													<AudioFile>NHU05008080.wav</AudioFile>
 													<MediaIDList>
-														<MediaID ID="265794693"/>
+														<MediaID ID="36978545"/>
 													</MediaIDList>
 												</AudioFileSource>
 											</ChildrenList>

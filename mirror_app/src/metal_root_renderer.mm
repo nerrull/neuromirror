@@ -1162,6 +1162,14 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         std::memcpy(ffu.flashPos, gu.flashPos, sizeof(ffu.flashPos));
         ffu.flashColor = gu.flashColor;
         ffu.flashCount = gu.flashCount;
+        const float gl = flash.glitch ? std::clamp(flash.glitchLevel, 0.f, 1.f) : 0.f;
+        ffu.glitchLevel = gl * flash.glitchAmount;
+        ffu.glitchNoise = gl * flash.glitchNoise;
+        ffu.glitchNoiseShare = gl * flash.glitchNoiseShare;
+        ffu.glitchCount = ffu.glitchLevel > 0.f ? std::min(std::max(flash.glitchCount, 0), ROOT_MAX_FLASH) : 0;
+        ffu.glitchSeed  = flash.glitchSeed;
+        for (int i = 0; i < ffu.glitchCount; ++i)
+            ffu.glitchRun[i] = (simd_int4){flash.glitchRun[i][0], flash.glitchRun[i][1], 0, 0};
         [ge setRenderPipelineState:facePipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];
@@ -1178,6 +1186,11 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         // appendDebugMarker -- so this reads the mask pass's own lighting
         // uniforms but never the mask's own lightPos.
         if (debugMarkerVertCount_ > 0 && debugMarkerBuf_) {
+            // Its own vertex numbering, so the glitch runs would land on it.
+            if (ffu.glitchCount > 0) {
+                ffu.glitchCount = 0;
+                [ge setVertexBytes:&ffu length:sizeof(ffu) atIndex:1];
+            }
             [ge setVertexBuffer:debugMarkerBuf_ offset:0 atIndex:0];
             [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
                     vertexCount:(NSUInteger)debugMarkerVertCount_];
@@ -1418,6 +1431,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     pu.srcTexel = taaOn ? (simd_float2){1.0f / (float)w_, 1.0f / (float)h_}
                         : (simd_float2){1.0f / (float)sw_, 1.0f / (float)sh_};
     pu.ssaa = taaOn ? 1 : builtSsaa_;
+    pu.sharpen = taaOn ? std::max(0.f, post.taaSharpen) : 0.f;
     pu.tonemap = post.tonemap ? 1 : 0;
     pu.bloomOn = bloomOn ? 1 : 0;
     pu.dofOn = post.dof ? 1 : 0;

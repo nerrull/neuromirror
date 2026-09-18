@@ -64,7 +64,7 @@
 				<GameParameter Name="Comb_Tuning" ID="{49CCED76-920F-4273-A76A-A89EFE75966D}">
 					<PropertyList>
 						<Property Name="InitialValue" Type="Real64" Value="220"/>
-						<Property Name="Max" Type="Real64" Value="2000"/>
+						<Property Name="Max" Type="Real64" Value="4000"/>
 						<Property Name="Min" Type="Real64" Value="20"/>
 					</PropertyList>
 				</GameParameter>
@@ -116,6 +116,42 @@
 						<Property Name="InitialValue" Type="Real64" Value="0"/>
 						<Property Name="Max" Type="Real64" Value="24"/>
 						<Property Name="Min" Type="Real64" Value="-24"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Comb_Glide" ID="{35BD01F5-47AD-4EE8-8BD6-758125B3E432}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="265"/>
+						<Property Name="Max" Type="Real64" Value="2000"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="FlangerMix" ID="{672C209E-67FA-45CC-8FD2-E520A93452E8}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="54"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Strum_Tuning" ID="{033E3DB3-1A1B-48B4-AF27-CA60A9DBB820}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="440"/>
+						<Property Name="Max" Type="Real64" Value="4000"/>
+						<Property Name="Min" Type="Real64" Value="20"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Strum_Velocity" ID="{F52962DF-072E-4924-988C-2931849F5977}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="1"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="Strum_Glide" ID="{7595FE19-4E39-4A97-A253-34CE0395401D}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="2000"/>
+					</PropertyList>
+				</GameParameter>
+				<GameParameter Name="PluckMute" ID="{B3DF4250-F741-4A7D-BE2A-832F98514947}">
+					<PropertyList>
+						<Property Name="InitialValue" Type="Real64" Value="0"/>
+						<Property Name="Max" Type="Real64" Value="1"/>
 					</PropertyList>
 				</GameParameter>
 			</ChildrenList>

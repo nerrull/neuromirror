@@ -35,7 +35,8 @@
 //
 // Everything is tuned from one note, drawn once per visitor: the pinned
 // pluck's centre (`pluck_center_note`, G5 by default) plus a random offset of
-// up to `pluck_offset_max_semitones` either way. The pluck rings exactly that
+// up to `pluck_offset_max_semitones` above it (never below -- the room sounds
+// wrong flat). The pluck rings exactly that
 // note through the whole idle wait, and the chord's root is that note
 // `chord_octave` octaves down -- so when Fitting begins the chord starts *on*
 // the note the room has been hearing, and the pluck does not move. From there
@@ -128,16 +129,16 @@ public:
         // the same pitch class.
         float pluck_center_note = 79.f;
 
-        // How many semitones, at most, the per-visitor draw can land from the
-        // centre -- e.g. 3 means uniformly anywhere from -3 to +3 semitones.
+        // How many semitones, at most, the per-visitor draw can land above
+        // the centre -- e.g. 3 means uniformly anywhere from 0 to +3 semitones.
         // Drawn at newVisitor(), held for the whole sitting.
         int pluck_offset_max_semitones = 3;
 
         // How far above the visitor's note, semitones, the last checkpoint
         // lifts the pluck -- the top of its climb, before the snap to a chord
         // tone (see update()). 16 with `chord_octave` -1 is exactly the
-        // resolved chord's top voice. Wwise's Comb_Tuning stops at 2000 Hz
-        // (MIDI ~99): a G5 centre, +5 offset and 16 up brushes that.
+        // resolved chord's top voice. Wwise's Comb_Tuning stops at 4000 Hz
+        // (MIDI ~111), an octave clear of a G5 centre, +5 offset and 16 up.
         float pluck_climb = 16.f;
 
         // Wander: a slow, continuous drift of the comb Hz while the pluck is

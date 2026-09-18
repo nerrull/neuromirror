@@ -19,6 +19,7 @@
     #define RS_F3X3 float3x3
     #define RS_F4X4 float4x4
     #define RS_INT  int
+    #define RS_I4   int4
 #else
     #include <simd/simd.h>
     #define RS_F2   simd_float2
@@ -26,6 +27,7 @@
     #define RS_F3X3 simd_float3x3
     #define RS_F4X4 simd_float4x4
     #define RS_INT  int32_t
+    #define RS_I4   simd_int4
 #endif
 
 #define ROOT_MAX_GROUPS 8
@@ -184,6 +186,19 @@ struct RootFaceU {
     RS_F4   flashColor;
     RS_INT  flashCount;
     RS_INT  _padFl0, _padFl1, _padFl2;
+    // The flash's glitch (MetalRootRenderer::Flash::glitch): the flashed
+    // masks' runs in the face mesh (x = first vertex, y = vertex count),
+    // and the share of each run's triangles whose vertex indices are
+    // randomised this frame. Of those triangles' corners, glitchNoiseShare
+    // are pushed off by up to glitchNoise (world units). Redrawn whenever
+    // glitchSeed changes; glitchCount 0 = off.
+    RS_I4   glitchRun[ROOT_MAX_FLASH];
+    float   glitchLevel;
+    float   glitchNoise;
+    float   glitchNoiseShare;
+    RS_INT  glitchSeed;
+    RS_INT  glitchCount;
+    RS_INT  _padGl0, _padGl1, _padGl2;
 };
 
 // Cloth mid-geometry pass (root_cloth.metal): the pond -> face draped sheet,
@@ -349,6 +364,11 @@ struct RootPostU {
     float   distortK1;     // radial distortion: <0 barrel, >0 pincushion
     float   distortK2;     // fourth-order term, for the corners
     float   distortZoom;   // re-crop so the distorted corners stay in frame
+    // Unsharp mask on the scene fetch, applied only when the scene arrives
+    // already at output size (ssaa 1 -- in practice the TAA's output): the
+    // temporal blend is a low-pass, and this gives back the edge it takes.
+    // 0 = off; the amount is the cross-neighbourhood difference added back.
+    float   sharpen;
 };
 
 // Temporal anti-aliasing (root_taa.metal). The scene's supersample grid is

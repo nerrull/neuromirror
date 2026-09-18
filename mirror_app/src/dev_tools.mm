@@ -147,6 +147,17 @@ int rootshot(const char* path, float az, float el, float rad, int mode, bool ove
     // ROOTSHOT_FLASH=1: fire the pluck flash (RootScene::triggerFlash) on the
     // last frame, to see it without a Wwise marker.
     const bool flash = getenv("ROOTSHOT_FLASH") && atoi(getenv("ROOTSHOT_FLASH")) != 0;
+    // ROOTSHOT_GLITCH=1: with the flash, its mask glitch too (Flash::glitch).
+    // TAA off for it: three frames of history would blend one glitched
+    // frame away.
+    if (flash) roots.renderer().post.taa = false;
+    if (getenv("ROOTSHOT_GLITCH") && atoi(getenv("ROOTSHOT_GLITCH")) != 0) {
+        auto& F = roots.renderer().flash;
+        F.glitch = true;
+        F.all = true;                  // whichever mask the camera has
+        F.glitchSeconds = 2.0f / 60.f; // the wave's peak on the one frame after the trigger
+        F.glitchNoise = 0.3f;
+    }
     id<MTLTexture> tex = nil;
     for (int i = 0; i < 3; ++i) {
         @autoreleasepool {
@@ -493,6 +504,7 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "taaBlend")   P.taaBlend = v;
         else if (k == "taaJitter")  P.taaJitter = v;
         else if (k == "taaClip")    P.taaClip = v;
+        else if (k == "taaSharpen") P.taaSharpen = v;
         else if (k == "minPx")      roots.renderer().minRadiusPx = v;
         else if (k == "ao")         A.enabled = v != 0.f;
         else if (k == "aoInt")      A.intensity = v;
@@ -2019,20 +2031,18 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
         }
     }
 
-    // CLOTHSHOT_TIMING="hold,press,settle,release,fall" -- the press schedule is
-    // a look decision that now has panel sliders, and tuning it against stills
-    // needs the same numbers reachable from here.
+    // CLOTHSHOT_TIMING="hold,release,fall" -- the timeline is a look decision
+    // that now has panel sliders, and tuning it against stills needs the same
+    // numbers reachable from here.
     if (const char* t = getenv("CLOTHSHOT_TIMING")) {
-        float v[5] = {roots.clothTiming.hold, roots.clothTiming.press,
-                      roots.clothTiming.settle, roots.clothTiming.release,
+        float v[3] = {roots.clothTiming.hold, roots.clothTiming.release,
                       roots.clothTiming.fall};
-        int n = sscanf(t, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+        int n = sscanf(t, "%f,%f,%f", &v[0], &v[1], &v[2]);
         if (n > 0) {
-            roots.clothTiming.hold = v[0]; roots.clothTiming.press = v[1];
-            roots.clothTiming.settle = v[2]; roots.clothTiming.release = v[3];
-            roots.clothTiming.fall = v[4];
-            printf("clothshot: timing hold %.2f press %.2f settle %.2f release %.2f fall %.2f\n",
-                   v[0], v[1], v[2], v[3], v[4]);
+            roots.clothTiming.hold = v[0]; roots.clothTiming.release = v[1];
+            roots.clothTiming.fall = v[2];
+            printf("clothshot: timing hold %.2f release %.2f fall %.2f\n",
+                   v[0], v[1], v[2]);
         }
     }
 
@@ -2239,9 +2249,9 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
                        roots.clothClearance(), tot ? double(on) / double(tot) : 0.0);
             }
             if ((f % 20) == 0)
-                printf("clothshot: %3d/%d  %-7s press %.2f release %.2f clearance %.3f "
+                printf("clothshot: %3d/%d  %-7s release %.2f clearance %.3f "
                        "cam r=%.2f t=(%.2f,%.2f,%.2f)\n",
-                       f, frames, roots.clothPhaseName(), roots.clothPress(),
+                       f, frames, roots.clothPhaseName(),
                        roots.clothRelease(), roots.clothClearance(),
                        roots.radius, roots.target[0], roots.target[1], roots.target[2]);
         }
@@ -2345,7 +2355,12 @@ int seqshot(const char* prefix, int W, int H,
     // to ffmpeg at the run's own frame rate (30, or 60 with SEQSHOT_REALTIME=1)
     // -- the moving picture the stills cannot show, which is where the
     // anti-aliasing is judged.
+    // SEQSHOT_VIDEO_FROM=grow starts the recording at Grow instead, for
+    // watching the growth itself (the finished hops carrying on slowly
+    // behind the hop in flight -- SimParams::oldHopsAlive).
     const char* videoPath = getenv("SEQSHOT_VIDEO");
+    const bool videoFromGrow = getenv("SEQSHOT_VIDEO_FROM")
+        && std::string(getenv("SEQSHOT_VIDEO_FROM")) == "grow";
     FILE* videoPipe = nullptr;
     if (!realtime) {
         sp.face_seconds = 0.1f; sp.face_hold_after_cloth_seconds = 0.f;
@@ -2586,7 +2601,8 @@ int seqshot(const char* prefix, int W, int H,
     for (; frame < 6000; ++frame) {
         clock += dt;
         if (videoPipe && (seq.stage() == RootSequence::Stage::Orbit ||
-                          seq.stage() == RootSequence::Stage::Outro)) {
+                          seq.stage() == RootSequence::Stage::Outro ||
+                          (videoFromGrow && seq.stage() != RootSequence::Stage::Face))) {
             @autoreleasepool {
                 id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
                 id<MTLTexture> tex = roots.render(cb);

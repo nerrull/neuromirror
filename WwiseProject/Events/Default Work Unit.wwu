@@ -235,6 +235,17 @@
 								</Action>
 							</ChildrenList>
 						</Event>
+						<Event Name="Play_Strum" ID="{8BFA6112-43FD-4255-BC91-7870985D7D01}">
+							<ChildrenList>
+								<Action Name="Play_Strum" ID="{A1EFADD6-5DDD-4D59-A455-F905A3742BB2}" ShortID="1023464999">
+									<ReferenceList>
+										<Reference Name="Target">
+											<ObjectRef Name="Strum" ID="{77B63329-1DCE-4099-936F-AAA0257FD3F4}" WorkUnitID="{581E3CA9-46F7-4CDD-8380-8F862BEAEB5F}"/>
+										</Reference>
+									</ReferenceList>
+								</Action>
+							</ChildrenList>
+						</Event>
 					</ChildrenList>
 				</Folder>
 			</ChildrenList>

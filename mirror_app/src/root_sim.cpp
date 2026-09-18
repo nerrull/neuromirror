@@ -177,6 +177,13 @@ struct FrozenHop {
     std::vector<Vector3d> nodes;   // grow-global (offset applied)
     std::vector<Vector2i> segs;
     std::vector<double>   radii;
+    // The hop's own system, kept alive so it goes on growing for a hop
+    // or two (SimParams::oldHopsAlive) after the relay has moved on. Its
+    // dwell tropism and geometry stay as finalizeHop left them; dropped
+    // once it leaves the window, since nothing moves it after that.
+    std::shared_ptr<RootSystem> rs;
+    Vector3d offset{0, 0, 0};
+    double rate = 1.0;   // share of the live step, eased -- see stepOld
 };
 
 struct RootSim::Impl {
@@ -638,14 +645,42 @@ struct RootSim::Impl {
         liveRadii = radii;
     }
 
-    void finalizeHop() {
-        SegmentAnalyser ana(*rs);
-        auto radii = ana.getParameter("radius");
-        FrozenHop fh;
+    static void snapshotFrozen(FrozenHop& fh) {
+        SegmentAnalyser ana(*fh.rs);
+        fh.radii = ana.getParameter("radius");
+        fh.nodes.clear();
         fh.nodes.reserve(ana.nodes.size());
-        for (const auto& n : ana.nodes) fh.nodes.push_back(n.plus(offset));
+        for (const auto& n : ana.nodes) fh.nodes.push_back(n.plus(fh.offset));
         fh.segs = ana.segments;
-        fh.radii = radii;
+    }
+
+    // The finished hops' share of a step. Each hop's rate slews toward
+    // its target -- oldHopsRate inside the window of the last
+    // oldHopsAlive hops, 0 outside it -- with a time constant of
+    // oldHopsEaseDays, starting from the live pace (1) the frame it
+    // finishes. A hop whose rate has eased to nothing lets its system go.
+    void stepOld(double dt) {
+        const int alive = std::max(0, p.oldHopsAlive);
+        const double share = std::clamp((double)p.oldHopsRate, 0.0, 1.0);
+        const double ease = std::max(1e-3, (double)p.oldHopsEaseDays);
+        const int n = (int)frozen.size();
+        for (int k = 0; k < n; ++k) {
+            auto& fh = frozen[size_t(k)];
+            if (!fh.rs) continue;
+            const double target = k >= n - alive ? share : 0.0;
+            fh.rate += (target - fh.rate) * std::min(1.0, dt / ease);
+            if (target <= 0.0 && fh.rate < 0.01) { fh.rs.reset(); continue; }
+            if (fh.rate <= 0.0) continue;
+            fh.rs->simulate(dt * fh.rate, false);
+            snapshotFrozen(fh);
+        }
+    }
+
+    void finalizeHop() {
+        FrozenHop fh;
+        fh.rs = rs;
+        fh.offset = offset;
+        snapshotFrozen(fh);
         frozen.push_back(std::move(fh));
         report.days = (float)day;
         report.dwellDays = reached ? (float)(day - reachedDay) : 0.f;
@@ -661,6 +696,7 @@ struct RootSim::Impl {
     void step() {
         if (doneFlag || !ok) return;
         double dt = std::max(0.02, (double)p.growthDt);
+        stepOld(dt);
         rs->simulate(dt, false);
         day += dt;
 

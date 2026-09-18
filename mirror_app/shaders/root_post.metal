@@ -66,7 +66,23 @@ static constant float2 kDisk[DOF_TAPS] = {
 // channel at three slightly different magnifications.
 static float4 resolveScene4(texture2d<float> tex, sampler smp, float2 uv,
                             constant RootPostU& U) {
-    if (U.ssaa <= 1) return tex.sample(smp, uv);
+    if (U.ssaa <= 1) {
+        const float4 c = tex.sample(smp, uv);
+        if (U.sharpen <= 0.0) return c;
+        // Unsharp mask against the 4-neighbour cross: what the TAA's
+        // accumulation blurred away, added back. Clamped to the local
+        // range so it cannot ring past the neighbours' values.
+        const float2 t = U.srcTexel;
+        const float3 n0 = tex.sample(smp, uv + float2( t.x, 0.0)).rgb;
+        const float3 n1 = tex.sample(smp, uv + float2(-t.x, 0.0)).rgb;
+        const float3 n2 = tex.sample(smp, uv + float2(0.0,  t.y)).rgb;
+        const float3 n3 = tex.sample(smp, uv + float2(0.0, -t.y)).rgb;
+        const float3 blur = 0.25 * (n0 + n1 + n2 + n3);
+        const float3 lo = min(c.rgb, min(min(n0, n1), min(n2, n3)));
+        const float3 hi = max(c.rgb, max(max(n0, n1), max(n2, n3)));
+        const float3 sharp = clamp(c.rgb + U.sharpen * (c.rgb - blur), lo, hi);
+        return float4(sharp, c.a);
+    }
     const float inv = 1.0 / float(U.ssaa);
     float4 acc = float4(0.0);
     for (int y = 0; y < 4; ++y) {

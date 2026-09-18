@@ -88,8 +88,7 @@ void Chord::reset() {
 
 void Chord::newVisitor() {
     pluck_offset_semitones_ = cfg_.pluck_offset_max_semitones > 0
-        ? std::uniform_int_distribution<int>(-cfg_.pluck_offset_max_semitones,
-                                              cfg_.pluck_offset_max_semitones)(rng_)
+        ? std::uniform_int_distribution<int>(0, cfg_.pluck_offset_max_semitones)(rng_)
         : 0;
 }
 

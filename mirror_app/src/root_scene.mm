@@ -1140,6 +1140,8 @@ bool RootScene::flashAllowed(const FaceBlock& fb) const {
 void RootScene::triggerFlash(float strength) {
     if (!rr_ || faceBlocks_.empty()) return;
     strength = std::clamp(strength, 0.f, 1.f);
+    // The glitch wave starts over on every pluck, the swap with it.
+    flashGlitchT_ = 0.0; flashFrame_ = 0; flashSwapped_ = false;
     if (rr_->flash.all) {
         flashStructure_ = -3; flashSlot_ = -1;
         // Same lights either way, so a soft pluck landing on the tail of a
@@ -1147,6 +1149,14 @@ void RootScene::triggerFlash(float strength) {
         flashLevel_ = std::max(flashLevel_, strength);
         return;
     }
+    // A mask that glitched within the refractory sits this one out.
+    const double refractory = rr_->flash.glitch ? 2.0 * rr_->flash.glitchSeconds : 0.0;
+    auto eligible = [&](const FaceBlock& fb) {
+        if (!flashAllowed(fb)) return false;
+        if (refractory <= 0.0) return true;
+        const auto it = flashLastAt_.find({fb.structure, fb.slot});
+        return it == flashLastAt_.end() || flashNow_ - it->second >= refractory;
+    };
     int pick = -1;
     if (rr_->flash.nearest) {
         // eye = target + radius * (cosEl sinAz, sinEl, cosEl cosAz), the
@@ -1157,7 +1167,7 @@ void RootScene::triggerFlash(float strength) {
                               target[2] + radius * ce * std::cos(azimuth)};
         float best = 1e30f;
         for (int i = 0; i < (int)faceBlocks_.size(); ++i) {
-            if (!flashAllowed(faceBlocks_[size_t(i)])) continue;
+            if (!eligible(faceBlocks_[size_t(i)])) continue;
             const auto& m = faceBlocks_[size_t(i)].mask;
             const float d[3] = {m.pos[0] - eye[0], m.pos[1] - eye[1], m.pos[2] - eye[2]};
             const float d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
@@ -1166,13 +1176,14 @@ void RootScene::triggerFlash(float strength) {
     } else {
         std::vector<int> ok;
         for (int i = 0; i < (int)faceBlocks_.size(); ++i)
-            if (flashAllowed(faceBlocks_[size_t(i)])) ok.push_back(i);
+            if (eligible(faceBlocks_[size_t(i)])) ok.push_back(i);
         if (!ok.empty()) pick = ok[size_t(std::rand()) % ok.size()];
     }
     if (pick < 0) return;
     flashStructure_ = faceBlocks_[size_t(pick)].structure;
     flashSlot_      = faceBlocks_[size_t(pick)].slot;
     flashLevel_     = strength;
+    flashLastAt_[{flashStructure_, flashSlot_}] = flashNow_;
 }
 
 // The flash's envelope and positions, once a frame. Positions are looked
@@ -1180,12 +1191,35 @@ void RootScene::triggerFlash(float strength) {
 // face mesh (a re-placed structure, a rebuildFace) moves the light with it.
 void RootScene::stepFlash(double dt) {
     if (!rr_) return;
+    if (dt > 0.0) flashNow_ += dt;
     if (flashLevel_ > 0.f && dt > 0.0)
         flashLevel_ *= std::exp(-(float)dt / std::max(rr_->flash.decaySeconds, 1e-3f));
-    if (flashLevel_ < 1e-3f) { flashLevel_ = 0.f; flashStructure_ = -2; }
+    if (flashLevel_ < 1e-3f) flashLevel_ = 0.f;
+
+    // The glitch's triangle wave, 0 -> 1 -> 0 over glitchSeconds, on its
+    // own clock beside the light's decay. The swap lands on the peak, so
+    // the tear closes on the new face.
+    float glitchLevel = 0.f;
+    if (rr_->flash.glitch && flashGlitchT_ >= 0.0) {
+        const double T = std::max((double)rr_->flash.glitchSeconds, 1e-3);
+        if (dt > 0.0) { flashGlitchT_ += dt; ++flashFrame_; }
+        const double p = flashGlitchT_ / T;
+        if (p >= 0.5 && !flashSwapped_) {
+            flashSwapped_ = true;
+            if (rr_->flash.glitchSwap) swapFlashedFaces();
+        }
+        if (p >= 1.0) flashGlitchT_ = -1.0;
+        else glitchLevel = (float)(1.0 - std::fabs(2.0 * p - 1.0));
+    } else {
+        flashGlitchT_ = -1.0;
+    }
+    if (flashLevel_ <= 0.f && flashGlitchT_ < 0.0) { flashStructure_ = -2; flashFrame_ = 0; }
     rr_->flash.level = flashLevel_;
     rr_->flash.count = 0;
-    if (flashLevel_ <= 0.f) return;
+    rr_->flash.glitchLevel = glitchLevel;
+    rr_->flash.glitchCount = 0;
+    rr_->flash.glitchSeed = flashFrame_;
+    if (flashLevel_ <= 0.f && glitchLevel <= 0.f) return;
     for (const auto& fb : faceBlocks_) {
         const bool mine = flashStructure_ == -3 ? flashAllowed(fb)
                         : (fb.structure == flashStructure_ && fb.slot == flashSlot_);
@@ -1196,8 +1230,48 @@ void RootScene::stepFlash(double dt) {
         const float back = fb.mask.rDepth * rr_->flash.depth;
         float* out = rr_->flash.pos[rr_->flash.count++];
         for (int c = 0; c < 3; ++c) out[c] = fb.mask.pos[c] - fb.mask.normal[c] * back;
+        // The same mask's run in the face mesh, in vertices, for the glitch.
+        int* run = rr_->flash.glitchRun[rr_->flash.glitchCount++];
+        run[0] = (int)(fb.offset / (size_t)MetalRootRenderer::kFaceFloats);
+        run[1] = (int)(fb.count  / (size_t)MetalRootRenderer::kFaceFloats);
     }
-    if (rr_->flash.count == 0) { flashLevel_ = 0.f; rr_->flash.level = 0.f; }   // its mask is gone
+    if (rr_->flash.count == 0) {   // its mask is gone
+        flashLevel_ = 0.f; rr_->flash.level = 0.f;
+        flashGlitchT_ = -1.0; rr_->flash.glitchLevel = 0.f; rr_->flash.glitchCount = 0;
+    }
+}
+
+// The chain's slots and the hood's captureIdx are what faceFor reads, so
+// a swap is a new bank index there and one re-emit. Mask 0 of the chain
+// has no slot (it is the live face) and is left alone.
+void RootScene::swapFlashedFaces() {
+    std::vector<int> valid;
+    for (int i = 0; i < (int)bankFaces_.size(); ++i)
+        if (!bankFaces_[size_t(i)].verts.empty() && !bankFaces_[size_t(i)].tris.empty())
+            valid.push_back(i);
+    if (valid.size() < 2) return;
+    bool changed = false;
+    auto swapOne = [&](int structure, int slot) {
+        int* ref = nullptr;
+        if (structure < 0) {
+            if (slot > 0 && slot < (int)chainFaces_.size()) ref = &chainFaces_[size_t(slot)];
+        } else if (structure < (int)structureFaces_.size()) {
+            auto& idxs = structureFaces_[size_t(structure)].captureIdx;
+            if (slot >= 0 && slot < (int)idxs.size()) ref = &idxs[size_t(slot)];
+        }
+        if (!ref) return;
+        int pick = *ref;
+        while (pick == *ref) pick = valid[size_t(std::rand()) % valid.size()];
+        *ref = pick;
+        changed = true;
+    };
+    if (flashStructure_ == -3) {
+        for (const auto& fb : faceBlocks_)
+            if (flashAllowed(fb)) swapOne(fb.structure, fb.slot);
+    } else if (flashStructure_ >= -1) {
+        swapOne(flashStructure_, flashSlot_);
+    }
+    if (changed) uploadFaceFromMasks();
 }
 
 // See root_scene.h's debugSpawnMarkers. Every planned mask gets a mouth
@@ -1311,8 +1385,7 @@ void RootScene::skipCloth() {
     // Parked past the end of the timeline rather than at zero, so clothDone()
     // agrees with clothActive_ -- the phase gate in main.mm reads clothDone(),
     // and a scene that never had a film has certainly finished playing one.
-    clothT_ = double(clothTiming.hold + clothTiming.press + clothTiming.settle +
-                     clothTiming.release + clothTiming.fall) + 1.0;
+    clothT_ = double(clothTiming.hold + clothTiming.release + clothTiming.fall) + 1.0;
     clothActive_ = false;
     clothPressOffset_ = 0.f;
     clothExtentFrozen_ = false;
@@ -1334,12 +1407,8 @@ void RootScene::restartCloth() {
     measureClothFaceDepth();
 }
 
-float RootScene::clothPress() const {
-    return std::clamp((float(clothT_) - clothTiming.hold) / std::max(1e-3f, clothTiming.press), 0.f, 1.f);
-}
 float RootScene::clothRelease() const {
-    const float t0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
-    return std::clamp((float(clothT_) - t0) / std::max(1e-3f, clothTiming.release), 0.f, 1.f);
+    return std::clamp((float(clothT_) - clothTiming.hold) / std::max(1e-3f, clothTiming.release), 0.f, 1.f);
 }
 // When the film may stop being drawn.
 //
@@ -1366,23 +1435,20 @@ bool RootScene::clothRetired() const {
     // The safety net, for a sheet that somehow never recedes -- a collider that
     // traps it, a gravity of zero -- so the film cannot outlive the visit.
     // Deliberately far past anything the physics needs.
-    const float ceiling = clothTiming.hold + clothTiming.press + clothTiming.settle +
-                          clothTiming.release + clothTiming.fall * kClothFallCeiling;
+    const float ceiling = clothTiming.hold + clothTiming.release +
+                          clothTiming.fall * kClothFallCeiling;
     return float(clothT_) > ceiling;
 }
 
 bool RootScene::clothDone() const {
-    return float(clothT_) > clothTiming.hold + clothTiming.press + clothTiming.settle +
-                            clothTiming.release + clothTiming.fall;
+    return float(clothT_) > clothTiming.hold + clothTiming.release + clothTiming.fall;
 }
 const char* RootScene::clothPhaseName() const {
     const float t = float(clothT_);
     if (t < clothTiming.hold) return "hold";
-    if (t < clothTiming.hold + clothTiming.press) return "press";
-    if (t < clothTiming.hold + clothTiming.press + clothTiming.settle) return "settle";
-    if (t < clothTiming.hold + clothTiming.press + clothTiming.settle + clothTiming.release)
-        return "release";
-    return "fall";
+    if (t < clothTiming.hold + clothTiming.release) return "release";
+    if (t < clothTiming.hold + clothTiming.release + clothTiming.fall) return "fall";
+    return "done";
 }
 
 // The anchor mask's frame, for this frame -- read from the sim's planned
@@ -1786,16 +1852,17 @@ void RootScene::advanceCloth(double dt) {
     ensureClothSheet();
     clothT_ += dt;
 
-    // The press: the anchor mask travels from fully retracted behind the
-    // sheet to its own natural resting placement (offset 0) -- see
-    // uploadFaceFromMasks' anchor special-case. Unlike TransitionScene, which
-    // pressed the mask *proud* of the sheet plane by a tunable amount and
-    // held it there through settle, this simplifies to "arrives exactly where
-    // it already belongs": the anchor's resting position is the one
-    // RootScene's own cavity placement (faceRecess) already computes, so
-    // there is no second resting depth to keep in sync with it. Flagged here
-    // as a deliberate simplification against the original port.
-    const float pe = smoothstep01(clothPress());
+    // No press any more: the mask just sits retracted behind the sheet for
+    // the whole hold and release, then eases forward to its own natural
+    // resting placement (offset 0) -- see uploadFaceFromMasks' anchor
+    // special-case -- over the fall, as the film drapes clear of it. Unlike
+    // TransitionScene, which pressed the mask *proud* of the sheet plane by a
+    // tunable amount and held it there through a settle, this never goes
+    // proud at all: the anchor's resting position is the one RootScene's own
+    // cavity placement (faceRecess) already computes, so there is no second
+    // resting depth to keep in sync with it and nothing tenting the film
+    // before it lets go. Flagged here as a deliberate simplification against
+    // the original port.
     const float scale = faceScale * std::max(0.05f, clothAnchorFU_);
     // Where the press starts: far enough back that the mask's own frontmost
     // point is clear behind the sheet's rest plane, and no further. Measured
@@ -1812,12 +1879,14 @@ void RootScene::advanceCloth(double dt) {
     // not read as a press at all; it reads as the film vanishing the moment it
     // is touched.
     const float retract = std::max(0.f, restFront + 0.05f * scale);
-    // ...and where it ends: proud of the plane, so the film is actually tented
-    // over a face rather than grazed by one. Held through the settle, unwound
-    // over the release, so the mask is back at exactly its cavity placement --
-    // offset 0, the one resting depth -- by the time the film has left it.
-    const float proud = clothPressProud * scale;
-    clothPressOffset_ = retract * (1.f - pe) - proud * pe * (1.f - smoothstep01(clothRelease()));
+    // Held at full retraction through the hold and the release -- the mask
+    // stays clear of the sheet the whole time the pins are up or letting go
+    // -- then eased to offset 0 (its one resting depth) over the fall, in
+    // step with the film draping off it.
+    const float fallT = std::clamp(
+        (float(clothT_) - clothTiming.hold - clothTiming.release) / std::max(1e-3f, clothTiming.fall),
+        0.f, 1.f);
+    clothPressOffset_ = retract * (1.f - smoothstep01(fallT));
 
     rasteriseClothField();
     cloth_.collider = &clothField_;
@@ -1858,7 +1927,7 @@ void RootScene::advanceCloth(double dt) {
     // Flagged as a simplification -- the guarantee (a bounded schedule to
     // clear) still holds, only the "reads as a continuation of the mask's own
     // asymmetry" nuance is lost.
-    const float relT0 = clothTiming.hold + clothTiming.press + clothTiming.settle;
+    const float relT0 = clothTiming.hold;
     const float relElapsed = float(clothT_) - relT0;
     const float sideRamp = smoothstep01((relElapsed - sideForceDelay) / 1.0f);
     if (sideRamp > 0.f) grav.x += sideForceMag * sideRamp * sizeK;

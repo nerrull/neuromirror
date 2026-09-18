@@ -19,6 +19,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <map>
 #include <vector>
 
 class MetalContext;
@@ -435,8 +436,6 @@ public:
     // root_scene.mm's advanceCloth/rasteriseClothField/packClothMesh.
     struct ClothTiming {
         float hold    = 0.5f;   // flat film, nothing happening
-        float press   = 1.6f;   // the mask advancing through the sheet plane
-        float settle  = 8.0f;   // fully through, the fabric taut over it
         float release = 0.7f;   // pins letting go, corners first
         float fall    = 1.8f;   // draping off and away
     };
@@ -469,19 +468,6 @@ public:
     // clamps to the film's edge pixels, and a large overhang is a wide smeared
     // border rather than more pond.
     float clothOversize = 1.08f;
-    // How far the anchor mask comes *proud* of the sheet's rest plane at the
-    // end of the press, in the anchor's local units, as a fraction of its own
-    // placed half-width.
-    //
-    // The mask's resting cavity placement leaves its frontmost point barely
-    // through that plane (a tenth of a unit on a face nearly four across), so
-    // pressing only as far as "where it already belongs" tents the film by
-    // almost nothing and the face never reads through it. This is a transient
-    // offset on the same single resting placement -- not a second resting
-    // depth -- so it costs nothing to keep in sync: it ramps in over the press,
-    // holds through the settle, and unwinds over the release as the mask
-    // retreats to exactly its cavity placement and the film slides off.
-    float clothPressProud = 0.22f;
     float clothGravityBack = 6.0f;   // along -normal, behind the mask
     float clothGravityDown = 0.0f;   // along -bitangent (world down, for the anchor pose)
     float clothFriction = 0.07f;
@@ -499,15 +485,15 @@ public:
     // which hands it straight to the renderer's cloth pass.
     void setPondTexture(id<MTLTexture> pond) { pondTex_ = pond; }
 
-    // Begin the hold->press->settle->release->fall timeline from t=0, with a
-    // fresh, fully-pinned flat sheet -- the RootScene analogue of
+    // Begin the hold->release->fall timeline from t=0, with a fresh,
+    // fully-pinned flat sheet -- the RootScene analogue of
     // TransitionScene::restart(). Call once, on the phase edge that used to
     // call trans.restart().
     void restartCloth();
     // Retire the cloth without playing it: the mask is simply already
     // uncovered. This is what entering Roots directly has to do -- the
     // operator jumping straight to the root scene is asking for the state
-    // *after* the press, not for the press again -- and it is also the honest
+    // *after* the release, not for it again -- and it is also the honest
     // way to express "there is no film here", rather than leaving a sheet
     // active and relying on nothing ever drawing it.
     void skipCloth();
@@ -529,7 +515,6 @@ public:
     // frame and starts being an object in a moving world.
     bool  clothPinned() const { return clothActive_ && clothRelease() <= 0.f; }
     double clothClock() const { return clothT_; }
-    float clothPress() const;      // 0..1, how far the mask has come through
     float clothRelease() const;    // 0..1, how far the release front has run
     bool  clothDone() const;      // the authored schedule has run out
     bool  clothRetired() const;   // ...and the film has actually left -- see the .mm
@@ -837,8 +822,24 @@ private:
     // and its envelope, decayed in advance().
     int   flashStructure_ = -2, flashSlot_ = -1;
     float flashLevel_ = 0.f;
+    // The glitch's own clock (seconds since the trigger; < 0 = not
+    // running), its frame count for the seed, and whether this wave's
+    // swap has happened.
+    double flashGlitchT_ = -1.0;
+    int   flashFrame_ = 0;
+    bool  flashSwapped_ = false;
+    // The glitch's refractory: when each mask (structure, slot) was last
+    // picked, on the flash's own running clock, so triggerFlash can pass
+    // over a mask that glitched within 2 x glitchSeconds and take the
+    // next one (nearest or random, per flash.nearest).
+    double flashNow_ = 0.0;
+    std::map<std::pair<int, int>, double> flashLastAt_;
     void stepFlash(double dt);
     bool flashAllowed(const FaceBlock& fb) const;
+    // flash.glitchSwap: deal the flashed mask(s) a different bank face and
+    // re-emit. A full uploadFaceFromMasks, since a different face is a
+    // different triangle count and patchBankFaces cannot resize a run.
+    void swapFlashedFaces();
     void patchBankFaces();
     int bankIndexFor(int structure, int slot) const;
     // Which bank face each planned mask draws; see chainFaces().
