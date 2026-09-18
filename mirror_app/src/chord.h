@@ -141,6 +141,16 @@ public:
         // (MIDI ~111), an octave clear of a G5 centre, +5 offset and 16 up.
         float pluck_climb = 16.f;
 
+        // The pluck's register, octaves, while it is pinned (fit at 0: the
+        // idle wait) and while it is climbing (fit above 0: the fitting).
+        // A shift of the comb alone -- the visitor's note, the chord's root
+        // and `Key` stay where they are, and the climb's snap to a chord
+        // tone is taken before the shift, so it still lands on one. Wwise's
+        // Comb_Tuning stops at 4000 Hz, so +1 is the most the G5 centre
+        // clears with the climb on top of it.
+        int pluck_idle_octave = 0;
+        int pluck_fit_octave = 0;
+
         // Wander: a slow, continuous drift of the comb Hz while the pluck is
         // pinned (fit at 0), gone the moment the fit starts moving it. An
         // LFO on the comb's own Frequency in Wwise would have been simpler,

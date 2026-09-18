@@ -176,7 +176,7 @@ void Chord::update(float fit, float movement, float dt) {
     // at the Transition handoff is not a note at all -- it happens outside
     // Chord (see main.mm).
     if (fit <= 0.f) {
-        v_.pluck_note = visitorNote();
+        v_.pluck_note = visitorNote() + 12.f * (float)cfg_.pluck_idle_octave;
         v_.comb_hz = NoteToHz(v_.pluck_note);
         if (cfg_.pluck_wander_enabled) {
             wander_time_ += dt;
@@ -190,7 +190,8 @@ void Chord::update(float fit, float movement, float dt) {
     } else {
         const float climb = (float)stage_ / (float)(kStages - 1);
         const float linear = visitorNote() + climb * cfg_.pluck_climb;
-        v_.pluck_note = SnapToChordTone(linear, root, stage_);
+        v_.pluck_note = SnapToChordTone(linear, root, stage_)
+                      + 12.f * (float)cfg_.pluck_fit_octave;
         v_.comb_hz = NoteToHz(v_.pluck_note);
         wander_time_ = 0.f;
     }

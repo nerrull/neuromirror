@@ -2381,6 +2381,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "way, snapped to a tone of the current chord. 16 with\n"
                             "chord octave -1 ends on the chord's top voice.");
                     }
+                    ui::SliderInt("pluck idle octave", &cc.pluck_idle_octave, -3, 1);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The pluck's register through the idle wait (fit at 0),\noctaves from the visitor's note. The comb alone -- the\nchord's root and Key stay put.");
+                    ui::SliderInt("pluck fitting octave", &cc.pluck_fit_octave, -3, 1);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The pluck's register while the fit climbs, octaves,\napplied after the snap to a chord tone. Comb_Tuning\nstops at 4000 Hz, so +1 is as high as the climb clears.");
 
                     ImGui::Separator();
                     ui::Checkbox("wander", &cc.pluck_wander_enabled);
