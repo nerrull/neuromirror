@@ -236,14 +236,6 @@ public:
     };
     ClothParams cloth;
 
-    // The harp's wires (root_wire.metal, RootScene::setHarpWires): luminescent
-    // lines drawn after the cloth, blended over it. `color` x a wire's glow
-    // is the radiance it writes; past post.bloomThreshold it halos.
-    struct WireParams {
-        float color[3] = {0.35f, 0.75f, 1.00f};
-    };
-    WireParams wire;
-
     // Environment and organic-shading terms, shared by the capsule/blade pass
     // and the mask pass so both sit in the same light.
     struct EnvParams {
@@ -504,11 +496,12 @@ public:
     // setPondTexture used to receive. nil skips the cloth draw entirely rather
     // than sampling an unbound texture.
     void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
-    // The harp's wires: 6 vertices per wire, kWireFloats each (foot3, head3,
-    // side, t, glow, half-width in output pixels) -- matches WireVertex in
-    // root_wire.metal; built by RootScene::packHarpWires. Drawn after the
-    // cloth, before the fog. Empty data clears the pass.
-    static constexpr int kWireFloats = 10;
+    // The harp's strings: kWireFloats per vertex (anchor3, x offset in NDC,
+    // side, t, half-width in output pixels, wave displacement in pixels)
+    // -- matches WireVertex in root_wire.metal; built by
+    // RootScene::packHarpWires. Drawn after the cloth, before the fog,
+    // inverting what is under them. Empty data clears the pass.
+    static constexpr int kWireFloats = 8;
     void uploadWires(const std::vector<float>& interleaved);
     // Candidates for the automatic focus distance (post.dofFocus == 0): the
     // world positions of the masks being drawn. Replaced each call.

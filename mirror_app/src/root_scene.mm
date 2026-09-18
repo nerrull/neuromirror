@@ -2563,37 +2563,39 @@ void RootScene::advance(double dt) {
     packHarpWires();
 }
 
-void RootScene::setHarpWires(const float* yawDeg, const float* glow, const float* widthPx, int n) {
+void RootScene::setHarpWires(const float* xoff, const float* widthPx, const float* wobPx, int n) {
     harpWireCount_ = std::clamp(n, 0, kMaxHarpWires);
     for (int i = 0; i < harpWireCount_; ++i) {
-        harpYaw_[i] = yawDeg[i]; harpGlow_[i] = glow[i]; harpWidth_[i] = widthPx[i];
+        harpXoff_[i] = xoff[i]; harpWidth_[i] = widthPx[i]; harpWob_[i] = wobPx[i];
     }
 }
 
-// The wires' geometry, in the anchor's frame (refreshClothAnchor): wire i
-// stands at pos + r (cos yaw N + sin yaw T), running r_h either way along
-// the bitangent -- the mask's up. Six vertices a wire, MetalRootRenderer::
-// kWireFloats each; the strip's width rides on the vertex, in pixels.
+// The strings' geometry: every string is anchored on the mask
+// (refreshClothAnchor) and placed on screen from there by the vertex
+// shader, so all that is packed is the anchor, the offset, the width and
+// the wave -- kWireSegs quads up the screen so the wave can bend it,
+// MetalRootRenderer::kWireFloats a vertex.
 void RootScene::packHarpWires() {
     if (!rr_) return;
+    constexpr int kWireSegs = 24;
     std::vector<float> data;
     if (harpWireCount_ > 0) {
         refreshClothAnchor();
-        const float r  = harpWireRadius * clothAnchorRW_;
-        const float rh = harpWireHeight * clothAnchorRH_;
-        data.reserve(size_t(harpWireCount_) * 6 * MetalRootRenderer::kWireFloats);
+        // Out in front of the face, not at the mask's centre: the string's
+        // depth is this point's, and at the centre it hid behind the nose.
+        const simd_float3 c = clothAnchorPos_ + clothAnchorN_ * (2.f * clothAnchorRD_);
+        data.reserve(size_t(harpWireCount_) * kWireSegs * 6 * MetalRootRenderer::kWireFloats);
         for (int i = 0; i < harpWireCount_; ++i) {
-            if (harpGlow_[i] <= 0.f || harpWidth_[i] <= 0.f) continue;
-            const float th = harpYaw_[i] * 3.14159265f / 180.f;
-            const simd_float3 c = clothAnchorPos_ +
-                r * (std::cos(th) * clothAnchorN_ + std::sin(th) * clothAnchorT_);
-            const simd_float3 a = c - rh * clothAnchorB_, b = c + rh * clothAnchorB_;
+            if (harpWidth_[i] <= 0.f) continue;
             auto put = [&](float side, float t) {
-                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t,
-                                         harpGlow_[i], harpWidth_[i]});
+                data.insert(data.end(), {c.x, c.y, c.z, harpXoff_[i], side, t,
+                                         harpWidth_[i], harpWob_[i]});
             };
-            put(-1.f, 0.f); put(1.f, 0.f); put(1.f, 1.f);
-            put(-1.f, 0.f); put(1.f, 1.f); put(-1.f, 1.f);
+            for (int s = 0; s < kWireSegs; ++s) {
+                const float t0 = (float)s / kWireSegs, t1 = (float)(s + 1) / kWireSegs;
+                put(-1.f, t0); put(1.f, t0); put(1.f, t1);
+                put(-1.f, t0); put(1.f, t1); put(-1.f, t1);
+            }
         }
     }
     rr_->uploadWires(data);

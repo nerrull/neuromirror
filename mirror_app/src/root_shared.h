@@ -248,11 +248,10 @@ struct RootLeafU {
     float   _pad0;
 };
 
-// The harp's wires (root_wire.metal): luminescent screen-width lines,
-// additive over the mid-geometry.
+// The harp's strings (root_wire.metal): screen-height lines that invert
+// what is behind them.
 struct RootWireU {
     RS_F4X4 viewProj;
-    RS_F4   color;      // xyz, scene radiance at glow 1
     RS_F2   res;        // the scene target's size, for the pixel width
     float   pxScale;    // scene pixels per output pixel (the supersample)
     float   _pad0;

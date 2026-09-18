@@ -146,18 +146,12 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         if (!clothPipe_) { NSLog(@"cloth pipeline failed: %@", err); return; }
     }
     {
-        // Blended over, on rgb only: the fragment's alpha is the filament's
-        // coverage, while the target's alpha is the fog's AO share / the
-        // cloth's film mark (see root_fog.metal) and stays what it was.
+        // No blend state: the fragment reads the target itself (framebuffer
+        // fetch) and writes the mix, alpha included, unchanged.
         MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
         d.vertexFunction   = [wireLib newFunctionWithName:@"root_wire_vs"];
         d.fragmentFunction = [wireLib newFunctionWithName:@"root_wire_fs"];
         d.colorAttachments[0].pixelFormat = kColorFmt;
-        d.colorAttachments[0].blendingEnabled = YES;
-        d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-        d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-        d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-        d.colorAttachments[0].writeMask = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
         d.depthAttachmentPixelFormat = kDepthFmt;
         wirePipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
         if (!wirePipe_) { NSLog(@"wire pipeline failed: %@", err); return; }
@@ -1273,18 +1267,17 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                 vertexCount:(NSUInteger)clothVertCount_];
     }
 
-    // The harp's wires: last of the mid-geometry, additive over all of it --
+    // The harp's strings: last of the mid-geometry, inverting all of it --
     // see root_wire.metal.
     if (wireVertCount_ > 0 && wirePipe_ && wireBuf_) {
         RootWireU wu = {};
         wu.viewProj = vpJ;
-        wu.color = (simd_float4){wire.color[0], wire.color[1], wire.color[2], 0};
         wu.res = gu.res;
         wu.pxScale = (float)sw_ / (float)w_;
         // Depth is written: the fog pass fogs a pixel by the depth under
-        // it, and a wire against the empty field would otherwise be fogged
-        // as the far plane -- gone. The last mid-geometry drawn, so its
-        // depth hides nothing.
+        // it, and a string against the empty field would otherwise be
+        // fogged as the far plane -- gone. The last mid-geometry drawn, so
+        // its depth hides nothing.
         [ge setRenderPipelineState:wirePipe_];
         [ge setDepthStencilState:depthState_];
         [ge setCullMode:MTLCullModeNone];

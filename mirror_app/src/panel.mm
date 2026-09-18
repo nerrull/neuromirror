@@ -2218,22 +2218,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SetTooltip("When the mouth opens and the roots start, every string is\nplucked once and slides down to 20 Hz at this glide.");
                     ui::Checkbox("strum wires", &g_strum_wires);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Draw the strings: a fine luminescent wire each, standing on an\narc around the mask at the yaw that plucks it.");
-                    ui::SliderFloat("wire radius (x mask)", &g_strum_wire_radius, 0.5f, 4.f);
-                    ui::SliderFloat("wire height (x mask)", &g_strum_wire_height, 0.5f, 4.f);
-                    ui::SliderFloat("wire width (px)", &g_strum_wire_px, 0.25f, 8.f);
-                    ui::SliderFloat("wire glow", &g_strum_wire_glow, 0.f, 4.f);
+                        ImGui::SetTooltip("Draw the strings: a hair-thin line each, pinned to the top and\nbottom of the screen beside the mask at the yaw that plucks it,\ninverting what is behind it. A pluck widens it and sets it vibrating.");
+                    ui::SliderFloat("wire spread", &g_strum_wire_spread, 0.f, 1.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("A resting wire's brightness, in scene radiance: low is a\ndark thread against the field, above the bloom threshold\nit halos. The wire replaces what is behind it, not adds.");
-                    ui::SliderFloat("wire pluck glow", &g_strum_wire_pluck_glow, 0.f, 10.f);
+                        ImGui::SetTooltip("Where the outermost strings sit, in screen half-widths from\nthe mask; the rest lie between by their yaw.");
+                    ui::SliderFloat("wire width (px)", &g_strum_wire_px, 0.25f, 8.f);
                     ui::SliderFloat("wire pluck width (x)", &g_strum_wire_pluck_width, 0.f, 4.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("How much wider a plucked wire flares, as a multiple of its\nwidth, beating with the glow.");
+                        ImGui::SetTooltip("How much wider a plucked string is, as a multiple of its width.");
+                    ui::SliderFloat("wire pluck vibration (px)", &g_strum_wire_vib_px, 0.f, 60.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How far a plucked string swings either way at its belly --\na standing wave, a node at each end of the screen.");
                     ui::SliderFloat("wire pluck decay (s)", &g_strum_wire_decay_s, 0.05f, 5.f);
                     ui::SliderFloat("wire pulse divisor", &g_strum_wire_pulse_div, 1.f, 512.f, "%.0f");
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("A plucked wire's flare beats at its note's frequency over this:\n440 Hz / 64 is about 7 beats a second.");
-                    ui::ColorEdit3("wire colour", g_strum_wire_color);
+                        ImGui::SetTooltip("A plucked string vibrates at its note's frequency over this:\n440 Hz / 64 is about 7 swings a second.");
                     ui::SliderFloat("pluck glide (ms)", &g_resolved_glide_ms, 0.f, 2000.f);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(

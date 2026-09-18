@@ -485,19 +485,16 @@ public:
     // which hands it straight to the renderer's cloth pass.
     void setPondTexture(id<MTLTexture> pond) { pondTex_ = pond; }
 
-    // --- the harp's wires ------------------------------------------------
-    // One fine luminescent vertical wire per string of the resolved window's
-    // strum (main.mm), standing on an arc around the anchor mask at the yaw
-    // where the head plucks it: yaw 0 straight out along the mask's normal,
-    // + toward its tangent -- frame right, for the camera the Face stage
-    // puts straight down that normal. `glow[i]` is the wire's brightness
-    // this frame, in units of MetalRootRenderer::wire.color, `widthPx[i]`
-    // its half-width in output pixels. n = 0 clears them. Packed for the
-    // renderer in advance(), after the framing, like the cloth.
+    // --- the harp's strings ----------------------------------------------
+    // One hair-thin vertical line per string of the resolved window's strum
+    // (main.mm), pinned to the top and bottom of the screen, at the anchor
+    // mask's depth and `xoff[i]` (NDC, + = frame right) from the mask's own
+    // screen x -- where the head plucks it. `widthPx[i]` is its half-width
+    // in output pixels, `wobPx[i]` the belly of its standing wave this frame,
+    // pixels, signed. It inverts what is behind it (root_wire.metal). n = 0
+    // clears them. Packed for the renderer in advance(), like the cloth.
     static constexpr int kMaxHarpWires = 8;
-    void setHarpWires(const float* yawDeg, const float* glow, const float* widthPx, int n);
-    float harpWireRadius = 1.25f;   // x the anchor's rWidth, the arc's radius
-    float harpWireHeight = 1.1f;   // x the anchor's rHeight, the wire's length
+    void setHarpWires(const float* xoff, const float* widthPx, const float* wobPx, int n);
 
     // Begin the hold->release->fall timeline from t=0, with a fresh,
     // fully-pinned flat sheet -- the RootScene analogue of
@@ -768,9 +765,9 @@ private:
     float clothAnchorFU_ = 2.6f;     // the anchor's faceUnit (SimMask), the face's draw scale / faceScale
 
     // See setHarpWires / packHarpWires.
-    float harpYaw_[kMaxHarpWires] = {};
-    float harpGlow_[kMaxHarpWires] = {};
+    float harpXoff_[kMaxHarpWires] = {};
     float harpWidth_[kMaxHarpWires] = {};
+    float harpWob_[kMaxHarpWires] = {};
     int   harpWireCount_ = 0;
     void  packHarpWires();
 

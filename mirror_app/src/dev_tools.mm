@@ -199,22 +199,19 @@ int rootshot(const char* path, float az, float el, float rad, int mode, bool ove
 // Post-processing overrides by name, shared by the headless shots (defined
 // below, with the table of keys).
 static void applyPostOverride(RootScene& roots, const char* spec);
-// <n>: the harp's wires (RootScene::setHarpWires), n of them across +-37
-// degrees at the show's resting glow, the odd ones flared as if just
-// plucked -- to look at the wire pass without a sitting. Unset = none.
+// <n>: the harp's strings (RootScene::setHarpWires), n of them across the
+// spread, the odd ones as if just plucked, mid-swing -- to look at the
+// wire pass without a sitting. Unset = none.
 static void applyWiresOverride(RootScene& roots, const char* spec) {
     if (!spec) return;
     const int n = std::clamp(atoi(spec), 1, RootScene::kMaxHarpWires);
-    float yaw[RootScene::kMaxHarpWires], glow[RootScene::kMaxHarpWires], width[RootScene::kMaxHarpWires];
+    float xoff[RootScene::kMaxHarpWires], width[RootScene::kMaxHarpWires], wob[RootScene::kMaxHarpWires];
     for (int i = 0; i < n; ++i) {
-        yaw[i] = n > 1 ? -37.f + 74.f * (float)i / (float)(n - 1) : 0.f;
-        glow[i] = g_strum_wire_glow + ((i & 1) ? g_strum_wire_pluck_glow : 0.f);
+        xoff[i] = n > 1 ? g_strum_wire_spread * (-1.f + 2.f * (float)i / (float)(n - 1)) : 0.f;
         width[i] = g_strum_wire_px * (1.f + ((i & 1) ? g_strum_wire_pluck_width : 0.f));
+        wob[i] = (i & 1) ? g_strum_wire_vib_px : 0.f;
     }
-    std::memcpy(roots.renderer().wire.color, g_strum_wire_color, sizeof(g_strum_wire_color));
-    roots.harpWireRadius = g_strum_wire_radius;
-    roots.harpWireHeight = g_strum_wire_height;
-    roots.setHarpWires(yaw, glow, width, n);
+    roots.setHarpWires(xoff, width, wob, n);
 }
 
 // Headless live-growth check: steps the CPlantBox sim `steps` frames, then
