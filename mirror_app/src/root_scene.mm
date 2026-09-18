@@ -2560,6 +2560,40 @@ void RootScene::advance(double dt) {
     // away from the pond it is supposed to be identical to; building after it
     // brings that back to 0.006.
     if (clothActive_) { ensureClothSheet(); packClothMesh(); }
+    packHarpWires();
+}
+
+void RootScene::setHarpWires(const float* yawDeg, const float* glow, int n) {
+    harpWireCount_ = std::clamp(n, 0, kMaxHarpWires);
+    for (int i = 0; i < harpWireCount_; ++i) { harpYaw_[i] = yawDeg[i]; harpGlow_[i] = glow[i]; }
+}
+
+// The wires' geometry, in the anchor's frame (refreshClothAnchor): wire i
+// stands at pos + r (cos yaw N + sin yaw T), running r_h either way along
+// the bitangent -- the mask's up. Six vertices a wire, MetalRootRenderer::
+// kWireFloats each; the strip's width is the renderer's, in pixels.
+void RootScene::packHarpWires() {
+    if (!rr_) return;
+    std::vector<float> data;
+    if (harpWireCount_ > 0) {
+        refreshClothAnchor();
+        const float r  = harpWireRadius * clothAnchorRW_;
+        const float rh = harpWireHeight * clothAnchorRH_;
+        data.reserve(size_t(harpWireCount_) * 6 * MetalRootRenderer::kWireFloats);
+        for (int i = 0; i < harpWireCount_; ++i) {
+            if (harpGlow_[i] <= 0.f) continue;
+            const float th = harpYaw_[i] * 3.14159265f / 180.f;
+            const simd_float3 c = clothAnchorPos_ +
+                r * (std::cos(th) * clothAnchorN_ + std::sin(th) * clothAnchorT_);
+            const simd_float3 a = c - rh * clothAnchorB_, b = c + rh * clothAnchorB_;
+            auto put = [&](float side, float t) {
+                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t, harpGlow_[i]});
+            };
+            put(-1.f, 0.f); put(1.f, 0.f); put(1.f, 1.f);
+            put(-1.f, 0.f); put(1.f, 1.f); put(-1.f, 1.f);
+        }
+    }
+    rr_->uploadWires(data);
 }
 
 // Resolve the key's aim. See root_scene.h's LightMode/LightFocus for what each

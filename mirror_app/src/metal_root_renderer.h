@@ -236,6 +236,15 @@ public:
     };
     ClothParams cloth;
 
+    // The harp's wires (root_wire.metal, RootScene::setHarpWires): luminescent
+    // lines drawn after the cloth, additive. `color` x a wire's glow is the
+    // radiance it writes, so it should clear post.bloomThreshold for the halo.
+    struct WireParams {
+        float color[3] = {0.70f, 0.85f, 1.00f};
+        float widthPx  = 1.5f;   // half-width of the strip, in scene pixels
+    };
+    WireParams wire;
+
     // Environment and organic-shading terms, shared by the capsule/blade pass
     // and the mask pass so both sit in the same light.
     struct EnvParams {
@@ -496,6 +505,12 @@ public:
     // setPondTexture used to receive. nil skips the cloth draw entirely rather
     // than sampling an unbound texture.
     void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
+    // The harp's wires: 6 vertices per wire, kWireFloats each (foot3, head3,
+    // side, t, glow) -- matches WireVertex in root_wire.metal; built by
+    // RootScene::packHarpWires. Drawn after the cloth, before the fog.
+    // Empty data clears the pass.
+    static constexpr int kWireFloats = 9;
+    void uploadWires(const std::vector<float>& interleaved);
     // Candidates for the automatic focus distance (post.dofFocus == 0): the
     // world positions of the masks being drawn. Replaced each call.
     void setFocusPoints(const std::vector<std::array<float, 3>>& pts) { focusPoints_ = pts; }
@@ -662,6 +677,7 @@ private:
     id<MTLRenderPipelineState> sortPipe_   = nil;   // one odd-even sort step
     id<MTLRenderPipelineState> glitchPipe_ = nil;   // datamosh + bitcrush
     id<MTLDepthStencilState>   depthState_ = nil;
+    id<MTLDepthStencilState>   depthReadState_ = nil;   // test, no write -- the wires
 
     id<MTLBuffer> faceBuf_ = nil;
     int faceVertCount_ = 0;
@@ -677,6 +693,10 @@ private:
     int clothVertCount_ = 0;
     id<MTLRenderPipelineState> clothPipe_ = nil;
     id<MTLTexture> clothTex_ = nil;
+
+    id<MTLBuffer> wireBuf_ = nil;
+    int wireVertCount_ = 0;
+    id<MTLRenderPipelineState> wirePipe_ = nil;
 
     // The scene passes (geometry, mask, fog) run at sw_ x sh_, which is the
     // output size times the supersample factor; everything from the composite
@@ -755,7 +775,7 @@ private:
     // so leaving them on makeBuffer leaked a few megabytes per frame, which is
     // gigabytes per minute rather than the per-visitor trickle the segment
     // buffers were.
-    size_t faceCap_ = 0, leafCap_ = 0, clothCap_ = 0;
+    size_t faceCap_ = 0, leafCap_ = 0, clothCap_ = 0, wireCap_ = 0;
     int segCount_ = 0;
 
     // A cached, static capsule system. node/dist are per-node (shared across LODs);

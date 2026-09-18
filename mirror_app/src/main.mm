@@ -1576,16 +1576,50 @@ int main(int argc, char** argv) {
     float strumPrevYaw = 0.f;   // last frame's yaw, for the turn's speed
     float strumRate = 0.f;      // deg/s, smoothed -- see the strum block
     bool strumDropPending = false;   // the send-off's second frame, see the exit edge
-    // The harp's strings: the major pentatonic over the resolved chord --
-    // root, 9th, 3rd, 5th, 6th -- every one consonant over the pad's major
-    // triad and none an octave leap, so a sweep is a run, not a jump. In the
-    // pluck's register (visitorNote), g_strum_octave up. Filled by
-    // strumStrings() whenever the harp sounds.
-    static const float kStrumTones[] = {0.f, 2.f, 4.f, 7.f, 9.f};
-    constexpr int kStrings = sizeof(kStrumTones) / sizeof(kStrumTones[0]);
-    auto strumStrings = [&](float out[kStrings]) {
-        for (int i = 0; i < kStrings; ++i)
-            out[i] = g_chord.visitorNote() + kStrumTones[i] + 12.f * (float)g_strum_octave;
+    // The harp's strings: a scale over the resolved chord, in the pluck's
+    // register (visitorNote), g_strum_octave up. Which scale is
+    // g_strum_scale (the panel's "strum scale", same order):
+    //   pentatonic -- root, 9th, 3rd, 5th, 6th: every one consonant over the
+    //     pad's major triad and none an octave leap, so a sweep is a run.
+    //   lydian -- the whole mode, root to octave.
+    //   lydian colour -- 6th, 9th, #11th, 7th, the tones that make it lydian,
+    //     the octave above.
+    // Filled by strumStrings() whenever the harp sounds, string 0 at the
+    // left; strumOrder says which tone each string carries (the identity,
+    // or a per-sitting shuffle when g_strum_shuffle -- see the window's
+    // entry edge). Returns the count.
+    struct StrumScale { const char* name; int n; float tones[8]; };
+    static const StrumScale kStrumScales[] = {
+        {"pentatonic",    5, {0.f, 2.f, 4.f, 7.f, 9.f}},
+        {"lydian",        8, {0.f, 2.f, 4.f, 6.f, 7.f, 9.f, 11.f, 12.f}},
+        {"lydian colour", 4, {9.f, 14.f, 18.f, 23.f}},
+    };
+    constexpr int kStrumScaleCount = sizeof(kStrumScales) / sizeof(kStrumScales[0]);
+    constexpr int kMaxStrings = RootScene::kMaxHarpWires;
+    int strumOrder[kMaxStrings] = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto strumScale = [&]() -> const StrumScale& {
+        return kStrumScales[std::clamp(g_strum_scale, 0, kStrumScaleCount - 1)];
+    };
+    auto strumStrings = [&](float out[kMaxStrings]) {
+        const StrumScale& sc = strumScale();
+        for (int i = 0; i < sc.n; ++i)
+            out[i] = g_chord.visitorNote() + sc.tones[strumOrder[i] % sc.n]
+                   + 12.f * (float)g_strum_octave;
+        return sc.n;
+    };
+    // The wires (RootScene::setHarpWires): one per string, at rest at
+    // g_strum_wire_glow, and on a pluck flaring by g_strum_wire_pluck_glow,
+    // decaying over g_strum_wire_decay_s and pulsing at the note's frequency
+    // over g_strum_wire_pulse_div -- a slow beat of the pitch itself.
+    float strumWireEnv[kMaxStrings] = {};    // the pluck's flare, 1 -> 0
+    float strumWireHz[kMaxStrings] = {};     // its pulse rate
+    float strumWirePhase[kMaxStrings] = {};  // cycles
+    float strumWireVis = 0.f;                // the wires' fade, toward 1 while the window holds
+    auto strumWirePluck = [&](int i, float hz) {
+        if (i < 0 || i >= kMaxStrings) return;
+        strumWireEnv[i] = 1.f;
+        strumWireHz[i] = hz / std::max(g_strum_wire_pulse_div, 1.f);
+        strumWirePhase[i] = 0.f;
     };
     // The visitor's own head movement, recorded through Transition and
     // played back once Roots takes over -- see face_track.h/root_face_sequence.h.
@@ -3024,6 +3058,12 @@ int main(int argc, char** argv) {
                     strumString = -1;
                     strumPrevYaw = ap.head_yaw;
                     strumRate = 0.f;
+                    // The strings' order across the yaw: low to high, or
+                    // dealt at random for this sitting.
+                    const int n = strumScale().n;
+                    for (int i = 0; i < kMaxStrings; ++i) strumOrder[i] = i;
+                    if (g_strum_shuffle)
+                        std::shuffle(strumOrder, strumOrder + n, sittingSeedRng);
                 } else if (resolvedWindowActive) {
                     tResolvedWindow += (float)dt;
                 }
@@ -3037,10 +3077,13 @@ int main(int argc, char** argv) {
                     // glide opened up and their tuning dropped to the floor,
                     // so the chord slides down into the roots as they grow.
                     g_audio.post("Stop_Pad");
-                    float notes[kStrings];
-                    strumStrings(notes);
-                    for (int i = 0; i < kStrings; ++i)
-                        g_audio.postStrum(440.f * std::pow(2.f, (notes[i] - 69.f) / 12.f), 1.f);
+                    float notes[kMaxStrings];
+                    const int n = strumStrings(notes);
+                    for (int i = 0; i < n; ++i) {
+                        const float hz = 440.f * std::pow(2.f, (notes[i] - 69.f) / 12.f);
+                        g_audio.postStrum(hz, 1.f);
+                        strumWirePluck(i, hz);
+                    }
                     strumDropPending = true;
                 } else if (strumDropPending) {
                     g_audio.dropStrums(g_strum_drop_glide_ms, 20.f);
@@ -3072,19 +3115,19 @@ int main(int argc, char** argv) {
                     ap.pluck_mute_fade_ms = g_strum_mute_fade_ms;
 
                     // The strum: a harp lying across the head's yaw. The
-                    // pentatonic's tones (strumStrings above) are its
+                    // scale's tones (strumStrings above) are its
                     // strings, the lowest at full-left (-g_strum_range_deg),
                     // the highest at full-right, the rest evenly between --
                     // with the face-on dead zone cut out of the middle, so a
                     // nose at rest sits on nothing. Turning across a string
                     // plucks it, each on its own Wwise voice (postStrum) so
                     // it never touches the pluck's comb above.
-                    float notes[kStrings];
-                    strumStrings(notes);
+                    float notes[kMaxStrings];
+                    const int n = strumStrings(notes);
                     // q: the nose's position with the dead zone removed, in
                     // degrees, -span..span; string i sits at q_i.
                     const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
-                    const float gap = 2.f * span / (kStrings - 1);   // between strings
+                    const float gap = 2.f * span / std::max(n - 1, 1);   // between strings
                     const float yaw = ap.head_yaw;
                     const float q = std::fabs(yaw) > g_strum_dead_deg
                         ? (yaw > 0.f ? yaw - g_strum_dead_deg : yaw + g_strum_dead_deg) : 0.f;
@@ -3106,21 +3149,23 @@ int main(int argc, char** argv) {
                     strumPrevYaw = yaw;
                     if (strumString < 0) {
                         strumString = 0;
-                        while (strumString < kStrings && q > stringAt(strumString)) ++strumString;
+                        while (strumString < n && q > stringAt(strumString)) ++strumString;
                     }
                     // strumString counts the strings to the nose's left. Step
                     // it one string at a time toward the nose, plucking each
                     // string crossed in the order it was passed.
                     for (;;) {
                         int plucked;
-                        if (strumString < kStrings && q > stringAt(strumString) + h)
+                        if (strumString < n && q > stringAt(strumString) + h)
                             plucked = strumString++;
                         else if (strumString > 0 && q < stringAt(strumString - 1) - h)
                             plucked = --strumString;
                         else
                             break;
+                        const float hz = 440.f * std::pow(2.f, (notes[plucked] - 69.f) / 12.f);
+                        strumWirePluck(plucked, hz);
                         if (!g_audio_on) continue;
-                        g_audio.postStrum(440.f * std::pow(2.f, (notes[plucked] - 69.f) / 12.f), vel);
+                        g_audio.postStrum(hz, vel);
                     }
                 } else {
                     ap.comb_glide_ms = 265.f;
@@ -3145,6 +3190,35 @@ int main(int argc, char** argv) {
                 }
 
                 g_audio.update(ap);
+
+                // The wires, to the scene: where the strings sit (the same
+                // placement as the strum block, back in yaw with the dead
+                // zone put back), and how bright. They fade up as the
+                // window opens and out as it closes, so the send-off's
+                // flare is still seen; a pluck's flare decays and beats.
+                {
+                    const float want = (resolvedWindowActive && g_strum_wires) ? 1.f : 0.f;
+                    strumWireVis += (want - strumWireVis) * (1.f - std::exp(-(float)dt / 0.4f));
+                    if (strumWireVis < 1e-3f && want == 0.f) strumWireVis = 0.f;
+                    const int n = strumScale().n;
+                    const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
+                    const float gap = 2.f * span / std::max(n - 1, 1);
+                    float yaw[kMaxStrings], glow[kMaxStrings];
+                    for (int i = 0; i < n; ++i) {
+                        const float q = -span + gap * i;
+                        yaw[i] = q + (q > 0.f ? g_strum_dead_deg : q < 0.f ? -g_strum_dead_deg : 0.f);
+                        strumWireEnv[i] *= std::exp(-(float)dt / std::max(g_strum_wire_decay_s, 0.01f));
+                        strumWirePhase[i] = std::fmod(strumWirePhase[i] + (float)dt * strumWireHz[i], 1.f);
+                        const float beat = 0.5f + 0.5f * std::cos(strumWirePhase[i] * 6.2831853f);
+                        glow[i] = strumWireVis *
+                            (g_strum_wire_glow + g_strum_wire_pluck_glow * strumWireEnv[i] * beat);
+                    }
+                    roots.renderer().wire.widthPx = g_strum_wire_px;
+                    std::memcpy(roots.renderer().wire.color, g_strum_wire_color, sizeof(g_strum_wire_color));
+                    roots.harpWireRadius = g_strum_wire_radius;
+                    roots.harpWireHeight = g_strum_wire_height;
+                    roots.setHarpWires(yaw, glow, strumWireVis > 0.f ? n : 0);
+                }
             }
 
             // --- colour follows the fit ----------------------------------

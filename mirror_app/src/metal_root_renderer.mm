@@ -96,13 +96,14 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     id<MTLLibrary> faceLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_face.metal"});
     id<MTLLibrary> leafLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_leaf.metal"});
     id<MTLLibrary> clothLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_cloth.metal"});
+    id<MTLLibrary> wireLib = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_wire.metal"});
     id<MTLLibrary> fogLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_fog.metal"});
     id<MTLLibrary> aoLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_ao.metal"});
     id<MTLLibrary> blmLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_bloom.metal"});
     id<MTLLibrary> postLib = ctx.newLibraryFromFiles({sharedHeaderPath, faceShade, shaderDir + "/root_post.metal"});
     id<MTLLibrary> gltLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_glitch.metal"});
     id<MTLLibrary> taaLib  = ctx.newLibraryFromFiles({sharedHeaderPath, shaderDir + "/root_taa.metal"});
-    if (!geomLib || !faceLib || !leafLib || !clothLib || !fogLib
+    if (!geomLib || !faceLib || !leafLib || !clothLib || !wireLib || !fogLib
         || !aoLib || !blmLib || !postLib || !gltLib || !taaLib) {
         fprintf(stderr, "MetalRootRenderer: shader compile failed\n"); return;
     }
@@ -143,6 +144,22 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         d.depthAttachmentPixelFormat = kDepthFmt;
         clothPipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
         if (!clothPipe_) { NSLog(@"cloth pipeline failed: %@", err); return; }
+    }
+    {
+        // Additive on rgb only: alpha is the fog's AO share / the cloth's
+        // film mark (see root_fog.metal), and a light adds nothing to it.
+        MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+        d.vertexFunction   = [wireLib newFunctionWithName:@"root_wire_vs"];
+        d.fragmentFunction = [wireLib newFunctionWithName:@"root_wire_fs"];
+        d.colorAttachments[0].pixelFormat = kColorFmt;
+        d.colorAttachments[0].blendingEnabled = YES;
+        d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+        d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        d.colorAttachments[0].writeMask = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
+        d.depthAttachmentPixelFormat = kDepthFmt;
+        wirePipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
+        if (!wirePipe_) { NSLog(@"wire pipeline failed: %@", err); return; }
     }
     {
         MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
@@ -201,6 +218,10 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
         dd.depthCompareFunction = MTLCompareFunctionLess;
         dd.depthWriteEnabled = YES;
         depthState_ = [device_ newDepthStencilStateWithDescriptor:dd];
+        // The wires: hidden behind what is nearer, but too thin and too
+        // additive to hide anything themselves.
+        dd.depthWriteEnabled = NO;
+        depthReadState_ = [device_ newDepthStencilStateWithDescriptor:dd];
     }
 
     buildTargets();
@@ -573,6 +594,13 @@ void MetalRootRenderer::uploadClothMesh(const std::vector<float>& interleaved) {
     clothVertCount_ = (int)(interleaved.size() / 10);
     if (clothVertCount_ > 0)
         uploadBuffer(clothBuf_, clothCap_, interleaved.data(),
+                     interleaved.size() * sizeof(float));
+}
+
+void MetalRootRenderer::uploadWires(const std::vector<float>& interleaved) {
+    wireVertCount_ = (int)(interleaved.size() / kWireFloats);
+    if (wireVertCount_ > 0)
+        uploadBuffer(wireBuf_, wireCap_, interleaved.data(),
                      interleaved.size() * sizeof(float));
 }
 
@@ -1246,6 +1274,24 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         [ge setFragmentTexture:clothTex_ atIndex:0];
         [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
                 vertexCount:(NSUInteger)clothVertCount_];
+    }
+
+    // The harp's wires: last of the mid-geometry, additive over all of it --
+    // see root_wire.metal.
+    if (wireVertCount_ > 0 && wirePipe_ && wireBuf_) {
+        RootWireU wu = {};
+        wu.viewProj = vpJ;
+        wu.color = (simd_float4){wire.color[0], wire.color[1], wire.color[2], 0};
+        wu.res = gu.res;
+        wu.widthPx = std::max(wire.widthPx, 0.25f) * (float)sw_ / (float)w_;   // in scene pixels
+        [ge setRenderPipelineState:wirePipe_];
+        [ge setDepthStencilState:depthReadState_];
+        [ge setCullMode:MTLCullModeNone];
+        [ge setVertexBuffer:wireBuf_ offset:0 atIndex:0];
+        [ge setVertexBytes:&wu length:sizeof(wu) atIndex:1];
+        [ge setFragmentBytes:&wu length:sizeof(wu) atIndex:1];
+        [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                vertexCount:(NSUInteger)wireVertCount_];
     }
     [ge endEncoding];
 

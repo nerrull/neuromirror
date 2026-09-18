@@ -2181,6 +2181,23 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderInt("strum octave", &g_strum_octave, -2, 4);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The chord's tones in the pluck's register, this many octaves up.");
+                    {
+                        const char* kScales[] = {"pentatonic", "lydian", "lydian colour"};
+                        ImGui::SetNextItemWidth(140);
+                        if (ui::Visible())
+                            ImGui::Combo("strum scale", &g_strum_scale, kScales, IM_ARRAYSIZE(kScales));
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "The strings' tones over the resolved root:\n"
+                                "pentatonic 0 2 4 7 9 (5 strings), lydian 0 2 4 6 7 9 11 12\n"
+                                "(8), lydian colour 9 14 18 23 (4) -- the 6th, 9th, #11th\n"
+                                "and 7th, the octave above.");
+                        }
+                        ui::DeclareInt("strum scale", &g_strum_scale, 0, IM_ARRAYSIZE(kScales) - 1);
+                    }
+                    ui::Checkbox("strum shuffled", &g_strum_shuffle);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Deal the tones across the yaw in a random order, drawn fresh\nat each window's opening, instead of low-left to high-right.");
                     ui::SliderFloat("strum hysteresis", &g_strum_hysteresis, 0.f, 0.5f);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("How far past a string (in string widths) the nose must go\nbefore it counts as crossed, so jitter on a string doesn't re-pluck it.");
@@ -2199,6 +2216,21 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderFloat("strum drop glide (ms)", &g_strum_drop_glide_ms, 0.f, 2000.f);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("When the mouth opens and the roots start, every string is\nplucked once and slides down to 20 Hz at this glide.");
+                    ui::Checkbox("strum wires", &g_strum_wires);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Draw the strings: a fine luminescent wire each, standing on an\narc around the mask at the yaw that plucks it.");
+                    ui::SliderFloat("wire radius (x mask)", &g_strum_wire_radius, 0.5f, 4.f);
+                    ui::SliderFloat("wire height (x mask)", &g_strum_wire_height, 0.5f, 4.f);
+                    ui::SliderFloat("wire width (px)", &g_strum_wire_px, 0.25f, 8.f);
+                    ui::SliderFloat("wire glow", &g_strum_wire_glow, 0.f, 4.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A resting wire's brightness, in scene radiance -- above the\nbloom threshold it halos.");
+                    ui::SliderFloat("wire pluck glow", &g_strum_wire_pluck_glow, 0.f, 10.f);
+                    ui::SliderFloat("wire pluck decay (s)", &g_strum_wire_decay_s, 0.05f, 5.f);
+                    ui::SliderFloat("wire pulse divisor", &g_strum_wire_pulse_div, 1.f, 512.f, "%.0f");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A plucked wire's flare beats at its note's frequency over this:\n440 Hz / 64 is about 7 beats a second.");
+                    ui::ColorEdit3("wire colour", g_strum_wire_color);
                     ui::SliderFloat("pluck glide (ms)", &g_resolved_glide_ms, 0.f, 2000.f);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(

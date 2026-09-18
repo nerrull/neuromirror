@@ -248,6 +248,16 @@ struct RootLeafU {
     float   _pad0;
 };
 
+// The harp's wires (root_wire.metal): luminescent screen-width lines,
+// additive over the mid-geometry.
+struct RootWireU {
+    RS_F4X4 viewProj;
+    RS_F4   color;      // xyz, scene radiance at glow 1
+    RS_F2   res;        // the scene target's size, for the pixel width
+    float   widthPx;    // half-width of the strip in pixels
+    float   _pad0;
+};
+
 // Fog post-process pass (root_fog.metal).
 struct RootFogU {
     RS_F3X3 cam;

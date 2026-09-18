@@ -257,6 +257,19 @@ int growshot(const char* path, int steps, float az, float el, float rad,
     // matters is that the masks are visibly different people.
     if (faces > 0.f) roots.setTestIdentities(roots.simParams().N, faceSeed, faces);
 
+    // GROWSHOT_WIRES=<n>: the harp's wires (RootScene::setHarpWires), n of
+    // them across +-37 degrees, the odd ones flared -- to look at the wire
+    // pass without a sitting. Best with focus=0.
+    if (const char* w = getenv("GROWSHOT_WIRES")) {
+        const int n = std::clamp(atoi(w), 1, RootScene::kMaxHarpWires);
+        float yaw[RootScene::kMaxHarpWires], glow[RootScene::kMaxHarpWires];
+        for (int i = 0; i < n; ++i) {
+            yaw[i] = n > 1 ? -37.f + 74.f * (float)i / (float)(n - 1) : 0.f;
+            glow[i] = (i & 1) ? 4.f : 0.6f;
+        }
+        roots.setHarpWires(yaw, glow, n);
+    }
+
     id<MTLTexture> tex = nil;
     for (int i = 0; i < steps; ++i) roots.advance(1.0 / 60.0);   // grow (no GPU work)
     // Two frames, or enough for the TAA to settle on its still.

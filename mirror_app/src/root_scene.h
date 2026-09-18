@@ -485,6 +485,20 @@ public:
     // which hands it straight to the renderer's cloth pass.
     void setPondTexture(id<MTLTexture> pond) { pondTex_ = pond; }
 
+    // --- the harp's wires ------------------------------------------------
+    // One fine luminescent vertical wire per string of the resolved window's
+    // strum (main.mm), standing on an arc around the anchor mask at the yaw
+    // where the head plucks it: yaw 0 straight out along the mask's normal,
+    // + toward its tangent -- frame right, for the camera the Face stage
+    // puts straight down that normal. `glow[i]` is the wire's brightness
+    // this frame, in units of MetalRootRenderer::wire.color (0 = off).
+    // n = 0 clears them. Packed for the renderer in advance(), after the
+    // framing, like the cloth.
+    static constexpr int kMaxHarpWires = 8;
+    void setHarpWires(const float* yawDeg, const float* glow, int n);
+    float harpWireRadius = 1.8f;   // x the anchor's rWidth, the arc's radius
+    float harpWireHeight = 1.6f;   // x the anchor's rHeight, the wire's length
+
     // Begin the hold->release->fall timeline from t=0, with a fresh,
     // fully-pinned flat sheet -- the RootScene analogue of
     // TransitionScene::restart(). Call once, on the phase edge that used to
@@ -752,6 +766,12 @@ private:
     simd_float3 clothAnchorB_   = simd_make_float3(0, 1, 0);
     float clothAnchorRW_ = 2.6f, clothAnchorRH_ = 2.6f, clothAnchorRD_ = 2.6f;
     float clothAnchorFU_ = 2.6f;     // the anchor's faceUnit (SimMask), the face's draw scale / faceScale
+
+    // See setHarpWires / packHarpWires.
+    float harpYaw_[kMaxHarpWires] = {};
+    float harpGlow_[kMaxHarpWires] = {};
+    int   harpWireCount_ = 0;
+    void  packHarpWires();
 
     std::unique_ptr<MetalRootRenderer> rr_;
     std::unique_ptr<rootsim::RootSim>  sim_;

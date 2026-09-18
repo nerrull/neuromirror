@@ -214,6 +214,18 @@ extern bool  g_strum_mute_pluck;    // mute the FirePlucker while the harp plays
 extern float g_strum_mute_fade_ms;  // 0..5000, the mute's fade in and out
 extern float g_strum_vel_smooth_ms; // 1..1000, smoothing on the turn's speed
 extern float g_strum_full_vel;    // 10..720, deg/s of head turn for a full-loudness pluck
+extern int   g_strum_scale;       // which scale the strings carry -- main.mm's kStrumScales
+extern bool  g_strum_shuffle;     // the tones dealt across the yaw at random, per sitting
+// The strings drawn: a luminescent wire each around the mask (RootScene::setHarpWires).
+extern bool  g_strum_wires;
+extern float g_strum_wire_radius;     // 0.5..4, x the mask's half-width
+extern float g_strum_wire_height;     // 0.5..4, x the mask's half-height
+extern float g_strum_wire_px;         // 0.25..8, half-width in pixels
+extern float g_strum_wire_glow;       // 0..4, at rest
+extern float g_strum_wire_pluck_glow; // 0..10, the pluck's flare
+extern float g_strum_wire_decay_s;    // 0.05..5, the flare's decay
+extern float g_strum_wire_pulse_div;  // 1..512, the flare beats at the note's Hz / this
+extern float g_strum_wire_color[3];
 extern std::string g_audio_err;
 
 extern std::vector<float> g_face_colors;
