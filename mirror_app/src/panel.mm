@@ -4750,18 +4750,37 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                 const ImVec2 p0 = ImGui::GetCursorScreenPos();
                 ImGui::Image((ImTextureID)(intptr_t)(__bridge void*)pf.srcTex,
                              ImVec2(iw, ih));
-                // Landmarks on top, in the overlay's own coordinates: they are
-                // normalised, so this is the same mapping the mask uses -- if
-                // they sit off the face here, they sit off the face there.
-                if (g_pip_landmarks && g_track_on && g_face.valid) {
+                // The thumbnail is the video frame (except in the full-frame
+                // scenes, which show the feed crop itself). The crops on top
+                // of it, always: what the fit is pointed at, and what the
+                // landmarker is handed.
+                const bool videoPip = pf.scene != (int)Scene::CamMask &&
+                                      pf.scene != (int)Scene::Camera;
+                if (videoPip) {
                     ImDrawList* dl = ImGui::GetWindowDrawList();
+                    // The feed crop: the part of the video the fit sees. A
+                    // face outside it has no pixels to be fitted from.
+                    float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
+                    ScreenFromFeed(u0, v0);
+                    ScreenFromFeed(u1, v1);
+                    dl->PushClipRect(p0, ImVec2(p0.x + iw, p0.y + ih), true);
+                    dl->AddRect(ImVec2(p0.x + u0 * iw, p0.y + v0 * ih),
+                                ImVec2(p0.x + u1 * iw, p0.y + v1 * ih),
+                                IM_COL32(255, 255, 255, 160));
+                    dl->PopClipRect();
                     // The landmarker's crop, where the finder put it.
-                    if (g_face_find_on && g_face_roi_w > 0.f) {
+                    if (g_track_on && g_face_find_on && g_face_roi_w > 0.f) {
                         dl->AddRect(ImVec2(p0.x + g_face_roi_x * iw, p0.y + g_face_roi_y * ih),
                                     ImVec2(p0.x + (g_face_roi_x + g_face_roi_w) * iw,
                                            p0.y + (g_face_roi_y + g_face_roi_h) * ih),
                                     IM_COL32(120, 170, 255, 200));
                     }
+                }
+                // Landmarks on top, in the overlay's own coordinates: they are
+                // normalised, so this is the same mapping the mask uses -- if
+                // they sit off the face here, they sit off the face there.
+                if (videoPip && g_pip_landmarks && g_track_on && g_face.valid) {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
                     // The thumbnail is the video frame; the landmarks are
                     // in the feed crop's coordinates, so back they go.
                     for (const mirror::FaceLandmark& L : g_face.landmarks) {

@@ -269,14 +269,23 @@ void ShiftRGBF(int w, int h, int dx, int dy, std::vector<float>& rgb,
     tmp.assign(rgb.begin() + size_t(sy0) * w * 3,
                rgb.begin() + size_t(sy1 + 1) * w * 3);
 
+    // A source outside the frame is black, not the nearest edge pixel: with
+    // the head moved in from the side of a crop, the edge would otherwise be
+    // smeared across the fill -- and, worse, across whatever was left there by
+    // an earlier, smaller fill.
     for (int y = f.y; y < f.y + f.h; ++y) {
-        const int sy = std::min(h - 1, std::max(0, y - dy));
-        const float* srow = &tmp[size_t(std::min(rows - 1, sy - sy0)) * w * 3];
+        const int sy = y - dy;
         float* drow = &rgb[size_t(y) * w * 3];
+        if (sy < 0 || sy >= h) {
+            std::fill(drow + size_t(f.x) * 3, drow + size_t(f.x + f.w) * 3, 0.f);
+            continue;
+        }
+        const float* srow = &tmp[size_t(sy - sy0) * w * 3];
         for (int x = f.x; x < f.x + f.w; ++x) {
-            const int sx = std::min(w - 1, std::max(0, x - dx));
-            const float* s = srow + size_t(sx) * 3;
+            const int sx = x - dx;
             float* d = drow + size_t(x) * 3;
+            if (sx < 0 || sx >= w) { d[0] = d[1] = d[2] = 0.f; continue; }
+            const float* s = srow + size_t(sx) * 3;
             d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
         }
     }
@@ -303,6 +312,12 @@ void PlaceRGBF(int w, int h, float src_cx, float src_cy, float scale,
         const float v = (float(y) + 0.5f) / float(h);
         const float sv = (v - dst_cy) * inv + src_cy;
         const float fy = sv * float(h) - 0.5f;
+        float* drow = &rgb[size_t(y) * w * 3];
+        // Off the frame is black, as in ShiftRGBF.
+        if (fy < -0.5f || fy > float(h) - 0.5f) {
+            std::fill(drow + size_t(f.x) * 3, drow + size_t(f.x + f.w) * 3, 0.f);
+            continue;
+        }
         const float cy = std::min(std::max(fy, 0.f), float(h - 1));
         const int y0 = int(cy), y1 = std::min(y0 + 1, h - 1);
         const float ty = cy - float(y0);
@@ -310,11 +325,12 @@ void PlaceRGBF(int w, int h, float src_cx, float src_cy, float scale,
             const float u = (float(x) + 0.5f) / float(w);
             const float su = (u - dst_cx) * inv + src_cx;
             const float fx = su * float(w) - 0.5f;
+            float* d = drow + size_t(x) * 3;
+            if (fx < -0.5f || fx > float(w) - 0.5f) { d[0] = d[1] = d[2] = 0.f; continue; }
             const float cx = std::min(std::max(fx, 0.f), float(w - 1));
             const int x0 = int(cx), x1 = std::min(x0 + 1, w - 1);
             const float tx = cx - float(x0);
 
-            float* d = &rgb[(size_t(y) * w + x) * 3];
             for (int c = 0; c < 3; ++c) {
                 const float a = tmp[(size_t(y0) * w + x0) * 3 + c];
                 const float b = tmp[(size_t(y0) * w + x1) * 3 + c];
