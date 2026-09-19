@@ -70,6 +70,11 @@ public:
     // The retained colour frame's size (1920x1080 on the v2). False
     // before the first frame.
     bool frameSize(int& w, int& h) const;
+    // The retained colour frame's bytes, in place, for a full-resolution
+    // look at it (the face finder): 4 bytes a pixel, BGRX or RGBX per
+    // `rgbx`. Valid until the next pump()/poll(). False before the first.
+    bool rawFrame(const unsigned char*& data, int& w, int& h, int& bytes_per_px,
+                  bool& rgbx) const;
 
     // The retained frame as float in [0,1], with optional partial fill. Same as
     // lastFrameRGB8 but returns floats. Used by the fitter to ensure it works

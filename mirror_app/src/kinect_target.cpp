@@ -489,6 +489,15 @@ bool KinectFitTarget::lastFrameRGB8(const SrcRect& r, int w, int h,
     return true;
 }
 
+bool KinectFitTarget::rawFrame(const unsigned char*& data, int& w, int& h,
+                               int& bytes_per_px, bool& rgbx) const {
+    if (!impl_->have_frame || !impl_->frame.valid || impl_->frame.data.empty()) return false;
+    const FrameSnapshot& f = impl_->frame;
+    data = f.data.data(); w = f.width; h = f.height; bytes_per_px = f.bytes_per_pixel;
+    rgbx = (f.format == libfreenect2::Frame::RGBX);
+    return w > 0 && h > 0 && bytes_per_px == 4;
+}
+
 bool KinectFitTarget::frameSize(int& w, int& h) const {
     if (!impl_->have_frame || !impl_->frame.valid) return false;
     w = impl_->frame.width; h = impl_->frame.height;

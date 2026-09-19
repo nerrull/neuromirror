@@ -577,6 +577,11 @@ float g_head_hx = 0.15f, g_head_hy = 0.2f;   // half-extent, padding included
 // the trained pixel set, rebuilds the feature gather, and throws the region's
 // soft edge on and off. So a detection has to be missing for a while before it
 // counts as gone, and present for a moment before it counts as arrived.
+bool   g_face_find_on   = true;
+float  g_face_find_pad  = 2.2f;
+float  g_face_find_ms   = 0.f;
+int    g_face_find_count = 0;
+float  g_face_roi_x = 0.f, g_face_roi_y = 0.f, g_face_roi_w = 0.f, g_face_roi_h = 0.f;
 float  g_face_hold_secs = 0.6f;   // keep the last box this long after the last hit
 int    g_face_acquire   = 2;      // consecutive hits before a face is believed
 double g_face_last_seen = -1e9;   // when the tracker last returned a face

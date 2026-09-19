@@ -22,6 +22,7 @@
 #include "mirror_scene.h"
 #include "fit_target.h"
 #include "face_tracker.h"
+#include "face_find.h"
 #include "face_capture.h"
 #include "face_track.h"
 #include "root_structure.h"
@@ -231,13 +232,16 @@ static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h,
 // `whole` takes the video frame (VideoRect) instead of the feed crop -- the
 // tracker's picture (see the tracking block in the loop) and the corner
 // preview's; the camera mask is still the feed's, remapped onto it.
+// `rect`, with `whole`, takes that rect of the source instead of the video
+// frame -- the landmarker's crop around the face.
 static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
-                       bool filtered = true, bool whole = false) {
+                       bool filtered = true, bool whole = false,
+                       const mirror::SrcRect* rect = nullptr) {
     int sw = 0, sh = 0;
     mirror::SrcRect wholeRect, feedRect;
     if (whole) {
         if (!SourceSize(sw, sh)) return false;
-        wholeRect = VideoRect(sw, sh);
+        wholeRect = rect ? *rect : VideoRect(sw, sh);
         feedRect = g_feed_rect;
     }
     if (g_source == (int)Source::Photo) {
@@ -2288,8 +2292,139 @@ int main(int argc, char** argv) {
             // mask and the roots' mesh are built from the same detection
             // rather than from two frames a scene apart.
             if (g_track_on && g_tracker.isOpen() && SourceReady()) {
-                if (SourceRGB8(g_track_w, g_track_h, g_track_rgb, /*filtered=*/true,
-                               /*whole=*/g_feed_rect_valid)) {
+                // --- stage one: the finder, on the full-size frame --------
+                // Vision on the sensor's own pixels (face_find.h): a face
+                // the landmarker's shrunken input would never find. It
+                // follows ONE face -- the one it had, by nearest centre,
+                // and only picks afresh once that one has been gone for the
+                // hold -- so a second visitor in the frame does not steal
+                // the tracking. Then a square crop around it, held with
+                // hysteresis so the landmarker's input does not jitter
+                // under the landmarks, is what stage two is handed.
+                static mirror::FaceFinder finder;
+                static std::vector<mirror::FaceBox> boxes;
+                static bool  lockValid = false;     // the face being followed
+                // Its box, normalised to the video frame in the *raw* frame's
+                // orientation (the resampler's mirroring is applied on the
+                // way to the landmarker and undone on the way back).
+                static float lockX = 0, lockY = 0, lockW = 0, lockH = 0;
+                static double lockLastSeen = -1.0;
+                static mirror::SrcRect roi;         // the landmarker's crop, source px
+                static bool roiValid = false;
+                int sw = 0, sh = 0;
+                const bool haveSrc = SourceSize(sw, sh);
+                const mirror::SrcRect vr = haveSrc ? VideoRect(sw, sh) : mirror::SrcRect{};
+                bool useRoi = false;
+                bool flipX = false;   // the video frame is the raw frame mirrored
+#if MIRROR_HAVE_KINECT
+                flipX = g_source != (int)Source::Photo && !g_kinect.mirrored();
+#endif
+                if (g_face_find_on && haveSrc) {
+                    const unsigned char* raw = nullptr;
+                    int rw = 0, rh = 0, bpp = 0;
+                    bool rawOk = false;
+                    if (g_source == (int)Source::Photo) {
+                        raw = g_photo.data(); rw = g_photo_w; rh = g_photo_h; bpp = 3;
+                        rawOk = !g_photo.empty();
+                    }
+#if MIRROR_HAVE_KINECT
+                    else { bool rgbx = false; rawOk = g_kinect.rawFrame(raw, rw, rh, bpp, rgbx); }
+#endif
+                    // Only on a frame the sensor has not shown it yet: it
+                    // free-runs at 30 Hz under a 60 fps loop, and Vision on
+                    // 1920x1080 is 7-8 ms. A photo is looked at once a second.
+                    static uint64_t lastSeenFrame = ~0ull;
+                    static int photoTick = 0;
+                    bool fresh = false;
+                    if (g_source == (int)Source::Photo) fresh = (photoTick++ % 60) == 0;
+#if MIRROR_HAVE_KINECT
+                    else { const uint64_t n = g_kinect.frames(); fresh = n != lastSeenFrame; lastSeenFrame = n; }
+#endif
+                    if (rawOk && rw == sw && rh == sh && fresh) {
+                        finder.find(raw, rw, rh, bpp, boxes);
+                        g_face_find_ms = (float)finder.lastMs();
+                        // Into the video frame's normalised coordinates; a
+                        // face outside the video frame is not offered.
+                        g_face_find_count = 0;
+                        int best = -1; float bestD = 1e9f;
+                        for (size_t i = 0; i < boxes.size(); ++i) {
+                            mirror::FaceBox& b = boxes[i];
+                            b.x = (b.x * sw - vr.x) / float(vr.w);
+                            b.w = b.w * sw / float(vr.w);
+                            b.y = (b.y * sh - vr.y) / float(vr.h);
+                            b.h = b.h * sh / float(vr.h);
+                            const float cx = b.x + 0.5f * b.w, cy = b.y + 0.5f * b.h;
+                            if (cx < 0.f || cx > 1.f || cy < 0.f || cy > 1.f) continue;
+                            ++g_face_find_count;
+                            if (lockValid) {
+                                // The one it had: nearest centre, within a
+                                // couple of face-widths of where it was.
+                                const float lcx = lockX + 0.5f * lockW, lcy = lockY + 0.5f * lockH;
+                                const float d = std::hypot(cx - lcx, cy - lcy);
+                                if (d < 2.f * std::max(lockW, 0.02f) && d < bestD) { bestD = d; best = (int)i; }
+                            } else {
+                                // Nobody followed: the largest face.
+                                const float d = -b.w * b.h;
+                                if (d < bestD) { bestD = d; best = (int)i; }
+                            }
+                        }
+                        if (best >= 0) {
+                            const mirror::FaceBox& b = boxes[best];
+                            lockX = b.x; lockY = b.y; lockW = b.w; lockH = b.h;
+                            lockValid = true;
+                            lockLastSeen = nowT;
+                        } else if (lockValid && nowT - lockLastSeen > g_face_hold_secs) {
+                            lockValid = false;   // gone: free to pick afresh
+                        }
+                    }
+                    if (lockValid) {
+                        // A square around the box, g_face_find_pad times its
+                        // longer side, in source pixels, kept inside the
+                        // video frame. Re-cut only when the face has left the
+                        // crop's middle or changed size by a quarter.
+                        const float side = std::max(0.02f, std::max(lockW * vr.w, lockH * vr.h) * std::max(g_face_find_pad, 1.2f));
+                        const float cx = vr.x + (lockX + 0.5f * lockW) * vr.w;
+                        const float cy = vr.y + (lockY + 0.5f * lockH) * vr.h;
+                        bool recut = !roiValid;
+                        if (roiValid) {
+                            const float rcx = roi.x + 0.5f * roi.w, rcy = roi.y + 0.5f * roi.h;
+                            const float tol = 0.18f * roi.w;
+                            const float ratio = side / std::max(1.f, (float)roi.w);
+                            recut = std::fabs(cx - rcx) > tol || std::fabs(cy - rcy) > tol ||
+                                    ratio > 1.25f || ratio < 0.8f;
+                        }
+                        if (recut) {
+                            const int s = std::max(32, std::min((int)std::lround(side), std::min(vr.w, vr.h)));
+                            int x = (int)std::lround(cx - 0.5f * s), y = (int)std::lround(cy - 0.5f * s);
+                            x = std::min(std::max(x, vr.x), vr.x + vr.w - s);
+                            y = std::min(std::max(y, vr.y), vr.y + vr.h - s);
+                            roi = mirror::SrcRect{x, y, s, s};
+                            roiValid = true;
+                        }
+                        useRoi = true;
+                    } else {
+                        roiValid = false;
+                    }
+                } else {
+                    lockValid = false; roiValid = false;
+                    g_face_find_count = 0; g_face_find_ms = 0.f;
+                }
+                if (useRoi) {
+                    g_face_roi_x = (roi.x - vr.x) / float(vr.w); g_face_roi_w = roi.w / float(vr.w);
+                    g_face_roi_y = (roi.y - vr.y) / float(vr.h); g_face_roi_h = roi.h / float(vr.h);
+                    if (flipX) g_face_roi_x = 1.f - g_face_roi_x - g_face_roi_w;
+                } else {
+                    g_face_roi_w = g_face_roi_h = 0.f;
+                }
+
+                // --- stage two: the landmarker, on the crop ----------------
+                // The crop at tracker px square (a face filling it), or,
+                // with no face found / the finder off, the whole video frame
+                // at tracker px on its long edge, as before.
+                const int tw = useRoi ? g_track_px : g_track_w;
+                const int th = useRoi ? g_track_px : g_track_h;
+                if (SourceRGB8(tw, th, g_track_rgb, /*filtered=*/true,
+                               /*whole=*/g_feed_rect_valid, useRoi ? &roi : nullptr)) {
                     // Video mode rejects a repeated or decreasing timestamp
                     // with a hard error rather than dropping the frame, and
                     // the render loop can outrun the sensor, so the clock here
@@ -2297,8 +2432,22 @@ int main(int argc, char** argv) {
                     g_track_ts += 33;
                     mirror::FaceResult r;
                     r.blendshape_names = g_face.blendshape_names;   // filled once
-                    const bool hit = g_tracker.detect(g_track_rgb.data(), g_track_w,
-                                                      g_track_h, g_track_ts, r);
+                    const bool hit = g_tracker.detect(g_track_rgb.data(), tw, th,
+                                                      g_track_ts, r);
+                    // Crop-normalised landmarks into the video frame's. The
+                    // resampler mirrors within the rect when the source is
+                    // not already a mirror (see KinectFitTarget::setMirrored),
+                    // and the whole frame is mirrored the same way, so the
+                    // map is through the raw column and back.
+                    if (hit && useRoi && haveSrc) {
+                        const bool flip = flipX;
+                        for (mirror::FaceLandmark& L : r.landmarks) {
+                            const float rawX = flip ? roi.x + (1.f - L.x) * roi.w : roi.x + L.x * roi.w;
+                            L.x = flip ? (vr.x + vr.w - rawX) / float(vr.w) : (rawX - vr.x) / float(vr.w);
+                            L.y = (roi.y + L.y * roi.h - vr.y) / float(vr.h);
+                            L.z *= roi.w / float(vr.w);
+                        }
+                    }
                     // Whole-sensor landmarks into the feed rect's normalised
                     // coordinates (see the frame derivation above). A face
                     // outside the feed's crop maps outside 0..1, and is

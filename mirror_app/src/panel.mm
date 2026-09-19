@@ -2685,6 +2685,41 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::SameLine();
                     ImGui::TextDisabled("%d x %d", g_track_w, g_track_h);
                     ImGui::PopItemWidth();
+
+                    ui::Checkbox("face finder first (Vision, full-size frame)", &g_face_find_on);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "MediaPipe finds faces on its input shrunk to a\n"
+                            "couple of hundred pixels, so a visitor at the far\n"
+                            "side of the sensor is a dozen pixels of face and\n"
+                            "never found. On: Apple's Vision detector runs on\n"
+                            "the full-size frame first, and MediaPipe is handed\n"
+                            "a crop of the full-size frame around that face --\n"
+                            "a face filling its input, wherever they stand.\n\n"
+                            "It follows one face: the one it had, and only\n"
+                            "picks another once that one has been gone for the\n"
+                            "hold. The crop is drawn on the sensor preview.");
+                    }
+                    ImGui::PushItemWidth(90);
+                    ui::SliderFloat("finder crop (x face)", &g_face_find_pad, 1.2f, 4.f, "%.1f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The crop's side as a multiple of the face box. The\n"
+                            "landmarker wants some room around the face; too\n"
+                            "tight and it loses the jaw and the brow, too loose\n"
+                            "and the face is small again.");
+                    }
+                    ImGui::PopItemWidth();
+                    if (g_face_find_on) {
+                        ImGui::SameLine();
+                        if (g_face_roi_w > 0.f)
+                            ImGui::TextDisabled("%.1f ms, %d face%s, crop %.0f%%", g_face_find_ms,
+                                                g_face_find_count, g_face_find_count == 1 ? "" : "s",
+                                                g_face_roi_w * 100.f);
+                        else
+                            ImGui::TextDisabled("%.1f ms, %d face%s, whole frame", g_face_find_ms,
+                                                g_face_find_count, g_face_find_count == 1 ? "" : "s");
+                    }
 #if !MIRROR_HAVE_KINECT
                     ImGui::TextDisabled("(no camera: tracking needs the Kinect target)");
 #endif
@@ -4720,6 +4755,13 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                 // they sit off the face here, they sit off the face there.
                 if (g_pip_landmarks && g_track_on && g_face.valid) {
                     ImDrawList* dl = ImGui::GetWindowDrawList();
+                    // The landmarker's crop, where the finder put it.
+                    if (g_face_find_on && g_face_roi_w > 0.f) {
+                        dl->AddRect(ImVec2(p0.x + g_face_roi_x * iw, p0.y + g_face_roi_y * ih),
+                                    ImVec2(p0.x + (g_face_roi_x + g_face_roi_w) * iw,
+                                           p0.y + (g_face_roi_y + g_face_roi_h) * ih),
+                                    IM_COL32(120, 170, 255, 200));
+                    }
                     // The thumbnail is the video frame; the landmarks are
                     // in the feed crop's coordinates, so back they go.
                     for (const mirror::FaceLandmark& L : g_face.landmarks) {

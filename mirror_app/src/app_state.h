@@ -336,6 +336,16 @@ extern float g_stab_size_mul;     // on-screen face size, as a multiple of the c
 extern bool  g_head_valid;
 extern float g_head_cx, g_head_cy;
 extern float g_head_hx, g_head_hy;
+// The face finder ahead of the landmarker (face_find.h): on, the full-size
+// frame goes to Vision first and MediaPipe is handed a crop around the face
+// it follows. Off, MediaPipe gets the whole video frame at tracker px.
+extern bool   g_face_find_on;
+extern float  g_face_find_pad;      // the crop's side, as a multiple of the face box
+// Readouts: the finder's cost, the faces it saw, and the crop it follows
+// (normalised to the video frame; w <= 0 when none).
+extern float  g_face_find_ms;
+extern int    g_face_find_count;
+extern float  g_face_roi_x, g_face_roi_y, g_face_roi_w, g_face_roi_h;
 extern float  g_face_hold_secs;
 extern int    g_face_acquire;
 extern double g_face_last_seen;

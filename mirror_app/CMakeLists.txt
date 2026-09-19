@@ -53,7 +53,8 @@ add_executable(mirror_app
     src/text_sdf.cpp
     src/text_overlay.mm
     src/fullscreen_present.mm
-    src/mic_level.mm)
+    src/mic_level.mm
+    src/face_find.mm)
 # ../sdf_viewer for LeafMesh.h (the leaf triangulation is renderer-agnostic C++
 # and lives with the rest of the flower code); ../wwise_plugins/mi_common for the
 # OnsetTap shared-memory layout -- header-only, and deliberately the *same*
@@ -67,6 +68,8 @@ target_link_libraries(mirror_app PRIVATE mirror_imgui glfw
     # CoreText/CoreGraphics rasterise the text overlay's glyphs. Cocoa pulls
     # both in transitively, but the overlay uses them directly.
     "-framework CoreText" "-framework CoreGraphics"
+    # Vision: the face finder ahead of the landmarker (face_find.mm).
+    "-framework Vision" "-framework CoreVideo"
     "-framework Cocoa" "-framework Foundation")
 
 # Neuromirror sibling repo (MSL sources, face_landmarker.task, canonical model).

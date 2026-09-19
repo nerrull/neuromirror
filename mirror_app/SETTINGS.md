@@ -21,13 +21,15 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## machine (20 parameters)
+## machine (22 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
 | `camera mask/mask the camera` | bool | -- | 0 |
 | `camera mask/soft edge` | float | 0 .. 0.2 | 0.03 |
 | `face tracking/acquire` | int | 1 .. 10 | 2 |
+| `face tracking/face finder first (Vision, full-size frame)` | bool | -- | 1 |
+| `face tracking/finder crop (x face)` | float | 1.2 .. 4 | 2.2 |
 | `face tracking/fitted mesh drives the root masks` | bool | -- | 1 |
 | `face tracking/hold on loss` | float | 0 .. 3 | 0.6 |
 | `face tracking/source` | int | 0 .. 1 | 0 |
