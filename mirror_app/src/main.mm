@@ -2330,18 +2330,26 @@ int main(int argc, char** argv) {
 #if MIRROR_HAVE_KINECT
                     else { bool rgbx = false; rawOk = g_kinect.rawFrame(raw, rw, rh, bpp, rgbx); }
 #endif
-                    // Only on a frame the sensor has not shown it yet: it
-                    // free-runs at 30 Hz under a 60 fps loop, and Vision on
-                    // 1920x1080 is 7-8 ms. A photo is looked at once a second.
+                    // Off the render thread (FaceFinder::submit/take): the
+                    // request is 7-8 ms on 1920x1080, too much of a 60 fps
+                    // frame. Only a frame the sensor has not shown it yet
+                    // is handed over, and once a face is followed only
+                    // every third of those -- 10 Hz is plenty for a crop
+                    // held with hysteresis, 30 Hz while searching. A photo
+                    // is looked at once a second.
                     static uint64_t lastSeenFrame = ~0ull;
-                    static int photoTick = 0;
+                    static int photoTick = 0, sensorTick = 0;
                     bool fresh = false;
                     if (g_source == (int)Source::Photo) fresh = (photoTick++ % 60) == 0;
 #if MIRROR_HAVE_KINECT
-                    else { const uint64_t n = g_kinect.frames(); fresh = n != lastSeenFrame; lastSeenFrame = n; }
+                    else {
+                        const uint64_t n = g_kinect.frames();
+                        if (n != lastSeenFrame) { lastSeenFrame = n; fresh = (sensorTick++ % (lockValid ? 3 : 1)) == 0; }
+                    }
 #endif
-                    if (rawOk && rw == sw && rh == sh && fresh) {
-                        finder.find(raw, rw, rh, bpp, boxes);
+                    if (rawOk && rw == sw && rh == sh && fresh) finder.submit(raw, rw, rh, bpp);
+                    bool found = false;
+                    if (finder.take(boxes, found)) {
                         g_face_find_ms = (float)finder.lastMs();
                         // Into the video frame's normalised coordinates; a
                         // face outside the video frame is not offered.

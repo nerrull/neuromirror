@@ -31,6 +31,15 @@ public:
               std::vector<FaceBox>& out);
     // The last call's cost, ms.
     double lastMs() const { return last_ms_; }
+
+    // The same off the calling thread: submit() copies the frame to a
+    // worker (false while it is still busy with the last one -- then skip
+    // this frame, another is coming), take() hands back the newest result
+    // once, true when there is one. The render loop is not held for the
+    // 7-8 ms the request costs; the boxes arrive a frame or two late, which
+    // the crop's hysteresis absorbs.
+    bool submit(const unsigned char* data, int w, int h, int bytes_per_px);
+    bool take(std::vector<FaceBox>& out, bool& found);
 private:
     struct Impl;
     Impl* impl_ = nullptr;
