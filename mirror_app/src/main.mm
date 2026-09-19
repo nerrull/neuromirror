@@ -118,7 +118,7 @@ bool LoadPhotoSource(const char* path, std::string& err) {
 }
 
 // Coverage at a normalised point: 1 inside, 0 outside, smooth across the edge.
-// The source frame's size, whichever source: false until there is one.
+// The source (sensor) frame's size, whichever source: false until there is one.
 static bool SourceSize(int& w, int& h) {
     if (g_source == (int)Source::Photo) {
         w = g_photo_w; h = g_photo_h;
@@ -129,6 +129,21 @@ static bool SourceSize(int& w, int& h) {
 #else
     return false;
 #endif
+}
+
+// The video frame: the sensor less g_video_edge_crop on each side. What the
+// tracker looks at and what a position is normalised across.
+static mirror::SrcRect VideoRect(int sw, int sh) {
+    const float c = std::min(std::max(g_video_edge_crop, 0.f), 0.45f);
+    const int x = int(std::lround(c * sw));
+    return mirror::SrcRect{x, 0, std::max(1, sw - 2 * x), sh};
+}
+bool VideoSize(int& w, int& h) {
+    int sw = 0, sh = 0;
+    if (!SourceSize(sw, sh)) return false;
+    const mirror::SrcRect v = VideoRect(sw, sh);
+    w = v.w; h = v.h;
+    return true;
 }
 
 // The feed's rect of the source this frame (ComputeFeedRect for the
@@ -143,12 +158,13 @@ static int g_face_w = 480, g_face_h = 270;
 // crop sits across the *sensor*, normalised, which is where it lands across
 // the screen -- the face's place in the room mapped 16:9 onto 9:16, whatever
 // the feed crop shows. Identity until a source is up.
-static void ScreenFromFeed(float& u, float& v) {
+void ScreenFromFeed(float& u, float& v) {
     int sw = 0, sh = 0;
     if (!g_feed_rect_valid || !SourceSize(sw, sh) || g_feed_rect.w <= 0 || g_feed_rect.h <= 0)
         return;
-    u = (u * g_feed_rect.w + g_feed_rect.x) / float(sw);
-    v = (v * g_feed_rect.h + g_feed_rect.y) / float(sh);
+    const mirror::SrcRect vr = VideoRect(sw, sh);
+    u = (u * g_feed_rect.w + g_feed_rect.x - vr.x) / float(vr.w);
+    v = (v * g_feed_rect.h + g_feed_rect.y - vr.y) / float(vr.h);
 }
 
 static float CamMaskAt(float u, float v) {
@@ -212,16 +228,16 @@ static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h,
 
 // `filtered` false takes one source pixel per destination pixel instead of
 // averaging the footprint -- for the overlay, which only has to look right.
-// `whole` takes the source's whole frame instead of the feed crop -- the
-// tracker's picture (see the tracking block in the loop); the camera mask
-// is still the feed's, remapped onto it.
+// `whole` takes the video frame (VideoRect) instead of the feed crop -- the
+// tracker's picture (see the tracking block in the loop) and the corner
+// preview's; the camera mask is still the feed's, remapped onto it.
 static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
                        bool filtered = true, bool whole = false) {
     int sw = 0, sh = 0;
     mirror::SrcRect wholeRect, feedRect;
     if (whole) {
         if (!SourceSize(sw, sh)) return false;
-        wholeRect = mirror::SrcRect{0, 0, sw, sh};
+        wholeRect = VideoRect(sw, sh);
         feedRect = g_feed_rect;
     }
     if (g_source == (int)Source::Photo) {
@@ -2155,8 +2171,9 @@ int main(int argc, char** argv) {
         {
             int sw = 0, sh = 0;
             g_feed_rect_valid = SourceSize(sw, sh);
-            const int aw = g_feed_rect_valid ? sw : compW;
-            const int ah = g_feed_rect_valid ? sh : compH;
+            const mirror::SrcRect vr = g_feed_rect_valid ? VideoRect(sw, sh) : mirror::SrcRect{};
+            const int aw = g_feed_rect_valid ? vr.w : compW;
+            const int ah = g_feed_rect_valid ? vr.h : compH;
             if (aw >= ah) {
                 g_track_w = g_track_px;
                 g_track_h = std::max(1, int(int64_t(g_track_px) * ah / aw));
@@ -2289,10 +2306,11 @@ int main(int argc, char** argv) {
                     if (hit && g_feed_rect_valid) {
                         int sw = 0, sh = 0;
                         if (SourceSize(sw, sh) && g_feed_rect.w > 0 && g_feed_rect.h > 0) {
-                            const float kx = float(sw) / float(g_feed_rect.w);
-                            const float ky = float(sh) / float(g_feed_rect.h);
-                            const float ox = float(g_feed_rect.x) / float(g_feed_rect.w);
-                            const float oy = float(g_feed_rect.y) / float(g_feed_rect.h);
+                            const mirror::SrcRect vr = VideoRect(sw, sh);
+                            const float kx = float(vr.w) / float(g_feed_rect.w);
+                            const float ky = float(vr.h) / float(g_feed_rect.h);
+                            const float ox = float(g_feed_rect.x - vr.x) / float(g_feed_rect.w);
+                            const float oy = float(g_feed_rect.y - vr.y) / float(g_feed_rect.h);
                             float mnx = 1e9f, mny = 1e9f, mxx = -1e9f, mxy = -1e9f;
                             for (mirror::FaceLandmark& L : r.landmarks) {
                                 L.x = L.x * kx - ox;
@@ -3449,12 +3467,19 @@ int main(int argc, char** argv) {
                 const bool full_frame = scene == (int)Scene::CamMask ||
                                         scene == (int)Scene::Camera;
                 const int base = full_frame ? 960 : 320;
-                if (compW >= compH) {
+                // The corner thumbnail is the *video frame* at its own
+                // shape -- what the tracker looks at, with the landmarks
+                // mapped back onto it -- the full-screen views the feed
+                // crop at the composition's, since the mask is applied there.
+                int vw = 0, vh = 0;
+                const bool video = !full_frame && VideoSize(vw, vh);
+                const int aw = video ? vw : compW, ah = video ? vh : compH;
+                if (aw >= ah) {
                     pipW = base;
-                    pipH = std::max(1, int(int64_t(base) * compH / compW));
+                    pipH = std::max(1, int(int64_t(base) * ah / aw));
                 } else {
                     pipH = base;
-                    pipW = std::max(1, int(int64_t(base) * compW / compH));
+                    pipW = std::max(1, int(int64_t(base) * aw / ah));
                 }
 #if MIRROR_HAVE_KINECT
                 // Advance the retained snapshot when nothing else did. Without
@@ -3481,7 +3506,7 @@ int main(int argc, char** argv) {
                 // view you judge edges in -- which is what it is for -- and it
                 // only runs when it is the scene on screen, so it is not in the
                 // show's budget at all.
-                if (SourceRGB8(pipW, pipH, srcRGB, /*filtered=*/full_frame) &&
+                if (SourceRGB8(pipW, pipH, srcRGB, /*filtered=*/full_frame, /*whole=*/video) &&
                     srcRGB.size() == size_t(pipW) * pipH * 3) {
                     if (!srcTex || srcTexW != pipW || srcTexH != pipH) {
                         MTLTextureDescriptor* td = [MTLTextureDescriptor

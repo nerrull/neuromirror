@@ -265,6 +265,11 @@ void ResetBestFaceColors();
 extern int   g_orientation;
 extern float g_portrait_aspect;
 extern mirror::FeedCrop g_feed;
+// Cut from each side of the sensor, as a fraction of its width, before
+// anything looks at it: the video frame is what is left. The tracker sees
+// it, the feed's 'full width' is its width, and a face's place across it
+// is its place across the screen.
+extern float g_video_edge_crop;
 
 // --- the frame source -------------------------------------------------------
 extern int g_source;

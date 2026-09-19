@@ -401,6 +401,7 @@ float g_portrait_aspect = 9.f / 16.f;   // the panel's w/h stood on its end
 // third of the sensor's width, so this is not a fine adjustment -- it decides
 // who is in the picture.
 mirror::FeedCrop g_feed;
+float g_video_edge_crop = 0.f;
 
 int g_source = (int)Source::Kinect;
 std::vector<unsigned char> g_photo;      // full-res RGB8

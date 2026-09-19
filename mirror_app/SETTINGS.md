@@ -21,7 +21,7 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## machine (19 parameters)
+## machine (20 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -41,9 +41,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/target px` | int | 720 .. 3840 | 1920 |
 | `screen/feed x` | float | 0 .. 1 | 0.5 |
 | `screen/feed y` | float | 0 .. 1 | 0.5 |
-| `screen/feed zoom` | float | 0.25 .. 4 | 1 |
+| `screen/feed zoom` | float | 0.25 .. 4 | 0.717 |
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
+| `screen/video edge crop` | float | 0 .. 0.45 | 0 |
 
 ## fit (47 parameters)
 
@@ -58,7 +59,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.0062 |
 | `fit/crop/steps` | int | 1 .. 32 | 8 |
 | `fit/dilate` | int | 0 .. 24 | 6 |
-| `fit/face size x` | float | 0.5 .. 2 | 1 |
+| `fit/face size x` | float | 0.5 .. 2 | 1.82 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 0.515 |
 | `fit/far (head height)` | float | 0.02 .. 0.4 | 0.14 |

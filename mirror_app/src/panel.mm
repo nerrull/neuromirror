@@ -2501,6 +2501,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "are mapped into this rect, so moving this cannot put\n"
                         "the mask off the face.");
                 }
+                ui::SliderFloat("video edge crop", &g_video_edge_crop, 0.f, 0.45f, "%.3f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Cut from each side of the sensor, as a fraction of\n"
+                        "its width. What is left is the video frame: the\n"
+                        "tracker looks at it, 'full width' is its width, and\n"
+                        "a face's place across it is its place across the\n"
+                        "screen.");
+                }
                 ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
                 ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
                 ui::SliderFloat("feed zoom", &g_feed.zoom, 0.25f, 4.f);
@@ -2518,14 +2527,18 @@ void DrawControlPanel(PanelFrameArgs& pf) {
 #if MIRROR_HAVE_KINECT
                     else g_kinect.frameSize(sw, sh);
 #endif
+                    // The video frame's width: the sensor less the edge crop.
+                    const int vw = std::max(1, sw - 2 * int(std::lround(
+                        std::min(std::max(g_video_edge_crop, 0.f), 0.45f) * sw)));
+                    const float zoomFull = mirror::FeedZoomFullWidth(vw, sh, pf.compW, pf.compH);
                     if (ImGui::Button("full width")) {
                         g_feed = mirror::FeedCrop{};
-                        g_feed.zoom = mirror::FeedZoomFullWidth(sw, sh, pf.compW, pf.compH);
+                        g_feed.zoom = zoomFull;
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "The whole %d-wide sensor across the frame: zoom %.3f.",
-                            sw, mirror::FeedZoomFullWidth(sw, sh, pf.compW, pf.compH));
+                            "The video frame's whole width (%d px) across the frame: zoom %.3f.",
+                            vw, zoomFull);
                     }
                 }
             }
@@ -4707,10 +4720,14 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                 // they sit off the face here, they sit off the face there.
                 if (g_pip_landmarks && g_track_on && g_face.valid) {
                     ImDrawList* dl = ImGui::GetWindowDrawList();
+                    // The thumbnail is the video frame; the landmarks are
+                    // in the feed crop's coordinates, so back they go.
                     for (const mirror::FaceLandmark& L : g_face.landmarks) {
+                        float u = L.x, v = L.y;
+                        ScreenFromFeed(u, v);
                         dl->AddRectFilled(
-                            ImVec2(p0.x + L.x * iw, p0.y + L.y * ih),
-                            ImVec2(p0.x + L.x * iw + 1.5f, p0.y + L.y * ih + 1.5f),
+                            ImVec2(p0.x + u * iw, p0.y + v * ih),
+                            ImVec2(p0.x + u * iw + 1.5f, p0.y + v * ih + 1.5f),
                             IM_COL32(120, 255, 170, 200));
                     }
                     // The crop the fit is supervised on, drawn where its pixels
@@ -4723,12 +4740,13 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                         g_mask_shape == (int)MaskShape::Box) {
                         const float px = pf.fit_w > 0 ? float(g_mask_dilate) / pf.fit_w : 0.f;
                         const float py = pf.fit_h > 0 ? float(g_mask_dilate) / pf.fit_h : 0.f;
-                        dl->AddRect(
-                            ImVec2(p0.x + (g_head_cx - g_head_hx - px) * iw,
-                                   p0.y + (g_head_cy - g_head_hy - py) * ih),
-                            ImVec2(p0.x + (g_head_cx + g_head_hx + px) * iw,
-                                   p0.y + (g_head_cy + g_head_hy + py) * ih),
-                            IM_COL32(255, 210, 120, 220));
+                        float u0 = g_head_cx - g_head_hx - px, v0 = g_head_cy - g_head_hy - py;
+                        float u1 = g_head_cx + g_head_hx + px, v1 = g_head_cy + g_head_hy + py;
+                        ScreenFromFeed(u0, v0);
+                        ScreenFromFeed(u1, v1);
+                        dl->AddRect(ImVec2(p0.x + u0 * iw, p0.y + v0 * ih),
+                                    ImVec2(p0.x + u1 * iw, p0.y + v1 * ih),
+                                    IM_COL32(255, 210, 120, 220));
                     }
                 }
                 const bool live = g_fit_live && pf.mirror.pond().fitting() &&

@@ -20,3 +20,9 @@ bool  ShowFitConverged();
 bool  HaveCrop();
 float PlaceScale();
 bool  SourceReady();
+// Feed-crop-normalised coordinates to the screen's: where the point sits
+// across the video frame (the sensor less its edge crop), normalised.
+void  ScreenFromFeed(float& u, float& v);
+// The video frame's size -- the sensor less g_video_edge_crop on each side
+// -- false until a source is up.
+bool  VideoSize(int& w, int& h);
