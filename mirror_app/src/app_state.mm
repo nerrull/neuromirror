@@ -554,7 +554,8 @@ bool  g_cam_mask_on = false;
 float g_cam_x0 = 0.15f, g_cam_y0 = 0.05f, g_cam_x1 = 0.85f, g_cam_y1 = 0.95f;
 float g_cam_feather = 0.03f;   // soft edge, as a fraction of the frame
 int   g_head_mode = (int)HeadMode::Track;
-float g_head_smooth = 0.25f;    // EMA per frame; 1 = no smoothing
+float g_head_jitter  = 0.004f;
+float g_head_agility = 0.5f;
 float g_shift_gain_fit  = 1.f;
 float g_shift_gain_idle = 0.25f;
 float g_shift_radius    = 0.f;

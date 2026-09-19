@@ -21,6 +21,7 @@
 #include "metal_context.h"
 #include "mirror_scene.h"
 #include "fit_target.h"
+#include "kalman.h"
 #include "face_tracker.h"
 #include "face_find.h"
 #include "face_capture.h"
@@ -373,22 +374,36 @@ static bool SourceAdvance() {
 // The cost sits in different places: centred resamples the image once a frame,
 // stabilised rebuilds the fit features once a frame, track does neither.
 
-static void UpdateHeadBox() {
-    if (!g_track_on || !g_face.valid) { g_head_valid = false; return; }
+// Set where g_face is refreshed, read here: the filters take a measurement
+// only from a new detection. Between detections (the render runs faster than
+// the sensor) and through a hold, the box stays put -- extrapolating a
+// frozen face would walk it off the head.
+static bool g_face_fresh = false;
+
+static void UpdateHeadBox(double nowT) {
+    static mirror::Kalman1D kcx, kcy, khx, khy;
+    static double lastT = 0.0;
+    if (!g_track_on || !g_face.valid) {
+        g_head_valid = false;
+        kcx.reset(); kcy.reset(); khx.reset(); khy.reset();
+        return;
+    }
+    if (!g_face_fresh && g_head_valid) return;
     const float cx = g_face.centre_x, cy = g_face.centre_y;
     const float pf = 1.f + std::max(g_crop_pad, 0.f);
     const float hx = 0.5f * (g_face.max_x - g_face.min_x) * pf;
     const float hy = 0.5f * (g_face.max_y - g_face.min_y) * pf;
-    if (!g_head_valid) {   // first detection: snap, do not ease in from nowhere
-        g_head_cx = cx; g_head_cy = cy; g_head_hx = hx; g_head_hy = hy;
-        g_head_valid = true;
-        return;
-    }
-    const float a = std::min(1.f, std::max(0.01f, g_head_smooth));
-    g_head_cx += a * (cx - g_head_cx);
-    g_head_cy += a * (cy - g_head_cy);
-    g_head_hx += a * (hx - g_head_hx);
-    g_head_hy += a * (hy - g_head_hy);
+    const float dt = g_head_valid ? float(std::min(0.25, std::max(1e-3, nowT - lastT))) : 0.f;
+    lastT = nowT;
+    const float q = std::max(0.01f, g_head_agility), r = std::max(1e-4f, g_head_jitter);
+    kcx.step(cx, dt, q, r);
+    kcy.step(cy, dt, q, r);
+    // The size moves less than the centre: half the noise, half the haste.
+    khx.step(hx, dt, 0.5f * q, 0.5f * r);
+    khy.step(hy, dt, 0.5f * q, 0.5f * r);
+    g_head_cx = kcx.x; g_head_cy = kcy.x;
+    g_head_hx = std::max(1e-3f, khx.x); g_head_hy = std::max(1e-3f, khy.x);
+    g_head_valid = true;
 }
 
 // Defined below, next to the placement they describe: the mask, the region
@@ -2566,6 +2581,7 @@ int main(int argc, char** argv) {
                     }
                     if (hit && g_face_streak >= std::max(1, g_face_acquire)) {
                         g_face = std::move(r);
+                        g_face_fresh = true;
                         if (g_fitter.valid()) {
                             // The automatic start. Gated on the same acquire
                             // streak everything else here is, so a single
@@ -2622,8 +2638,23 @@ int main(int argc, char** argv) {
                                 g_feed_rect_valid && g_feed_rect.w > 0) {
                                 // px per cm in the fitter's frame, whose
                                 // width is the feed rect's.
-                                g_head_ppcm = g_fitter.pose().s *
-                                              float(g_feed_rect.w) / float(g_face_w);
+                                const float ppcm = g_fitter.pose().s *
+                                                   float(g_feed_rect.w) / float(g_face_w);
+                                // Filtered in the log, so the noise is a
+                                // fraction of the value: the head box's
+                                // jitter, in frame heights, is about the
+                                // same fraction of the head's size.
+                                static mirror::Kalman1D kppcm;
+                                static double lastT = 0.0;
+                                if (ppcm > 0.f) {
+                                    const float dt = kppcm.init
+                                        ? float(std::min(0.25, std::max(1e-3, nowT - lastT))) : 0.f;
+                                    lastT = nowT;
+                                    kppcm.step(std::log(ppcm), dt,
+                                               std::max(0.01f, g_head_agility) * 5.f,
+                                               std::max(1e-4f, g_head_jitter) * 5.f);
+                                    g_head_ppcm = std::exp(kppcm.x);
+                                }
                                 float d, x, y, f;
                                 if (MirrorGeometry(d, x, y, f)) {
                                     g_head_d_cm = d; g_head_x_cm = x; g_head_y_cm = y;
@@ -2644,7 +2675,8 @@ int main(int argc, char** argv) {
             // input shift and the region have to be settled here: the fit
             // features and the render both read them later in this frame and
             // must read the same values.
-            UpdateHeadBox();
+            UpdateHeadBox(nowT);
+            g_face_fresh = false;
             ApplyHeadMode(mirror.params(), fit_w, fit_h,
                           mirror.valid() && mirror.pond().fitted());
 

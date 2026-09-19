@@ -3027,16 +3027,25 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::TextDisabled("%.0f cm away, %+.0f across, %+.0f up  ->  x%.2f",
                                         g_head_d_cm, g_head_x_cm, g_head_y_cm, PlaceScale());
                 }
-                ImGui::SetNextItemWidth(110);
-                ui::SliderFloat("head smoothing", &g_head_smooth, 0.02f, 1.f,
-                                   "%.2f");
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("head jitter", &g_head_jitter, 0.0005f, 0.03f, "%.4f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "How fast the tracked box follows the landmarks.\n"
-                        "1 is raw. The box jitters a pixel or two on a still\n"
-                        "head, and both the input shift and the soft edge\n"
-                        "show that jitter directly.");
+                        "The tracked box is Kalman-filtered: this is how far\n"
+                        "the landmarks are believed to jitter on a still\n"
+                        "head, as a fraction of the frame's height. Higher\n"
+                        "trusts each detection less and averages more.");
                 }
+                ui::SliderFloat("head agility", &g_head_agility, 0.1f, 20.f, "%.1f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How fast a head may change speed, in frame\n"
+                        "heights per second squared. Lower smooths harder\n"
+                        "and lags a quick move; higher follows it and lets\n"
+                        "more jitter through. The filter carries velocity,\n"
+                        "so a steady walk is followed without lag either way.");
+                }
+                ImGui::PopItemWidth();
                 ImGui::Unindent();
                 ImGui::EndDisabled();
 

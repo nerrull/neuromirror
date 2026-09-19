@@ -43,8 +43,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/target px` | int | 720 .. 3840 | 1920 |
 | `screen/camera above centre (cm)` | float | -100 .. 150 | 40 |
 | `screen/camera hfov (deg)` | float | 30 .. 120 | 84.1 |
-| `screen/camera tilt (deg)` | float | -45 .. 45 | 0 |
-| `screen/distance trim` | float | 0.5 .. 2 | 1 |
+| `screen/camera tilt (deg)` | float | -45 .. 45 | 15 |
+| `screen/distance trim` | float | 0.5 .. 2 | 0.88 |
 | `screen/feed x` | float | 0 .. 1 | 0.5 |
 | `screen/feed y` | float | 0 .. 1 | 0.5 |
 | `screen/feed zoom` | float | 0.25 .. 4 | 0.25 |
@@ -53,7 +53,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/screen height (cm)` | float | 20 .. 300 | 60 |
 | `screen/video edge crop` | float | 0 .. 0.45 | 0.191 |
 
-## fit (43 parameters)
+## fit (44 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -63,10 +63,10 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/crop shape` | int | 0 .. 1 | 1 |
 | `fit/crop the fit to the face` | bool | -- | 1 |
 | `fit/crop/grid` | int | 1 .. 8 | 1 |
-| `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.0062 |
+| `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.0006 |
 | `fit/crop/steps` | int | 1 .. 32 | 8 |
 | `fit/dilate` | int | 0 .. 24 | 6 |
-| `fit/face size x` | float | 0.5 .. 5 | 1.82 |
+| `fit/face size x` | float | 0.5 .. 5 | 1.53 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 0.515 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
@@ -76,8 +76,9 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/follow the outline` | bool | -- | 1 |
 | `fit/full colour at fit` | float | 0.1 .. 1 | 0.62 |
 | `fit/grey outside` | float | 0 .. 1 | 1 |
+| `fit/head agility` | float | 0.1 .. 20 | 0.5 |
+| `fit/head jitter` | float | 0.0005 .. 0.03 | 0.004 |
 | `fit/head mode` | int | 0 .. 2 | 2 |
-| `fit/head smoothing` | float | 0.02 .. 1 | 0.25 |
 | `fit/identity/fit automatically` | bool | -- | 1 |
 | `fit/identity/frames` | int | 1 .. 24 | 8 |
 | `fit/identity/head pose from tracker` | bool | -- | 1 |
@@ -202,8 +203,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/pluck climb (semitones)` | float | 0 .. 36 | 6 |
 | `sound/pluck fitting octave` | int | -3 .. 1 | 1 |
 | `sound/pluck idle octave` | int | -3 .. 1 | 1 |
-| `sound/resolved/flanger fade (s)` | float | 0.1 .. 30 | 6 |
-| `sound/resolved/pluck glide (ms)` | float | 0 .. 2000 | 1502.22 |
+| `sound/resolved/flanger fade (s)` | float | 0.1 .. 30 | 3.342 |
+| `sound/resolved/pluck glide (ms)` | float | 0 .. 2000 | 1493.33 |
 | `sound/resolved/strum dead zone (deg)` | float | 0 .. 45 | 10 |
 | `sound/resolved/strum drop glide (ms)` | float | 0 .. 2000 | 1500 |
 | `sound/resolved/strum full velocity (deg-s)` | float | 10 .. 720 | 10 |
@@ -211,20 +212,20 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/resolved/strum mute fade (ms)` | float | 0 .. 5000 | 500 |
 | `sound/resolved/strum mutes pluck` | bool | -- | 1 |
 | `sound/resolved/strum octave` | int | -2 .. 4 | 1 |
-| `sound/resolved/strum range (deg)` | float | 10 .. 90 | 37.378 |
+| `sound/resolved/strum range (deg)` | float | 10 .. 90 | 40.578 |
 | `sound/resolved/strum scale` | int | 0 .. 2 | 1 |
 | `sound/resolved/strum shuffled` | bool | -- | 0 |
-| `sound/resolved/strum velocity smooth (ms)` | float | 1 .. 1000 | 150 |
+| `sound/resolved/strum velocity smooth (ms)` | float | 1 .. 1000 | 473.86 |
 | `sound/resolved/strum wires` | bool | -- | 1 |
-| `sound/resolved/wire arc (deg)` | float | 10 .. 360 | 70 |
-| `sound/resolved/wire height (x mask)` | float | 0.5 .. 20 | 4 |
+| `sound/resolved/wire arc (deg)` | float | 10 .. 360 | 102.556 |
+| `sound/resolved/wire height (x mask)` | float | 0.5 .. 20 | 3.956 |
 | `sound/resolved/wire pluck decay (s)` | float | 0.05 .. 5 | 1.2 |
 | `sound/resolved/wire pluck vibration (px)` | float | 0 .. 60 | 14 |
-| `sound/resolved/wire pluck width (x)` | float | 0 .. 4 | 1 |
-| `sound/resolved/wire pulse divisor` | float | 1 .. 512 | 64 |
-| `sound/resolved/wire radius (x nose)` | float | 0.5 .. 6 | 1.25 |
+| `sound/resolved/wire pluck width (x)` | float | 0 .. 4 | 1.289 |
+| `sound/resolved/wire pulse divisor` | float | 1 .. 512 | 128 |
+| `sound/resolved/wire radius (x nose)` | float | 0.5 .. 6 | 1.36 |
 | `sound/resolved/wire spread` _(retired)_ | float | 0 .. 1 | 0.7 |
-| `sound/resolved/wire width (px)` | float | 0.25 .. 8 | 1.5 |
+| `sound/resolved/wire width (px)` | float | 0.25 .. 8 | 3.178 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
 | `sound/shepherd rate min (st-s)` | float | 0 .. 3 | 0.15 |

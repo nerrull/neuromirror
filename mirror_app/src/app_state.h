@@ -320,7 +320,11 @@ extern float g_cam_feather;
 
 // --- head movement ------------------------------------------------------
 extern int   g_head_mode;
-extern float g_head_smooth;
+// The head box's Kalman filter (kalman.h): the landmarks' jitter, and how
+// fast a head may accelerate, both in frame heights (per s^2 for the
+// latter). The same two, as fractions, filter the fitter's scale.
+extern float g_head_jitter;
+extern float g_head_agility;
 // The input-shift ("shift the inputs") mode's dials. The shift is a latch:
 // it accumulates the head's displacement, scaled by the gain for the show's
 // current phase, and holds wherever it was when the face is lost -- rather
