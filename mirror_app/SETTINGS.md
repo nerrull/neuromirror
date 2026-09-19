@@ -41,7 +41,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/target px` | int | 720 .. 3840 | 1920 |
 | `screen/feed x` | float | 0 .. 1 | 0.5 |
 | `screen/feed y` | float | 0 .. 1 | 0.5 |
-| `screen/feed zoom` | float | 1 .. 4 | 1 |
+| `screen/feed zoom` | float | 0.25 .. 4 | 1 |
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 

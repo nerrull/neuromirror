@@ -48,7 +48,9 @@ public:
 // nobody can be relied on to stand in the middle of it.
 struct FeedCrop {
     float cx = 0.5f, cy = 0.5f;  // rect centre, normalised source coords
-    float zoom = 1.f;            // > 1 takes a smaller rect, i.e. moves in
+    float zoom = 1.f;            // > 1 takes a smaller rect, i.e. moves in;
+                                 // < 1 a bigger one than the sensor has, the
+                                 // overhang black (the whole width in portrait)
 };
 
 // A rect in source pixels.
@@ -68,11 +70,17 @@ struct DstRect { int x = 0, y = 0, w = 0, h = 0; };
 
 // The rect `c` selects when resampling into a dst_w x dst_h frame: the largest
 // rect of the output's aspect at zoom 1, divided by zoom, centred on (cx, cy)
-// and shifted -- never shrunk -- to stay inside the source. Clamping by shifting
+// and shifted -- never shrunk -- to stay inside the source (or, when it is
+// bigger than the source, to keep the source inside it). Clamping by shifting
 // keeps the scale the framing controls ask for, so panning to the edge slides
-// the crop rather than silently zooming it out.
+// the crop rather than silently zooming it out. The rect may overhang the
+// source; the resamplers below write the overhang black.
 SrcRect ComputeFeedRect(int src_w, int src_h, int dst_w, int dst_h,
                         const FeedCrop& c);
+
+// The zoom at which that rect spans the source's whole width (its height
+// then overhangs, in a portrait frame): the full-width feed.
+float FeedZoomFullWidth(int src_w, int src_h, int dst_w, int dst_h);
 
 // Box-filter downsample of an 8-bit interleaved image into h*w*3 floats.
 //

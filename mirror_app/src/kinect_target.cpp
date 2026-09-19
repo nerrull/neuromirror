@@ -481,6 +481,12 @@ bool KinectFitTarget::lastFrameRGB8(int w, int h,
     return true;
 }
 
+bool KinectFitTarget::frameSize(int& w, int& h) const {
+    if (!impl_->have_frame || !impl_->frame.valid) return false;
+    w = impl_->frame.width; h = impl_->frame.height;
+    return w > 0 && h > 0;
+}
+
 bool KinectFitTarget::lastFrameRGBF(int w, int h, std::vector<float>& rgb,
                                     const DstRect& fill) const {
     if (!impl_->have_frame || w <= 0 || h <= 0) return false;

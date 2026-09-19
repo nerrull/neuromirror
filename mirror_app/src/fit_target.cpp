@@ -60,12 +60,13 @@ void BoxDownsample(const unsigned char* src, int src_w, int src_h,
     EnsureSize(dst, size_t(dst_w) * dst_h * 3);
     if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
 
-    // A rect from a preset or a stale frame size is not trusted to be inside the
-    // image: the inner loop indexes rows directly off it.
-    rect.x = std::min(std::max(rect.x, 0), src_w - 1);
-    rect.y = std::min(std::max(rect.y, 0), src_h - 1);
-    rect.w = std::min(std::max(rect.w, 1), src_w - rect.x);
-    rect.h = std::min(std::max(rect.h, 1), src_h - rect.y);
+    // The rect may overhang the image -- a feed zoom under 1 asks for more
+    // than the sensor has (ComputeFeedRect) -- so it is not clamped here;
+    // instead each destination pixel's footprint is clipped to the image
+    // below, and one that falls wholly outside is written black. Only the
+    // size is trusted, so the spans are never empty.
+    rect.w = std::max(rect.w, 1);
+    rect.h = std::max(rect.h, 1);
 
     fill = ClampFill(fill, dst_w, dst_h);
     if (fill.w <= 0 || fill.h <= 0) return;
@@ -80,30 +81,43 @@ void BoxDownsample(const unsigned char* src, int src_w, int src_h,
         // ends independently would double-count or drop rows.
         const int y0 = rect.y + int(int64_t(dy) * rect.h / dst_h);
         const int y1 = std::max(y0 + 1, rect.y + int(int64_t(dy + 1) * rect.h / dst_h));
+        // The footprint's centre (point sampling) and its clip to the image
+        // (the box); a row off the image is black across.
+        const int yc = (y0 + y1) / 2;
+        const int cy0 = std::max(y0, 0), cy1 = std::min(y1, src_h);
         for (int dx = fx0; dx < fx1; ++dx) {
             // Which source column this destination column is of. Mirroring is
             // just reading them backwards.
             const int sx = mirror ? (dst_w - 1 - dx) : dx;
             const int x0 = rect.x + int(int64_t(sx) * rect.w / dst_w);
             const int x1 = std::max(x0 + 1, rect.x + int(int64_t(sx + 1) * rect.w / dst_w));
+            const int xc = (x0 + x1) / 2;
+            const int cx0 = std::max(x0, 0), cx1 = std::min(x1, src_w);
+            T* o = out + (size_t(dy) * dst_w + dx) * 3;
 
             // Point sampling takes the middle of the footprint the box would
             // have averaged, so the two agree on *where* a destination pixel
             // comes from and differ only in how much of it they look at.
             if (!filter) {
-                const unsigned char* px = src +
-                    (size_t((y0 + y1) / 2) * src_w + size_t((x0 + x1) / 2)) * stride_px;
-                T* o = out + (size_t(dy) * dst_w + dx) * 3;
+                if (yc < 0 || yc >= src_h || xc < 0 || xc >= src_w) {
+                    o[0] = o[1] = o[2] = store(0.f);
+                    continue;
+                }
+                const unsigned char* px = src + (size_t(yc) * src_w + size_t(xc)) * stride_px;
                 o[0] = store(float(px[r_off]));
                 o[1] = store(float(px[g_off]));
                 o[2] = store(float(px[b_off]));
                 continue;
             }
 
+            if (cy0 >= cy1 || cx0 >= cx1) {
+                o[0] = o[1] = o[2] = store(0.f);
+                continue;
+            }
             uint32_t acc_r = 0, acc_g = 0, acc_b = 0, n = 0;
-            for (int y = y0; y < y1; ++y) {
+            for (int y = cy0; y < cy1; ++y) {
                 const unsigned char* srow = src + size_t(y) * src_w * stride_px;
-                for (int x = x0; x < x1; ++x) {
+                for (int x = cx0; x < cx1; ++x) {
                     const unsigned char* px = srow + size_t(x) * stride_px;
                     acc_r += px[r_off];
                     acc_g += px[g_off];
@@ -112,7 +126,6 @@ void BoxDownsample(const unsigned char* src, int src_w, int src_h,
                 }
             }
             if (!n) continue;
-            T* o = out + (size_t(dy) * dst_w + dx) * 3;
             o[0] = store(float(acc_r) / n);
             o[1] = store(float(acc_g) / n);
             o[2] = store(float(acc_b) / n);
@@ -155,24 +168,35 @@ SrcRect ComputeFeedRect(int src_w, int src_h, int dst_w, int dst_h,
     const double zoom = std::min(std::max(double(c.zoom), 1e-2), 50.0);
     w /= zoom;
     h /= zoom;
-    w = std::min(w, double(src_w));
-    h = std::min(h, double(src_h));
+    // A zoom under 1 asks for more than the sensor has: the rect overhangs
+    // it (the whole 16:9 width across a portrait frame, say) and the
+    // resamplers write the overhang black. The picture keeps its aspect;
+    // what it shows is a band of the frame.
 
     // Shifted inside rather than shrunk: the framing controls asked for this
     // scale, and quietly widening the rect at the edge of travel would change
-    // how big the person is as they walk across the frame.
+    // how big the person is as they walk across the frame. A rect bigger
+    // than the source is shifted the other way, so the source stays inside
+    // it -- the panning has no travel to give, and the picture sits centred.
     double x = double(c.cx) * src_w - w * 0.5;
     double y = double(c.cy) * src_h - h * 0.5;
-    x = std::min(std::max(x, 0.0), double(src_w) - w);
-    y = std::min(std::max(y, 0.0), double(src_h) - h);
+    const double xs = double(src_w) - w, ys = double(src_h) - h;
+    x = std::min(std::max(x, std::min(0.0, xs)), std::max(0.0, xs));
+    y = std::min(std::max(y, std::min(0.0, ys)), std::max(0.0, ys));
 
     r.x = int(std::lround(x));
     r.y = int(std::lround(y));
     r.w = std::max(1, int(std::lround(w)));
     r.h = std::max(1, int(std::lround(h)));
-    r.x = std::min(r.x, src_w - r.w);
-    r.y = std::min(r.y, src_h - r.h);
     return r;
+}
+
+float FeedZoomFullWidth(int src_w, int src_h, int dst_w, int dst_h) {
+    if (src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return 1.f;
+    // The zoom-1 rect's width, unrounded (as ComputeFeedRect starts).
+    const double want = double(dst_w) / double(dst_h);
+    const double w = (double(src_w) / double(src_h) > want) ? double(src_h) * want : double(src_w);
+    return float(std::min(1.0, w / double(src_w)));
 }
 
 void DownsampleRGB8(const unsigned char* src, int src_w, int src_h,

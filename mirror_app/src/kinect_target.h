@@ -62,6 +62,9 @@ public:
     // nothing measures.
     bool lastFrameRGB8(int w, int h, std::vector<unsigned char>& rgb,
                        bool filtered = true) const;
+    // The retained colour frame's size (1920x1080 on the v2). False
+    // before the first frame.
+    bool frameSize(int& w, int& h) const;
 
     // The retained frame as float in [0,1], with optional partial fill. Same as
     // lastFrameRGB8 but returns floats. Used by the fitter to ensure it works

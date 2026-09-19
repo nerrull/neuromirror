@@ -2492,15 +2492,40 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "The sensor is 16:9 and does not turn around when the\n"
                         "screen does, so a portrait frame keeps a tall rect out\n"
                         "of it and throws the sides away -- about a third of\n"
-                        "the width survives. This is where that rect sits.\n\n"
+                        "the width survives at zoom 1. This is where that rect\n"
+                        "sits. A zoom under 1 takes more than the sensor has:\n"
+                        "'full width' is the whole sensor across the frame, a\n"
+                        "16:9 band with black above and below, so nobody is\n"
+                        "ever out of the picture at the sides.\n\n"
                         "The tracker and the fit are given the same crop, so\n"
                         "moving this cannot put the mask off the face.");
                 }
                 ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
                 ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
-                ui::SliderFloat("feed zoom", &g_feed.zoom, 1.f, 4.f);
+                ui::SliderFloat("feed zoom", &g_feed.zoom, 0.25f, 4.f);
                 if (ImGui::Button("centre feed")) {
                     g_feed = mirror::FeedCrop{};
+                }
+                ImGui::SameLine();
+                {
+                    // The sensor's size, for the exact zoom; 1920x1080 until
+                    // a frame says otherwise.
+                    int sw = 1920, sh = 1080;
+                    if (g_source == (int)Source::Photo && g_photo_w > 0 && g_photo_h > 0) {
+                        sw = g_photo_w; sh = g_photo_h;
+                    }
+#if MIRROR_HAVE_KINECT
+                    else g_kinect.frameSize(sw, sh);
+#endif
+                    if (ImGui::Button("full width")) {
+                        g_feed = mirror::FeedCrop{};
+                        g_feed.zoom = mirror::FeedZoomFullWidth(sw, sh, pf.compW, pf.compH);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The whole %d-wide sensor across the frame: zoom %.3f.",
+                            sw, mirror::FeedZoomFullWidth(sw, sh, pf.compW, pf.compH));
+                    }
                 }
             }
             ui::EndHeader();
