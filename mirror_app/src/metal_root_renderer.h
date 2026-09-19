@@ -505,12 +505,13 @@ public:
     // setPondTexture used to receive. nil skips the cloth draw entirely rather
     // than sampling an unbound texture.
     void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
-    // The harp's strings: kWireFloats per vertex (anchor3, x offset in NDC,
+    // The harp's strings: kWireFloats per vertex (bottom end3, top end3,
     // side, t, half-width in output pixels, wave displacement in pixels)
     // -- matches WireVertex in root_wire.metal; built by
-    // RootScene::packHarpWires. Drawn after the cloth, before the fog,
-    // inverting what is under them. Empty data clears the pass.
-    static constexpr int kWireFloats = 8;
+    // RootScene::packHarpWires. Drawn over the fog composite, against the
+    // geometry depth, inverting what is under them. Empty data clears the
+    // pass.
+    static constexpr int kWireFloats = 10;
     void uploadWires(const std::vector<float>& interleaved);
     // Candidates for the automatic focus distance (post.dofFocus == 0): the
     // world positions of the masks being drawn. Replaced each call.

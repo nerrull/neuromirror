@@ -227,7 +227,10 @@ extern bool  g_strum_shuffle;     // the tones dealt across the yaw at random, p
 // The strings drawn: a screen-height inverting line each beside the mask
 // (RootScene::setHarpWires).
 extern bool  g_strum_wires;
-extern float g_strum_wire_spread;     // 0..1, the outermost string's offset, in screen half-widths
+extern float g_strum_wire_spread;     // retired: the screen-space strings' spread
+extern float g_strum_wire_arc_deg;    // the strings' arc around the mask, degrees, outermost to outermost
+extern float g_strum_wire_radius;     // x the mask's half-width
+extern float g_strum_wire_height;     // x the mask's half-height, above and below
 extern float g_strum_wire_px;         // 0.25..8, half-width in pixels
 extern float g_strum_wire_pluck_width; // 0..4, how much wider a plucked string is, x the width
 extern float g_strum_wire_vib_px;     // 0..60, the pluck's wave, pixels either way at its belly

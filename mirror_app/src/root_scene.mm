@@ -1145,6 +1145,14 @@ bool RootScene::flashAllowed(const FaceBlock& fb) const {
 void RootScene::triggerFlash(float strength) {
     if (!rr_ || faceBlocks_.empty()) return;
     strength = std::clamp(strength, 0.f, 1.f);
+    // A wave already running finishes on the mask it started on, swap and
+    // all: a pluck landing inside it only tops the light up there. Restarting
+    // the wave and re-picking here (which is what used to happen) was two
+    // close plucks visibly dragging one half-torn glitch from mask to mask.
+    if (rr_->flash.glitch && flashGlitchT_ >= 0.0 && flashStructure_ != -2) {
+        flashLevel_ = std::max(flashLevel_, strength);
+        return;
+    }
     // The glitch wave starts over on every pluck, the swap with it.
     flashGlitchT_ = 0.0; flashFrame_ = 0; flashSwapped_ = false;
     if (rr_->flash.all) {
@@ -2236,18 +2244,24 @@ void RootScene::rebuildFace() {
 }
 
 void RootScene::setFittedFace(const std::vector<float>& verts,
-                              const std::vector<int>& tris) {
+                              const std::vector<int>& tris,
+                              const std::vector<float>* ref) {
     if (verts.size() < 9) return;
     if (!tris.empty()) faceTris_ = tris;
     if (faceTris_.empty()) return;
 
-    // Capture the normalisation once. Centre on the mesh centroid and divide by
-    // the largest absolute coordinate, matching what normalizeMesh() does to
-    // the canonical model -- so the placement code, faceScale, and every
+    // The normalisation: centre on the centroid and divide by the largest
+    // absolute coordinate, matching what normalizeMesh() does to the
+    // canonical model -- so the placement code, faceScale, and every
     // material knob downstream keep the ranges they were tuned against.
     // The bank's faces (assignBankFaces) are normalised by the same rule,
-    // each on its own, which is what keeps them the size of this one.
-    if (!fit_norm_set_) {
+    // each on its own, which is what keeps them the size of this one. Off
+    // the unposed identity mesh when the caller has one (see the header);
+    // otherwise captured once, from the first mesh seen.
+    if (ref && ref->size() == verts.size()) {
+        faceNormalisation(*ref, fit_centre_, fit_scale_);
+        fit_norm_set_ = true;
+    } else if (!fit_norm_set_) {
         faceNormalisation(verts, fit_centre_, fit_scale_);
         fit_norm_set_ = true;
     }
@@ -2573,32 +2587,55 @@ void RootScene::advance(double dt) {
     packHarpWires();
 }
 
-void RootScene::setHarpWires(const float* xoff, const float* widthPx, const float* wobPx, int n) {
+void RootScene::setHarpWires(const float* az, const float* widthPx, const float* wobPx, int n,
+                             float arcDeg, float radius, float height) {
     harpWireCount_ = std::clamp(n, 0, kMaxHarpWires);
     for (int i = 0; i < harpWireCount_; ++i) {
-        harpXoff_[i] = xoff[i]; harpWidth_[i] = widthPx[i]; harpWob_[i] = wobPx[i];
+        harpAz_[i] = az[i]; harpWidth_[i] = widthPx[i]; harpWob_[i] = wobPx[i];
     }
+    harpArcDeg_ = arcDeg; harpRadius_ = radius; harpHeight_ = height;
 }
 
-// The strings' geometry: every string is anchored on the mask
-// (refreshClothAnchor) and placed on screen from there by the vertex
-// shader, so all that is packed is the anchor, the offset, the width and
-// the wave -- kWireSegs quads up the screen so the wave can bend it,
-// MetalRootRenderer::kWireFloats a vertex.
+// The strings' geometry: each stands on the circle around the anchor mask
+// (refreshClothAnchor) at its azimuth about the mask's facing, from below
+// the mask to above it along the mask's up; the vertex shader places it on
+// screen from its two ends -- kWireSegs quads up the string so the wave can
+// bend it, MetalRootRenderer::kWireFloats a vertex.
 void RootScene::packHarpWires() {
     if (!rr_) return;
     constexpr int kWireSegs = 24;
     std::vector<float> data;
     if (harpWireCount_ > 0) {
         refreshClothAnchor();
-        // Out in front of the face, not at the mask's centre: the string's
-        // depth is this point's, and at the centre it hid behind the nose.
-        const simd_float3 c = clothAnchorPos_ + clothAnchorN_ * (2.f * clothAnchorRD_);
+        const simd_float3 c = clothAnchorPos_;
+        // The radius is measured against the face's own front -- the nose,
+        // as placed (the recess, then the mesh's forward extent at its
+        // scale; see rasteriseClothField for the same placement) -- so at 1
+        // the front string grazes the nose and above it stands clear.
+        // Against the mask's width it was either behind the nose or out of
+        // the Face stage's frame, which sits close.
+        measureClothFaceDepth();
+        const float front = std::max(-clothAnchorRD_ * faceRecess
+                                     + clothFaceZMax_ * faceScale * std::max(0.05f, clothAnchorFU_),
+                                     0.25f * clothAnchorRW_);
+        const float r = harpRadius_ * front;
+        const simd_float3 up = clothAnchorB_ * (harpHeight_ * clothAnchorRH_);
+        if (getenv("WIRES_DEBUG"))
+            fprintf(stderr, "wires: front %.2f rW %.2f rH %.2f rD %.2f r %.2f\n",
+                    front, clothAnchorRW_, clothAnchorRH_, clothAnchorRD_, r);
         data.reserve(size_t(harpWireCount_) * kWireSegs * 6 * MetalRootRenderer::kWireFloats);
         for (int i = 0; i < harpWireCount_; ++i) {
             if (harpWidth_[i] <= 0.f) continue;
+            // The string's azimuth: 0 straight in front of the face, + to
+            // the mask's right (the side the head turns toward to pluck it
+            // -- the visitor faces the mask, so their right is its left on
+            // screen and the sign is flipped into the mask's frame).
+            const float th = harpAz_[i] * 0.5f * harpArcDeg_ * (float)M_PI / 180.f;
+            const simd_float3 p = c + clothAnchorN_ * (r * std::cos(th))
+                                    - clothAnchorT_ * (r * std::sin(th));
+            const simd_float3 a = p - up, b = p + up;
             auto put = [&](float side, float t) {
-                data.insert(data.end(), {c.x, c.y, c.z, harpXoff_[i], side, t,
+                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t,
                                          harpWidth_[i], harpWob_[i]});
             };
             for (int s = 0; s < kWireSegs; ++s) {

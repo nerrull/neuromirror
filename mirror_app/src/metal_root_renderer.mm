@@ -1267,26 +1267,6 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
                 vertexCount:(NSUInteger)clothVertCount_];
     }
 
-    // The harp's strings: last of the mid-geometry, inverting all of it --
-    // see root_wire.metal.
-    if (wireVertCount_ > 0 && wirePipe_ && wireBuf_) {
-        RootWireU wu = {};
-        wu.viewProj = vpJ;
-        wu.res = gu.res;
-        wu.pxScale = (float)sw_ / (float)w_;
-        // Depth is written: the fog pass fogs a pixel by the depth under
-        // it, and a string against the empty field would otherwise be
-        // fogged as the far plane -- gone. The last mid-geometry drawn, so
-        // its depth hides nothing.
-        [ge setRenderPipelineState:wirePipe_];
-        [ge setDepthStencilState:depthState_];
-        [ge setCullMode:MTLCullModeNone];
-        [ge setVertexBuffer:wireBuf_ offset:0 atIndex:0];
-        [ge setVertexBytes:&wu length:sizeof(wu) atIndex:1];
-        [ge setFragmentBytes:&wu length:sizeof(wu) atIndex:1];
-        [ge drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                vertexCount:(NSUInteger)wireVertCount_];
-    }
     [ge endEncoding];
 
     // --- Pass 2: ambient occlusion (depth only, half resolution) ---
@@ -1378,6 +1358,36 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     [fe setFragmentTexture:fogVolTex_ atIndex:4];
     [fe drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [fe endEncoding];
+
+    // --- Pass 3c: the harp's strings, over the fogged picture ---
+    // Inverting the composite rather than the geometry pass (see
+    // root_wire.metal), against the geometry depth so the mask still hides
+    // the strings behind it. The depth is loaded, not cleared, and not
+    // stored: nothing after this reads it for the strings.
+    if (wireVertCount_ > 0 && wirePipe_ && wireBuf_) {
+        MTLRenderPassDescriptor* wp = [MTLRenderPassDescriptor renderPassDescriptor];
+        wp.colorAttachments[0].texture = fogColorTex_;
+        wp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        wp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        wp.depthAttachment.texture = rootDepthTex_;
+        wp.depthAttachment.loadAction = MTLLoadActionLoad;
+        wp.depthAttachment.storeAction = MTLStoreActionDontCare;
+        if (g_passProf) g_passProf->attach(wp, "wires");
+        RootWireU wu = {};
+        wu.viewProj = vpJ;
+        wu.res = gu.res;
+        wu.pxScale = (float)sw_ / (float)w_;
+        id<MTLRenderCommandEncoder> we = [cb renderCommandEncoderWithDescriptor:wp];
+        [we setRenderPipelineState:wirePipe_];
+        [we setDepthStencilState:depthState_];
+        [we setCullMode:MTLCullModeNone];
+        [we setVertexBuffer:wireBuf_ offset:0 atIndex:0];
+        [we setVertexBytes:&wu length:sizeof(wu) atIndex:1];
+        [we setFragmentBytes:&wu length:sizeof(wu) atIndex:1];
+        [we drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                vertexCount:(NSUInteger)wireVertCount_];
+        [we endEncoding];
+    }
 
     if (!post.enabled) {
         // Still record the camera: the glitch stage's freeze needs an unbroken

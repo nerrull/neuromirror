@@ -3234,12 +3234,12 @@ int main(int argc, char** argv) {
 
                 g_audio.update(ap);
 
-                // The strings, to the scene: where each sits on screen (its
-                // yaw, as the strum block places it, over the range --
-                // g_strum_wire_spread of the half-width at the outermost),
-                // how wide, and how far its wave swings. They fade in as
-                // the window opens and out as it closes, so the send-off's
-                // flare is still seen.
+                // The strings, to the scene: where each stands around the
+                // mask (its yaw, as the strum block places it, over the
+                // range -- -1..1, spread over g_strum_wire_arc_deg), how
+                // wide, and how far its wave swings. They fade in as the
+                // window opens and out as it closes, so the send-off's flare
+                // is still seen.
                 {
                     const float want = (resolvedWindowActive && g_strum_wires) ? 1.f : 0.f;
                     strumWireVis += (want - strumWireVis) * (1.f - std::exp(-(float)dt / 0.4f));
@@ -3251,13 +3251,15 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < n; ++i) {
                         const float q = -span + gap * i;
                         const float yaw = q + (q > 0.f ? g_strum_dead_deg : q < 0.f ? -g_strum_dead_deg : 0.f);
-                        xoff[i] = yaw / std::max(g_strum_range_deg, 1.f) * g_strum_wire_spread;
+                        xoff[i] = yaw / std::max(g_strum_range_deg, 1.f);
                         strumWireEnv[i] *= std::exp(-(float)dt / std::max(g_strum_wire_decay_s, 0.01f));
                         strumWirePhase[i] = std::fmod(strumWirePhase[i] + (float)dt * strumWireHz[i], 1.f);
                         width[i] = strumWireVis * g_strum_wire_px * (1.f + g_strum_wire_pluck_width * strumWireEnv[i]);
                         wob[i] = g_strum_wire_vib_px * strumWireEnv[i] * std::sin(strumWirePhase[i] * 6.2831853f);
                     }
-                    roots.setHarpWires(xoff, width, wob, strumWireVis > 0.f ? n : 0);
+                    roots.setHarpWires(xoff, width, wob, strumWireVis > 0.f ? n : 0,
+                                       g_strum_wire_arc_deg, g_strum_wire_radius,
+                                       g_strum_wire_height);
                 }
             }
 
@@ -3825,8 +3827,17 @@ int main(int argc, char** argv) {
                 } else {
                     smoothVerts = verts;
                 }
+                // The mask's frame: the identity alone, neutral and unposed,
+                // rebuilt only when the solve changes (see RootScene::
+                // setFittedFace on why not the posed mesh).
+                static std::vector<float> refAlpha, refVerts;
+                if (refAlpha != g_fitter.alpha() || refVerts.size() != verts.size()) {
+                    refAlpha = g_fitter.alpha();
+                    g_fitter.basis().reconstructIdentity(refAlpha, refVerts);
+                }
                 roots.setFittedFace(smoothVerts, rootFaceTrisUploaded ? std::vector<int>()
-                                                                      : g_fitter.basis().triangles());
+                                                                      : g_fitter.basis().triangles(),
+                                    &refVerts);
                 rootFaceTrisUploaded = true;
                 // What the hold at Face -> Grow settles from -- see
                 // RootFaceSequence::holdTo.

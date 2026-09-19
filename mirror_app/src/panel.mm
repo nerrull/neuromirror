@@ -2221,10 +2221,19 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SetTooltip("When the mouth opens and the roots start, every string is\nplucked once and slides down to 20 Hz at this glide.");
                     ui::Checkbox("strum wires", &g_strum_wires);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Draw the strings: a hair-thin line each, pinned to the top and\nbottom of the screen beside the mask at the yaw that plucks it,\ninverting what is behind it. A pluck widens it and sets it vibrating.");
-                    ui::SliderFloat("wire spread", &g_strum_wire_spread, 0.f, 1.f);
+                        ImGui::SetTooltip("Draw the strings: a hair-thin line each, standing on a circle\naround the mask at the yaw that plucks it, inverting what is\nbehind it. A pluck widens it and sets it vibrating.");
+                    ui::SliderFloat("wire arc (deg)", &g_strum_wire_arc_deg, 10.f, 360.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Where the outermost strings sit, in screen half-widths from\nthe mask; the rest lie between by their yaw.");
+                        ImGui::SetTooltip("The arc the strings span around the mask, outermost to\noutermost, about its facing; the rest lie between by their yaw.");
+                    ui::SliderFloat("wire radius (x nose)", &g_strum_wire_radius, 0.5f, 6.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The circle the strings stand on, as a multiple of how far the\\nnose stands out from the mask's centre: 1 grazes it.");
+                    ui::SliderFloat("wire height (x mask)", &g_strum_wire_height, 0.5f, 20.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How far the strings run above and below the mask's centre,\nin its half-heights.");
+                    ui::BeginRetired("wire spread");
+                    ui::SliderFloat("wire spread", &g_strum_wire_spread, 0.f, 1.f);
+                    ui::EndRetired();
                     ui::SliderFloat("wire width (px)", &g_strum_wire_px, 0.25f, 8.f);
                     ui::SliderFloat("wire pluck width (x)", &g_strum_wire_pluck_width, 0.f, 4.f);
                     if (ImGui::IsItemHovered())

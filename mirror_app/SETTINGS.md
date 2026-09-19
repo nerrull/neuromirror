@@ -97,7 +97,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (130 parameters, 1 retired)
+## show (133 parameters, 2 retired)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -212,11 +212,14 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/resolved/strum shuffled` | bool | -- | 0 |
 | `sound/resolved/strum velocity smooth (ms)` | float | 1 .. 1000 | 150 |
 | `sound/resolved/strum wires` | bool | -- | 1 |
+| `sound/resolved/wire arc (deg)` | float | 10 .. 360 | 70 |
+| `sound/resolved/wire height (x mask)` | float | 0.5 .. 20 | 4 |
 | `sound/resolved/wire pluck decay (s)` | float | 0.05 .. 5 | 1.2 |
 | `sound/resolved/wire pluck vibration (px)` | float | 0 .. 60 | 14 |
 | `sound/resolved/wire pluck width (x)` | float | 0 .. 4 | 1 |
 | `sound/resolved/wire pulse divisor` | float | 1 .. 512 | 64 |
-| `sound/resolved/wire spread` | float | 0 .. 1 | 0.7 |
+| `sound/resolved/wire radius (x nose)` | float | 0.5 .. 6 | 1.25 |
+| `sound/resolved/wire spread` _(retired)_ | float | 0 .. 1 | 0.7 |
 | `sound/resolved/wire width (px)` | float | 0.25 .. 8 | 1.5 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
@@ -603,7 +606,7 @@ land in `unassigned` and are listed below until somebody decides.
 
 ## Retired
 
-1 parameter(s) are marked retired: still loaded, still
+2 parameter(s) are marked retired: still loaded, still
 saved, not drawn unless **show retired** is ticked. That is how a control
 leaves the panel without breaking a preset that mentions it. To delete one
 for good, remove the declaration and the key from every preset file.

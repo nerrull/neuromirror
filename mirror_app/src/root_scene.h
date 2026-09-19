@@ -63,15 +63,24 @@ public:
     // the fitter's model units; `tris` is its topology, and may be passed empty
     // on subsequent calls to keep the previous one.
     //
-    // The normalisation is captured once, from the first mesh seen, and reused:
-    // re-normalising per frame would rescale the mask every time the person
-    // opened their mouth, since an expression changes the mesh's extent. So the
-    // mask holds still and the face moves inside it, which is the intent.
+    // The normalisation is not taken from `verts` per frame: re-normalising
+    // on the posed mesh would rescale the mask every time the person opened
+    // their mouth, and re-centre it every time they turned (the head turns
+    // about the neck, which moves the face's centroid). So the mask holds
+    // still and the face moves inside it, which is the intent. It comes from
+    // `ref` -- the visitor's identity alone, neutral and unposed
+    // (FaceBasis::reconstructIdentity), which only changes when the identity
+    // solve does -- or, without one, from the first mesh seen. That fallback
+    // is what the show used to run on, and it was the off-centre mask: the
+    // "first mesh seen" was whatever pose the visitor had when tracking came
+    // back, often turned at the edge of the frame, and its centroid was then
+    // the mask's centre for everyone after.
     //
     // This, setFaceColors and clearFittedFace only ever touch mask 0 -- the
     // anchor, the current visitor. Every other mask wears a face from the
     // bank (below), or mask 0's face when its slot is empty.
-    void setFittedFace(const std::vector<float>& verts, const std::vector<int>& tris);
+    void setFittedFace(const std::vector<float>& verts, const std::vector<int>& tris,
+                       const std::vector<float>* ref = nullptr);
 
     void clearFittedFace();
     bool usingFittedFace() const { return fitted_face_; }
@@ -488,13 +497,17 @@ public:
     // --- the harp's strings ----------------------------------------------
     // One hair-thin vertical line per string of the resolved window's strum
     // (main.mm), pinned to the top and bottom of the screen, at the anchor
-    // mask's depth and `xoff[i]` (NDC, + = frame right) from the mask's own
-    // screen x -- where the head plucks it. `widthPx[i]` is its half-width
-    // in output pixels, `wobPx[i]` the belly of its standing wave this frame,
-    // pixels, signed. It inverts what is behind it (root_wire.metal). n = 0
-    // clears them. Packed for the renderer in advance(), like the cloth.
+    // circle around the anchor mask (radius `radius` x the mask's half-width,
+    // running `height` x its half-height above and below its centre), at
+    // azimuth `az[i]` (-1..1 of the yaw range that plucks it, + = the mask's
+    // right) over an arc of `arcDeg` about the mask's facing. `widthPx[i]` is
+    // its half-width in output pixels, `wobPx[i]` the belly of its standing
+    // wave this frame, pixels, signed. It inverts what is behind it
+    // (root_wire.metal). n = 0 clears them. Packed for the renderer in
+    // advance(), like the cloth.
     static constexpr int kMaxHarpWires = 8;
-    void setHarpWires(const float* xoff, const float* widthPx, const float* wobPx, int n);
+    void setHarpWires(const float* az, const float* widthPx, const float* wobPx, int n,
+                      float arcDeg, float radius, float height);
 
     // Begin the hold->release->fall timeline from t=0, with a fresh,
     // fully-pinned flat sheet -- the RootScene analogue of
@@ -765,9 +778,10 @@ private:
     float clothAnchorFU_ = 2.6f;     // the anchor's faceUnit (SimMask), the face's draw scale / faceScale
 
     // See setHarpWires / packHarpWires.
-    float harpXoff_[kMaxHarpWires] = {};
+    float harpAz_[kMaxHarpWires] = {};
     float harpWidth_[kMaxHarpWires] = {};
     float harpWob_[kMaxHarpWires] = {};
+    float harpArcDeg_ = 70.f, harpRadius_ = 1.25f, harpHeight_ = 4.f;
     int   harpWireCount_ = 0;
     void  packHarpWires();
 
