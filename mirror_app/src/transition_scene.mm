@@ -41,7 +41,7 @@ struct TransFaceX {
     float scale;
     float exposure;
     int32_t tonemap;
-    float _pad;
+    float albedoGain;   // the level (FaceParams::albedoLevel) on the film's face
 };
 struct Uniforms {
     simd_float4x4 mvp;
@@ -101,6 +101,11 @@ struct TransitionScene::Impl {
     // applied. Written once by placeFace when `lockWanted` is set and never
     // again -- that is the whole point of it, see TransitionScene::lockFit.
     std::vector<float> lockedUV;
+    // Mean luma of the face the mask wears once locked (mirror::FaceColorLuma
+    // of what buildCapture would bake), for the level. 0 before the lock: the
+    // mask is then invisible against the film it is behind, and a gain would
+    // be exactly the thing that showed it.
+    float faceLuma = 0.f;
     std::vector<int>   faceTris;
     std::vector<Vertex> faceVerts;     // placed, with normals
     bool haveFace = false;
@@ -296,6 +301,16 @@ void TransitionScene::Impl::placeFace(float depthScale, const float regScale[2],
         lockWanted = false;
         locked = true;
         capturePending = true;
+        // The face's exposure, off the same bake a capture of this lock
+        // would store (BakeCaptureColors), so the level agrees with what
+        // the root scene will apply to that capture.
+        {
+            mirror::FaceCapture c;
+            c.uv = lockedUV; c.verts = modelVertsAtLock; c.tris = faceTris;
+            c.film = filmRGB8; c.filmW = filmW; c.filmH = filmH;
+            mirror::BakeCaptureColors(c);
+            faceLuma = mirror::FaceColorLuma(c.colors);
+        }
     }
     // Locked or not, the *placement* is always this frame's projection: the
     // mask has to keep landing where the head actually is. What the lock
@@ -639,6 +654,7 @@ void TransitionScene::unlockFit() {
     I.lockWanted = false;
     I.capturePending = false;
     I.lockedUV.clear();
+    I.faceLuma = 0.f;
     I.modelVertsAtLock.clear();
     if (I.savedPondTex) [I.savedPondTex release];
     I.savedPondTex = nil;
@@ -680,6 +696,7 @@ bool TransitionScene::applyCapture(const mirror::FaceCapture& c) {
     I.locked = true;
     I.capturePending = false;
     if (!c.film.empty()) I.adoptFilm(c.film, c.filmW, c.filmH);
+    I.faceLuma = mirror::FaceColorLuma(c.colors);
     I.placeFace(depthScale, maskScale, maskOffset, maskYaw);
     I.uploadFace();
     return true;
@@ -973,6 +990,7 @@ id<MTLTexture> TransitionScene::render(id<MTLCommandBuffer> cb) {
         x.scale = k;
         x.exposure = exposure;
         x.tonemap = tonemap ? 1 : 0;
+        x.albedoGain = mirror::FaceLevelGain(I.faceLuma, faceMat.albedoLevel);
 
         [enc setRenderPipelineState:I.psoFace];
         // Wireframe over the film, so the face underneath stays readable. A

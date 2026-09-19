@@ -20,11 +20,14 @@
 // with the other two and stored anyway, because the root scene wears the mask
 // as vertex colour rather than as a texture (RootScene::setFaceColors), so the
 // common case of "load this person onto the masks" is then a read and an
-// upload with no resampling and no film in memory at all. They are *linear*
-// -- the same values the live path samples off the mirror (g_face_colors)
-// and mask 0 wears through the press -- and meta says so (`colours =
-// linear`). A capture whose meta does not say so predates the convention and
-// stored the film's own 1/2.2-encoded values; LoadCapture brings it in line.
+// upload with no resampling and no film in memory at all. They are the
+// mirror's own output values -- the same the live path samples off it
+// (g_face_colors) and mask 0 wears through the press -- and meta says so
+// (`colours = linear`, which names the convention, not the colour space:
+// the mirror's output is display-referred, and the mask decodes it at
+// RootFaceU::albedoGamma). A capture whose meta does not say so predates
+// the convention and stored the film's own 1/2.2-encoded values;
+// LoadCapture brings it in line.
 
 #pragma once
 
@@ -89,5 +92,17 @@ void BakeCaptureColors(FaceCapture& c);
 // residual shape (identity + expression) biases the fit well under a degree,
 // and a head pose is ten.
 float SquareCaptureToNeutral(FaceCapture& c, const std::vector<float>& neutral);
+
+// The mask's exposure. The mirror hands the mask whatever brightness the
+// camera saw the visitor at, and in the gallery that is a face at a fifth of
+// the range; decoded and lit, it comes out near black. So the face is levelled
+// before it is worn: FaceColorLuma is the mean luma of a face's colours
+// (display-referred, 0..1; 0 for none), and FaceLevelGain the multiplier that
+// brings that mean to `level` (FaceParams::albedoLevel) -- 1 when either is
+// off (<= 0), and bounded, so a black frame does not blow up into noise. A
+// gain rather than a curve: the photograph keeps its own contrast and hue and
+// is only brought into the light.
+float FaceColorLuma(const std::vector<float>& rgb);
+float FaceLevelGain(float luma, float level);
 
 }  // namespace mirror

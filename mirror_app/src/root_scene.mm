@@ -216,7 +216,7 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
                           const std::vector<float>& fv, const std::vector<int>& ftris,
                           float faceScale, float recess, float lightDist, const float color[3],
                           const std::vector<float>& vcol = {}, bool smoothNormals = true,
-                          float lit = 1.f) {
+                          float lit = 1.f, float colGain = 1.f) {
     F3 n = m.normal, t = m.tangent, b = m.bitangent;
     F3 p = sub(m.pos, mul(n, m.rDepth * recess));
     // faceScale x the mask's own unit, not x its cavity radius: the cavity is
@@ -278,8 +278,10 @@ void appendFaceVertexData(std::vector<float>& out, const Mask& m,
             out.push_back(vp.x); out.push_back(vp.y); out.push_back(vp.z);
             out.push_back(vn.x); out.push_back(vn.y); out.push_back(vn.z);
             if (haveCol) {
-                out.push_back(vcol[vi*3]); out.push_back(vcol[vi*3+1]);
-                out.push_back(vcol[vi*3+2]);
+                // The level (FaceParams::albedoLevel) as a gain on the
+                // photograph, clamped at the top of the range it lives in.
+                for (int c = 0; c < 3; ++c)
+                    out.push_back(std::min(vcol[vi*3+c] * colGain, 1.f));
             } else {
                 out.push_back(color[0]); out.push_back(color[1]); out.push_back(color[2]);
             }
@@ -573,6 +575,7 @@ void RootScene::replant() {
     // the captured colours/mesh are what a fresh anchor mask would otherwise
     // reveal wearing until the new visitor is actually tracked.
     faceColors_.clear();
+    faceLuma_ = 0.f;
     fitted_face_ = false;
     fit_norm_set_ = false;
     faceVerts_ = canonVerts_;
@@ -1078,7 +1081,8 @@ void RootScene::uploadFaceFromMasks() {
         m.faceUnit = sm.faceUnit;
         const size_t off = data.size();
         appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
-                             maskColor, *face.colors, rr_->face.smoothNormals);
+                             maskColor, *face.colors, rr_->face.smoothNormals, 1.f,
+                             mirror::FaceLevelGain(face.luma, rr_->face.albedoLevel));
         record(-1, mi, m, 1.f, off);
     }
 
@@ -1124,7 +1128,8 @@ void RootScene::uploadFaceFromMasks() {
             const size_t off = data.size();
             appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
                                  maskColor, *face.colors, rr_->face.smoothNormals,
-                                 litMask ? 1.f : 0.f);
+                                 litMask ? 1.f : 0.f,
+                                 mirror::FaceLevelGain(face.luma, rr_->face.albedoLevel));
             record(k, ni, m, litMask ? 1.f : 0.f, off);
         }
     }
@@ -1974,9 +1979,9 @@ RootScene::FaceRef RootScene::faceFor(int structure, int slot) const {
     const int idx = bankIndexFor(structure, slot);
     if (idx >= 0) {
         const BankFace& b = bankFaces_[size_t(idx)];
-        return {&b.verts, &b.tris, &b.colors};
+        return {&b.verts, &b.tris, &b.colors, b.luma};
     }
-    return {&faceVerts_, &faceTris_, &faceColors_};
+    return {&faceVerts_, &faceTris_, &faceColors_, faceLuma_};
 }
 
 // Re-emit only the masks wearing a bank face that moved since the last
@@ -1999,10 +2004,11 @@ void RootScene::patchBankFaces() {
         const bool moved = (live ? liveFaceDirty_ : bankFaceDirty_[size_t(fb.bankIdx)] != 0) && !seed;
         if (!moved && !fb.relit) continue;
         fb.relit = false;
-        const FaceRef face = live ? FaceRef{&faceVerts_, &faceTris_, &faceColors_}
+        const FaceRef face = live ? FaceRef{&faceVerts_, &faceTris_, &faceColors_, faceLuma_}
                                   : FaceRef{&bankFaces_[size_t(fb.bankIdx)].verts,
                                             &bankFaces_[size_t(fb.bankIdx)].tris,
-                                            &bankFaces_[size_t(fb.bankIdx)].colors};
+                                            &bankFaces_[size_t(fb.bankIdx)].colors,
+                                            bankFaces_[size_t(fb.bankIdx)].luma};
         Mask m;
         m.pos = {fb.mask.pos[0], fb.mask.pos[1], fb.mask.pos[2]};
         m.normal = {fb.mask.normal[0], fb.mask.normal[1], fb.mask.normal[2]};
@@ -2012,7 +2018,8 @@ void RootScene::patchBankFaces() {
         m.faceUnit = fb.mask.faceUnit;
         data.clear();
         appendFaceVertexData(data, m, *face.verts, *face.tris, faceScale, faceRecess, 3.0f,
-                             maskColor, *face.colors, rr_->face.smoothNormals, fb.lit);
+                             maskColor, *face.colors, rr_->face.smoothNormals, fb.lit,
+                             mirror::FaceLevelGain(face.luma, rr_->face.albedoLevel));
         if (data.size() == fb.count) rr_->patchFaceMesh(fb.offset, data);
     }
     std::fill(bankFaceDirty_.begin(), bankFaceDirty_.end(), 0);
@@ -2041,6 +2048,7 @@ void RootScene::assignBankFaces(const std::vector<mirror::FaceCapture>& bank,
             for (int k = 0; k < 3; ++k) b.centre[k] = centre[k];
             b.scale = scale;
             if (c.colors.size() == c.verts.size()) b.colors = c.colors;
+            b.luma = mirror::FaceColorLuma(b.colors);
         }
         bankFaces_.push_back(std::move(b));   // an invalid one keeps its index
     }
@@ -2221,7 +2229,8 @@ void RootScene::rebuildFace() {
                      target[2] + 5.0f * std::cos(ang)};
         Mask m = makeMask(center, dir, 4.5f);
         appendFaceVertexData(data, m, faceVerts_, faceTris_, faceScale, faceRecess, 3.0f,
-                             maskColor, faceColors_, rr_->face.smoothNormals);
+                             maskColor, faceColors_, rr_->face.smoothNormals, 1.f,
+                             mirror::FaceLevelGain(faceLuma_, rr_->face.albedoLevel));
     }
     rr_->uploadFaceMesh(data);
 }
@@ -2266,6 +2275,7 @@ void RootScene::setFittedFace(const std::vector<float>& verts,
 
 void RootScene::setFaceColors(const std::vector<float>& rgb) {
     faceColors_ = rgb;
+    faceLuma_ = mirror::FaceColorLuma(rgb);
     rebuildFace();
 }
 

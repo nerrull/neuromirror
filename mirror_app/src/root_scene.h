@@ -814,6 +814,7 @@ private:
         std::vector<float> verts;
         std::vector<int>   tris;
         std::vector<float> colors;   // 3/vertex, empty = flat material
+        float luma = 0.f;            // mirror::FaceColorLuma(colors), for the level
         // The normalisation the capture's mesh was given, kept so a
         // replayed frame (setBankFaceVerts) gets the same one.
         float centre[3] = {0.f, 0.f, 0.f};
@@ -870,6 +871,7 @@ private:
         const std::vector<float>* verts;
         const std::vector<int>*   tris;
         const std::vector<float>* colors;
+        float luma;                  // of *colors, for FaceParams::albedoLevel
     };
     FaceRef faceFor(int structure, int slot) const;
     // The fitted-mesh normalisation rule (see setFittedFace): centroid and
@@ -904,6 +906,7 @@ private:
     bool  facesUploaded_ = false;
     std::vector<int>   canonTris_;
     std::vector<float> faceColors_;   // per-vertex RGB, empty = flat material
+    float faceLuma_ = 0.f;            // mirror::FaceColorLuma(faceColors_)
     bool  fitted_face_ = false;
     bool  fit_norm_set_ = false;     // normalisation captured from the first fit
     float fit_centre_[3] = {0, 0, 0};

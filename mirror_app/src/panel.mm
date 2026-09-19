@@ -1038,9 +1038,12 @@ void DrawRootsTab(RootScene& roots, int& fieldGrid, int& rootSeed, int fbw, int 
             ImGui::TextDisabled("90 outer = no cone (bare point light)");
             ui::SliderFloat("face spec", &R.face.specStrength, 0.0f, 3.0f);
             ui::SliderFloat("mask roughness", &R.face.roughness, 0.04f, 1.0f);
+            if (ui::SliderFloat("albedo level", &R.face.albedoLevel, 0.0f, 0.8f))
+                roots.rebuildFace();
             ui::SliderFloat("albedo gamma", &R.face.albedoGamma, 1.0f, 3.0f);
             ui::SliderFloat("albedo saturation", &R.face.albedoSat, 0.0f, 3.0f);
-            ImGui::TextDisabled("decode of the photograph before lighting;\n"
+            ImGui::TextDisabled("level: mean brightness every face is brought\n"
+                                "to before the decode (0 = the camera's own);\n"
                                 "gamma 1 = as-is (pale), 2.2 = sRGB; sat 1 = as-is");
             if (ui::Checkbox("smooth normals", &R.face.smoothNormals))
                 roots.rebuildFace();

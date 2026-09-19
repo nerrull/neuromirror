@@ -146,7 +146,7 @@ struct TransFaceX {
     float  scale;       // transition world -> shading space
     float  exposure;
     int    tonemap;
-    float  _pad;
+    float  albedoGain;  // the level (FaceParams::albedoLevel) on the film's face
 };
 
 struct MOut {
@@ -177,8 +177,9 @@ fragment float4 f_face(MOut in [[stage_in]],
     // placed the vertex -- so the mask carries away exactly the pixels that were
     // covering it. Encoded, like the root scene's mask albedo (FaceFitter::
     // sampleTexture, off the same mirror output); shadeFace decodes both the
-    // same way (RootFaceU::albedoGamma), so the two scenes agree.
-    const float3 albedo = film.sample(smp, in.uv).rgb;
+    // same way (RootFaceU::albedoGamma), so the two scenes agree. Levelled
+    // first, as the root scene levels its vertex colours (appendFaceVertexData).
+    const float3 albedo = min(film.sample(smp, in.uv).rgb * X.albedoGain, 1.0);
 
     // Into the shading space: the mask is about four world units across in the
     // root scene and about a third of that here, and the marble, the light

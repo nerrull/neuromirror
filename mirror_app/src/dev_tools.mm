@@ -529,6 +529,7 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "aoSamples")  A.samples = (int)v;
         else if (k == "faceRough")  F.roughness = v;
         else if (k == "faceLight")  F.lightIntensity = v;
+        else if (k == "faceLevel")  F.albedoLevel = v;
         else if (k == "smooth")     F.smoothNormals = v != 0.f;
         else if (k == "bg")         { E.background[0] = E.background[1] =
                                       E.background[2] = v; }
@@ -2035,6 +2036,10 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
     // behind it, which by eye alone is genuinely ambiguous once the post chain
     // (bloom, DOF, fog, tonemap) has been over both.
     if (const char* nc = getenv("CLOTHSHOT_NOCLOTH")) roots.showCloth = atoi(nc) == 0;
+    // The same key=value overrides the other shots take (applyPostOverride);
+    // the face ones (faceLevel, faceLight, ...) are what the mask is A/B'd on.
+    applyPostOverride(roots, getenv("CLOTHSHOT_POST"));
+    roots.rebuildFace();   // faceLevel/smooth are baked into the mask's run
     const bool traceOn = getenv("CLOTHSHOT_TRACE") && atoi(getenv("CLOTHSHOT_TRACE")) != 0;
     // CLOTHSHOT_RAW=1 drops the scene's post-processing, so what lands in the
     // PPM is the geometry pass and not a graded version of it.

@@ -59,7 +59,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/dilate` | int | 0 .. 24 | 6 |
 | `fit/face size x` | float | 0.5 .. 2 | 1 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0 |
-| `fit/fade width` | float | 0.01 .. 1.5 | 0.434 |
+| `fit/fade width` | float | 0.01 .. 1.5 | 0.515 |
 | `fit/far (head height)` | float | 0.02 .. 0.4 | 0.14 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
 | `fit/feed/lr` | float | 0.0001 .. 0.02 | 0.003 |
@@ -85,17 +85,17 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
 | `fit/set face size` | bool | -- | 1 |
-| `fit/shift fade` | float | 0.05 .. 3 | 0.6 |
-| `fit/shift far` | float | 0 .. 1 | 0 |
+| `fit/shift fade` | float | 0.05 .. 3 | 0.55 |
+| `fit/shift far` | float | 0 .. 1 | 0.04 |
 | `fit/shift gain (fit)` | float | 0 .. 2 | 1 |
 | `fit/shift gain (idle)` | float | 0 .. 1 | 0.21 |
-| `fit/shift reach` | float | 0 .. 3 | 0 |
+| `fit/shift reach` | float | 0 .. 3 | 0.29 |
 | `fit/size when far` | float | 0.05 .. 0.5 | 0.16 |
 | `fit/size when near` | float | 0.05 .. 0.5 | 0.2 |
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (107 parameters, 1 retired)
+## show (130 parameters, 1 retired)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -105,7 +105,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/fitting` | int | 0 .. 4 | 0 |
 | `show/fitting/absent_hold` | float | 0 .. 30 | 9.9 |
 | `show/fitting/fit_hold` | float | 0 .. 30 | 1.5 |
-| `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 45.1 |
+| `show/fitting/max (0 - no ceiling)` | float | 0 .. 120 | 36 |
 | `show/fitting/min` | float | 0 .. 120 | 2 |
 | `show/idle` | int | 0 .. 4 | 0 |
 | `show/idle/face drop grace s` | float | 0 .. 3 | 0.5 |
@@ -122,7 +122,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/bank plants` | bool | -- | 1 |
 | `show/roots/cam ease seconds` | float | 0.05 .. 5 | 1.2 |
 | `show/roots/cam max angular speed (rad-s)` | float | 0.05 .. 4 | 1.2 |
-| `show/roots/datamosh seconds` | float | 0 .. 10 | 5 |
+| `show/roots/datamosh seconds` | float | 0 .. 10 | 7 |
 | `show/roots/debug spawn markers` | bool | -- | 0 |
 | `show/roots/face hold after cloth s` | float | 0 .. 30 | 20.1 |
 | `show/roots/face seconds` | float | 0.2 .. 20 | 2.3 |
@@ -152,6 +152,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `show/roots/mouth open lips` | float | 0 .. 1.5 | 0.4 |
 | `show/roots/mouth open seconds` | float | 0.1 .. 5 | 3 |
 | `show/roots/mouth open width` | float | 0 .. 1.5 | 0.6 |
+| `show/roots/movement boosts rate` | float | 0 .. 4 | 0 |
 | `show/roots/new seed each sitting` | bool | -- | 1 |
 | `show/roots/orbit bound frac` | float | 0.1 .. 1 | 0.53 |
 | `show/roots/orbit elevation (deg)` | float | -60 .. 80 | -17 |
@@ -188,11 +189,33 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/level` | float | 0 .. 1 | 1 |
 | `sound/movement full scale` | float | 0.2 .. 4 | 1.2 |
 | `sound/near (face height)` | float | 0.1 .. 0.9 | 0.45 |
-| `sound/offset range (semitones)` | int | 0 .. 7 | 7 |
+| `sound/offset range (semitones)` | int | 0 .. 7 | 5 |
 | `sound/pad octave (semitones)` | float | -36 .. 12 | -36 |
 | `sound/phases post their own events` | bool | -- | 1 |
 | `sound/pluck centre (MIDI note)` | float | 60 .. 96 | 79 |
 | `sound/pluck climb (semitones)` | float | 0 .. 36 | 6 |
+| `sound/pluck fitting octave` | int | -3 .. 1 | 1 |
+| `sound/pluck idle octave` | int | -3 .. 1 | 1 |
+| `sound/resolved/flanger fade (s)` | float | 0.1 .. 30 | 6 |
+| `sound/resolved/pluck glide (ms)` | float | 0 .. 2000 | 1502.22 |
+| `sound/resolved/strum dead zone (deg)` | float | 0 .. 45 | 10 |
+| `sound/resolved/strum drop glide (ms)` | float | 0 .. 2000 | 1500 |
+| `sound/resolved/strum full velocity (deg-s)` | float | 10 .. 720 | 10 |
+| `sound/resolved/strum hysteresis` | float | 0 .. 0.5 | 0.2 |
+| `sound/resolved/strum mute fade (ms)` | float | 0 .. 5000 | 500 |
+| `sound/resolved/strum mutes pluck` | bool | -- | 1 |
+| `sound/resolved/strum octave` | int | -2 .. 4 | 1 |
+| `sound/resolved/strum range (deg)` | float | 10 .. 90 | 37.378 |
+| `sound/resolved/strum scale` | int | 0 .. 2 | 1 |
+| `sound/resolved/strum shuffled` | bool | -- | 0 |
+| `sound/resolved/strum velocity smooth (ms)` | float | 1 .. 1000 | 150 |
+| `sound/resolved/strum wires` | bool | -- | 1 |
+| `sound/resolved/wire pluck decay (s)` | float | 0.05 .. 5 | 1.2 |
+| `sound/resolved/wire pluck vibration (px)` | float | 0 .. 60 | 14 |
+| `sound/resolved/wire pluck width (x)` | float | 0 .. 4 | 1 |
+| `sound/resolved/wire pulse divisor` | float | 1 .. 512 | 64 |
+| `sound/resolved/wire spread` | float | 0 .. 1 | 0.7 |
+| `sound/resolved/wire width (px)` | float | 0.25 .. 8 | 1.5 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
 | `sound/shepherd rate min (st-s)` | float | 0 .. 3 | 0.15 |
@@ -207,7 +230,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/wander cycle (s)` | float | 1 .. 300 | 126.1 |
 | `sound/wander depth` | float | 0.001 .. 0.5 | 0.01 |
 
-## look (49 parameters)
+## look (46 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -228,14 +251,11 @@ land in `unassigned` and are listed below until somebody decides.
 | `cloth/mask relief` | float | 0.2 .. 4 | 2.2 |
 | `cloth/mask scale x` | float | 0.6 .. 1.4 | 1 |
 | `cloth/mask scale y` | float | 0.6 .. 1.4 | 1 |
-| `cloth/press` | float | 0.2 .. 6 | 1.6 |
-| `cloth/press depth` | float | 0 .. 0.4 | 0.22 |
 | `cloth/refraction` | float | 0 .. 0.25 | 0.05 |
 | `cloth/release` | float | 0.05 .. 3 | 0.7 |
 | `cloth/relief shading` | float | 0 .. 1 | 0.55 |
 | `cloth/save a capture on lock` | bool | -- | 1 |
 | `cloth/set (plasticity)` | float | 0 .. 8 | 2 |
-| `cloth/settle` | float | 0 .. 20 | 0 |
 | `cloth/shading span` | float | 1 .. 10 | 4 |
 | `cloth/sheet oversize` | float | 1 .. 1.3 | 1.08 |
 | `cloth/sheet res` | int | 16 .. 128 | 72 |
@@ -289,7 +309,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/network/detail (w hidden)` | float | 0.5 .. 10 | 6.449 |
 | `mirror/network/gain tilt (front<->back)` | float | -3 .. 3 | 0.557 |
 | `mirror/network/sine layers (0 - tanh only)` | int | 0 .. 5 | 1 |
-| `mirror/network/sine w0 (composition)` | float | 1 .. 60 | 9.1 |
+| `mirror/network/sine w0 (composition)` | float | 1 .. 60 | 12.7 |
 | `mirror/network/w shape (gauss<->uniform)` | float | 0 .. 1 | 0 |
 | `mirror/pluck onsets (idle/fitting)/pluck onset gain` | float | 0.1 .. 4 | 1 |
 | `mirror/pluck onsets (idle/fitting)/pluck onsets spawn drops` | bool | -- | 1 |
@@ -302,11 +322,11 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/rain/area x` | float | 0 .. 1.2 | 1 |
 | `mirror/rain/area y` | float | 0 .. 1.2 | 1 |
 | `mirror/rain/max in flight` | int | 1 .. 24 | 12 |
-| `mirror/rain/reject below (strength)` | float | 0 .. 2 | 0.333 |
+| `mirror/rain/reject below (strength)` | float | 0 .. 2 | 0 |
 | `mirror/rain/size` | float | 0.02 .. 0.6 | 0.14 |
 | `mirror/rain/size jitter` | float | 0 .. 1 | 0.35 |
 | `mirror/rain/spread jitter` | float | 0 .. 1 | 0.15 |
-| `mirror/rain/strength` | float | 0 .. 2 | 1 |
+| `mirror/rain/strength` | float | 0 .. 2 | 0.769 |
 | `mirror/rain/strength jitter` | float | 0 .. 1 | 0.3 |
 | `mirror/rain/weak decay boost` | float | 0 .. 4 | 4 |
 | `mirror/raindrops` | bool | -- | 1 |
@@ -315,18 +335,18 @@ land in `unassigned` and are listed below until somebody decides.
 | `mirror/render/pause` | bool | -- | 0 |
 | `mirror/render/ripple time scale` | float | 0 .. 4 | 1 |
 | `mirror/ring freq` | float | 0.3 .. 10 | 6.982 |
-| `mirror/ripple decay` | float | 0 .. 5 | 1.824 |
+| `mirror/ripple decay` | float | 0 .. 5 | 2.28 |
 | `mirror/ripple phase` | float | 0 .. 6.28319 | 0 |
 | `mirror/ripple speed` | float | 0 .. 6 | 1.905 |
 | `mirror/soft centers (anti-alias)` | bool | -- | 1 |
 | `mirror/z/drop boost decay s` | float | 0.05 .. 5 | 0.25 |
 | `mirror/z/drops add z speed -s` | float | 0 .. 0.5 | 0.1833 |
-| `mirror/z/movement adds z speed -s` | float | 0 .. 0.2 | 0 |
+| `mirror/z/movement adds z speed -s` | float | 0 .. 0.2 | 0.0222 |
 | `mirror/z/z amplitude` | float | 0 .. 3 | 1 |
-| `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0292 |
+| `mirror/z/z auto-rate -s` | float | 0 .. 0.2 | 0.0154 |
 | `mirror/z/z step size` | float | 0.01 .. 1 | 0.06 |
 
-## roots (219 parameters)
+## roots (235 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -336,12 +356,12 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/cached field: LOD & culling/grid NxN` | int | 2 .. 20 | 6 |
 | `roots/cached field: LOD & culling/min radius px` | float | 0 .. 3 | 0 |
 | `roots/cached field: LOD & culling/sub-pixel cull` | bool | -- | 0 |
-| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 9.6326 |
-| `roots/camera/elevation` | float | -1.5 .. 1.5 | -0.289489 |
+| `roots/camera/azimuth` | float | -3.14159 .. 3.14159 | 9.39194 |
+| `roots/camera/elevation` | float | -1.5 .. 1.5 | -0.285692 |
 | `roots/camera/fov` | float | 0.2 .. 1.2 | 0.6 |
 | `roots/camera/frame automatically` | bool | -- | 0 |
 | `roots/camera/margin` | float | 0 .. 1.5 | 0.35 |
-| `roots/camera/radius` | float | 5 .. 120 | 57.7722 |
+| `roots/camera/radius` | float | 5 .. 120 | 58.0902 |
 | `roots/camera/zoom` | float | 0.15 .. 5 | 1 |
 | `roots/environment & material/AO downscale` | int | 1 .. 4 | 1 |
 | `roots/environment & material/AO intensity` | float | 0 .. 4 | 2.338 |
@@ -381,6 +401,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/environment & material/track angle range (rad)` | float | 0 .. 1.5 | 0.72 |
 | `roots/environment & material/unlit level` | float | 0 .. 0.3 | 0.035 |
 | `roots/face masks/albedo gamma` | float | 1 .. 3 | 2.347 |
+| `roots/face masks/albedo level` | float | 0 .. 0.8 | 0.45 |
 | `roots/face masks/albedo saturation` | float | 0 .. 3 | 1 |
 | `roots/face masks/face falloff` | float | 0.001 .. 0.1 | 0.038 |
 | `roots/face masks/face light` | float | 0 .. 8 | 3.857 |
@@ -412,23 +433,23 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/fog & atmosphere/noise scale` | float | 0.02 .. 2.5 | 0.064 |
 | `roots/fog & atmosphere/scatter (medium albedo)` | float | 0 .. 1.5 | 0.027 |
 | `roots/fog & atmosphere/volume downscale` | int | 1 .. 4 | 1 |
-| `roots/glitch/background depth` | float | 5 .. 400 | 59.713 |
-| `roots/glitch/band high` | float | 0 .. 1 | 1 |
-| `roots/glitch/band low` | float | 0 .. 1 | 0.084 |
-| `roots/glitch/block size (px)` | float | 1 .. 64 | 18.878 |
+| `roots/glitch/background depth` | float | 5 .. 400 | 64.689 |
+| `roots/glitch/band high` | float | 0 .. 1 | 0.944 |
+| `roots/glitch/band low` | float | 0 .. 1 | 0.016 |
+| `roots/glitch/block size (px)` | float | 1 .. 64 | 5.76 |
 | `roots/glitch/bright first` | bool | -- | 1 |
-| `roots/glitch/colour levels` | float | 2 .. 32 | 5 |
+| `roots/glitch/colour levels` | float | 2 .. 32 | 6.666 |
 | `roots/glitch/crush` | float | 0 .. 1 | 0 |
-| `roots/glitch/crush dither` | float | 0 .. 2 | 1 |
-| `roots/glitch/live feed` | float | 0 .. 0.5 | 0.052 |
-| `roots/glitch/macroblock (px)` | float | 1 .. 64 | 64 |
+| `roots/glitch/crush dither` | float | 0 .. 2 | 1.235 |
+| `roots/glitch/live feed` | float | 0 .. 0.5 | 0.049 |
+| `roots/glitch/macroblock (px)` | float | 1 .. 64 | 32.36 |
 | `roots/glitch/mosh (hold)` | bool | -- | 0 |
 | `roots/glitch/mosh amount` | float | 0 .. 1 | 1 |
-| `roots/glitch/passes-frame` | int | 1 .. 8 | 8 |
+| `roots/glitch/passes-frame` | int | 1 .. 8 | 1 |
 | `roots/glitch/sort` | bool | -- | 0 |
 | `roots/glitch/sort amount` | float | 0 .. 1 | 1 |
-| `roots/glitch/trigger length (s)` | float | 0.1 .. 10 | 4.381 |
-| `roots/glitch/vector freeze (s)` | float | 0 .. 8 | 2.027 |
+| `roots/glitch/trigger length (s)` | float | 0.1 .. 10 | 4.522 |
+| `roots/glitch/vector freeze (s)` | float | 0 .. 8 | 2.258 |
 | `roots/glitch/vector gain` | float | 0 .. 6 | 4.399 |
 | `roots/growth/anchor on axis` | bool | -- | 1 |
 | `roots/growth/anchor pitch` | float | 0 .. 85 | 60 |
@@ -441,6 +462,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/dwell` | float | 0 .. 1 | 0.92 |
 | `roots/growth/dwell days` | float | 2 .. 60 | 16.809 |
 | `roots/growth/dwell lateral` | float | 0 .. 1 | 0.92 |
+| `roots/growth/ease days` | float | 0 .. 60 | 5 |
 | `roots/growth/even nests` | bool | -- | 1 |
 | `roots/growth/feature clusters` | int | 1 .. 6 | 3 |
 | `roots/growth/group size` | int | 1 .. 9 | 3 |
@@ -458,6 +480,8 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/growth/nest hit radius` | float | 0 .. 6 | 1.5 |
 | `roots/growth/nest per ring` | int | 3 .. 16 | 8 |
 | `roots/growth/nest rings` | int | 1 .. 6 | 3 |
+| `roots/growth/old hops alive` | int | 0 .. 5 | 1 |
+| `roots/growth/old hops rate` | float | 0 .. 1 | 0.11 |
 | `roots/growth/pattern` | string | -- | phyllotaxis |
 | `roots/growth/pull reach` | float | 0.4 .. 3 | 1.2 |
 | `roots/growth/reach x` | float | 0.4 .. 4 | 1.6 |
@@ -525,23 +549,35 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/pluck flash/flash decay (s)` | float | 0.05 .. 4 | 0.27 |
 | `roots/pluck flash/flash depth` | float | -1 .. 2 | -0.02 |
 | `roots/pluck flash/flash intensity` | float | 0 .. 60 | 32.133 |
-| `roots/pluck flash/flash mask 0` | bool | -- | 1 |
+| `roots/pluck flash/flash mask 0` | bool | -- | 0 |
 | `roots/pluck flash/flash nearest mask` | bool | -- | 1 |
 | `roots/pluck flash/flash radius` | float | 0.2 .. 12 | 1.111 |
+| `roots/pluck flash/glitch amount` | float | 0 .. 1 | 1 |
+| `roots/pluck flash/glitch duration (s)` | float | 0.05 .. 4 | 1.375 |
+| `roots/pluck flash/glitch mask` | bool | -- | 1 |
+| `roots/pluck flash/glitch noise` | float | 0 .. 2 | 1.418 |
+| `roots/pluck flash/glitch noise share` | float | 0 .. 1 | 0.018 |
+| `roots/pluck flash/glitch swaps mask` | bool | -- | 1 |
 | `roots/post/DoF focus (0-auto)` | float | 0 .. 120 | 0 |
-| `roots/post/DoF range` | float | 5 .. 150 | 19.501 |
-| `roots/post/DoF strength` | float | 0 .. 1 | 0.847 |
+| `roots/post/DoF focus ease (s)` | float | 0 .. 2 | 0.4 |
+| `roots/post/DoF range` | float | 5 .. 150 | 90.389 |
+| `roots/post/DoF strength` | float | 0 .. 1 | 0.627 |
+| `roots/post/TAA blend` | float | 0.02 .. 1 | 0.225 |
+| `roots/post/TAA clip` | float | 0 .. 3 | 1.2 |
+| `roots/post/TAA jitter` | float | 0 .. 1 | 1 |
+| `roots/post/TAA sharpen` | float | 0 .. 1 | 1 |
 | `roots/post/bloom` | bool | -- | 0 |
 | `roots/post/bloom intensity` | float | 0 .. 1 | 0.047 |
 | `roots/post/bloom radius` | float | 0.5 .. 3 | 0.635 |
 | `roots/post/bloom threshold` | float | 0.2 .. 4 | 1.214 |
-| `roots/post/depth of field` | bool | -- | 1 |
+| `roots/post/depth of field` | bool | -- | 0 |
 | `roots/post/exposure` | float | 0.1 .. 4 | 1.001 |
 | `roots/post/filmic tonemap` | bool | -- | 1 |
 | `roots/post/fog dither` | float | 0 .. 1 | 1 |
 | `roots/post/output dither` | bool | -- | 1 |
 | `roots/post/post chain` | bool | -- | 1 |
-| `roots/post/supersample` | int | 1 .. 3 | 2 |
+| `roots/post/supersample` | int | 1 .. 3 | 3 |
+| `roots/post/temporal AA` | bool | -- | 1 |
 | `roots/post/vignette` | float | 0 .. 1 | 0.22 |
 | `roots/travelling pulses/pulse color` | rgb | -- | 0.47549 0.0815792 0.0815792 |
 | `roots/travelling pulses/pulse intensity` | float | 0 .. 4 | 1.253 |

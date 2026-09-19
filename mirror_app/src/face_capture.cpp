@@ -266,6 +266,20 @@ void BakeCaptureColors(FaceCapture& c) {
     }
 }
 
+float FaceColorLuma(const std::vector<float>& rgb) {
+    const size_t n = rgb.size() / 3;
+    if (n == 0) return 0.f;
+    double acc = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        acc += 0.2126 * rgb[i * 3] + 0.7152 * rgb[i * 3 + 1] + 0.0722 * rgb[i * 3 + 2];
+    return float(acc / double(n));
+}
+
+float FaceLevelGain(float luma, float level) {
+    if (level <= 0.f || luma <= 0.f) return 1.f;
+    return std::clamp(level / luma, 0.25f, 6.f);
+}
+
 float SquareCaptureToNeutral(FaceCapture& c, const std::vector<float>& neutral) {
     const size_t n = c.vertexCount();
     if (n < 3 || neutral.size() != c.verts.size()) return 0.f;

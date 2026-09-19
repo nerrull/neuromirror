@@ -140,6 +140,15 @@ public:
         float albedoGamma    = 2.2f;
         // Saturation of the albedo about its luma (RootFaceU::albedoSat).
         float albedoSat      = 1.0f;
+        // The mean luma (display-referred, 0..1) every face's colours are
+        // brought to before the decode, by a per-face gain (mirror::
+        // FaceLevelGain); 0 wears the photograph at the camera's exposure.
+        // The mirror sees the visitor in gallery light, at a fifth of the
+        // range, and decoded that is a black mask; 0.45 is a face in the
+        // light. Applied on the CPU when a mask's run is emitted (RootScene::
+        // appendFaceVertexData) and, for the one mask the transition draws,
+        // as TransFaceX::albedoGain, so the cut does not change exposure.
+        float albedoLevel    = 0.45f;
         float metallic       = 0.0f;
         // Area-weighted vertex normals rather than one face normal per triangle.
         // Lives here (rather than being unconditional) so the faceted original
