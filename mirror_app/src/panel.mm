@@ -2960,7 +2960,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "The fraction of the shift left past the fade.\n"
                             "0 pins the far field to the room.");
                     }
-                    ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 2.f, "%.2f");
+                    ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 5.f, "%.2f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "The on-screen face as a multiple of its size in\n"
