@@ -614,17 +614,50 @@ static bool g_mask_held = false;
 // when the face is lost, for the same reason.
 static float g_shift_x = 0.f, g_shift_y = 0.f;
 static float g_shift_cx = 0.f, g_shift_cy = 0.f;
+// The head's position as the effects see it: the input shift, the roots.
+//
+// A critically damped spring on the placement's centre, run every render
+// frame. Whatever is upstream -- a re-acquired face snapping the box, the
+// finder re-cutting its crop, the placement's clamp at the frame's edge,
+// the sensor's 30 Hz under a 60 Hz render -- reaches the effects as a glide
+// with the spring's time constant, never a step. The face's own pixels are
+// not routed through this: the mask has to sit on them exactly.
+static float g_head_ex = 0.5f, g_head_ey = 0.5f;
+static bool  g_head_e_valid = false;
+static void UpdateEffectsHead(double nowT) {
+    static float vx = 0.f, vy = 0.f;
+    static double lastT = 0.0;
+    const float dt = float(std::min(0.1, std::max(1e-3, nowT - lastT)));
+    lastT = nowT;
+    if (!HaveCrop()) { vx = vy = 0.f; g_head_e_valid = false; return; }
+    float s = 1.f, tx = 0.5f, ty = 0.5f;
+    if (!HeadPlacement(s, tx, ty)) { tx = g_head_cx; ty = g_head_cy; }
+    if (!g_head_e_valid) {
+        // The first face after none: start where it is, no glide in from
+        // wherever the last visitor left off.
+        g_head_ex = tx; g_head_ey = ty; vx = vy = 0.f;
+        g_head_e_valid = true;
+        return;
+    }
+    const float tau = std::max(0.01f, g_effect_smooth);
+    const float k = 1.f / (tau * tau), c = 2.f / tau;
+    vx += (-(g_head_ex - tx) * k - c * vx) * dt;
+    vy += (-(g_head_ey - ty) * k - c * vy) * dt;
+    g_head_ex += vx * dt;
+    g_head_ey += vy * dt;
+}
+
 static void UpdateInputShift(float asp, bool fit_live) {
     static bool  prev_valid = false;
     static float prev_cx = 0.5f, prev_cy = 0.5f;
-    if (g_head_mode != (int)HeadMode::Stabilised || !HaveCrop()) {
+    if (g_head_mode != (int)HeadMode::Stabilised || !g_head_e_valid) {
         prev_valid = false;
         return;
     }
-    // Where the face lands on screen -- the same centre the placement uses,
-    // so a subject clamped at the frame's edge stops moving the field too.
-    float s = 1.f, cx = 0.5f, cy = 0.5f;
-    if (!HeadPlacement(s, cx, cy)) { cx = g_head_cx; cy = g_head_cy; }
+    // Where the face lands on screen, smoothed (UpdateEffectsHead) -- the
+    // same centre the placement uses, so a subject clamped at the frame's
+    // edge stops moving the field too.
+    const float cx = g_head_ex, cy = g_head_ey;
     if (prev_valid) {
         const bool idle = g_show_on ? (g_show.phase() == show::Phase::Idle) : !fit_live;
         const float gain = idle ? g_shift_gain_idle : g_shift_gain_fit;
@@ -2677,6 +2710,7 @@ int main(int argc, char** argv) {
             // must read the same values.
             UpdateHeadBox(nowT);
             g_face_fresh = false;
+            UpdateEffectsHead(nowT);
             ApplyHeadMode(mirror.params(), fit_w, fit_h,
                           mirror.valid() && mirror.pond().fitted());
 
@@ -3835,10 +3869,8 @@ int main(int argc, char** argv) {
             // setTrackedPosition.
             roots.setAmbientLevel(g_mic.level());
             {
-                // Where the mirror shows the visitor.
-                float tx, ty;
-                HeadScreenPos(tx, ty);
-                roots.setTrackedPosition(tx, ty, g_track_on && g_face.valid);
+                // Where the mirror shows the visitor, smoothed.
+                roots.setTrackedPosition(g_head_ex, g_head_ey, g_head_e_valid);
             }
 
             g_prof.mark("show");

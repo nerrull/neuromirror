@@ -325,6 +325,9 @@ extern int   g_head_mode;
 // latter). The same two, as fractions, filter the fitter's scale.
 extern float g_head_jitter;
 extern float g_head_agility;
+// The spring the effects follow the head through (main.mm's
+// UpdateEffectsHead): its time constant in seconds.
+extern float g_effect_smooth;
 // The input-shift ("shift the inputs") mode's dials. The shift is a latch:
 // it accumulates the head's displacement, scaled by the gain for the show's
 // current phase, and holds wherever it was when the face is lost -- rather

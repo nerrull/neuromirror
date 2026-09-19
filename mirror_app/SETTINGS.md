@@ -53,7 +53,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/screen height (cm)` | float | 20 .. 300 | 60 |
 | `screen/video edge crop` | float | 0 .. 0.45 | 0.191 |
 
-## fit (44 parameters)
+## fit (45 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -66,6 +66,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.0006 |
 | `fit/crop/steps` | int | 1 .. 32 | 8 |
 | `fit/dilate` | int | 0 .. 24 | 6 |
+| `fit/effects follow (s)` | float | 0.02 .. 1.5 | 0.25 |
 | `fit/face size x` | float | 0.5 .. 5 | 1.53 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 0.515 |

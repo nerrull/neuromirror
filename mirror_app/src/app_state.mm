@@ -556,6 +556,7 @@ float g_cam_feather = 0.03f;   // soft edge, as a fraction of the frame
 int   g_head_mode = (int)HeadMode::Track;
 float g_head_jitter  = 0.004f;
 float g_head_agility = 0.5f;
+float g_effect_smooth = 0.25f;
 float g_shift_gain_fit  = 1.f;
 float g_shift_gain_idle = 0.25f;
 float g_shift_radius    = 0.f;

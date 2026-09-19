@@ -3045,6 +3045,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "more jitter through. The filter carries velocity,\n"
                         "so a steady walk is followed without lag either way.");
                 }
+                ui::SliderFloat("effects follow (s)", &g_effect_smooth, 0.02f, 1.5f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The input shift and the roots follow the head\n"
+                        "through a critically damped spring with this time\n"
+                        "constant. Whatever jumps upstream -- a face\n"
+                        "re-acquired, the placement clamped at the edge --\n"
+                        "reaches them as a glide. The face's own pixels are\n"
+                        "placed exactly, not through this.");
+                }
                 ImGui::PopItemWidth();
                 ImGui::Unindent();
                 ImGui::EndDisabled();
