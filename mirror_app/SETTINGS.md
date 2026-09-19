@@ -21,7 +21,7 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## machine (24 parameters)
+## machine (19 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -34,12 +34,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `face tracking/texture source` | int | 0 .. 1 | 0 |
 | `face tracking/texture the mask from the neural fit` | bool | -- | 1 |
 | `face tracking/track faces` | bool | -- | 1 |
-| `face tracking/tracker bottom` | float | 0 .. 1 | 1 |
-| `face tracking/tracker left` | float | 0 .. 1 | 0 |
 | `face tracking/tracker px` | int | 240 .. 960 | 480 |
-| `face tracking/tracker right` | float | 0 .. 1 | 1 |
-| `face tracking/tracker top` | float | 0 .. 1 | 0 |
-| `face tracking/tracker: own crop of the sensor` | bool | -- | 1 |
 | `mirror/mirror image` | bool | -- | 1 |
 | `roots/auto render-scale` | bool | -- | 1 |
 | `roots/root downscale` | int | 1 .. 6 | 1 |

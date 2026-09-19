@@ -74,23 +74,6 @@ struct DstRect { int x = 0, y = 0, w = 0, h = 0; };
 SrcRect ComputeFeedRect(int src_w, int src_h, int dst_w, int dst_h,
                         const FeedCrop& c);
 
-// The tracker's own crop: a free rect of the source, normalised corners,
-// the whole frame by default. The feed crop above is the *shown* picture
-// and keeps the screen's aspect; this one is what the face tracker looks
-// at, and it has no aspect to keep -- its landmarks come back normalised
-// to whatever it was handed, so the bounds of this rect land on the bounds
-// of the screen for everything downstream (the mask, the fit, the strum).
-// A visitor at the edge of the sensor, outside the portrait picture, is
-// still tracked, and their place across this rect is their place across
-// the screen.
-struct TrackCrop {
-    float x0 = 0.f, y0 = 0.f, x1 = 1.f, y1 = 1.f;
-};
-
-// The rect `c` names, in source pixels: corners sorted, clamped to the
-// source, never thinner than a pixel.
-SrcRect ComputeTrackRect(int src_w, int src_h, const TrackCrop& c);
-
 // Box-filter downsample of an 8-bit interleaved image into h*w*3 floats.
 //
 // Box rather than point sampling: the colour camera is 1920x1080 and the fit

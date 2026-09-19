@@ -127,13 +127,6 @@ bool  g_drive_roots  = true;    // fitted mesh -> the root scene's face masks
 // across the tracker's frame landed at 0.74 across the fit's. Hence a mask
 // visibly offset from the face in the overlay -- and, since the same numbers
 // build the training mask, a fit supervised on the wrong pixels.
-//
-// That holds with the tracker on the feed's crop. With its own crop
-// (g_track_own_crop, the default: the whole sensor) the mismatch is the
-// point -- the bounds of the tracker's rect are mapped onto the bounds of
-// the screen, so a visitor anywhere across the sensor is tracked and placed
-// across the screen, and the picture under the mask is whatever the feed
-// crop shows there.
 int   g_track_w      = 480;
 int   g_track_h      = 270;
 // Long edge of that frame. MediaPipe wants more resolution than the fit grid --
@@ -402,8 +395,6 @@ float g_portrait_aspect = 9.f / 16.f;   // the panel's w/h stood on its end
 // third of the sensor's width, so this is not a fine adjustment -- it decides
 // who is in the picture.
 mirror::FeedCrop g_feed;
-bool  g_track_own_crop = true;
-mirror::TrackCrop g_track_crop;
 
 int g_source = (int)Source::Kinect;
 std::vector<unsigned char> g_photo;      // full-res RGB8

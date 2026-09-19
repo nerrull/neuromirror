@@ -265,13 +265,6 @@ void ResetBestFaceColors();
 extern int   g_orientation;
 extern float g_portrait_aspect;
 extern mirror::FeedCrop g_feed;
-// The tracker's own crop of the sensor (TrackCrop): on, the face tracker
-// looks at this rect -- the whole frame by default -- instead of the shown
-// portrait crop, and its landmarks, normalised to it, put that rect's
-// bounds on the screen's bounds. Off, the tracker sees exactly what the fit
-// grid sees, as before.
-extern bool  g_track_own_crop;
-extern mirror::TrackCrop g_track_crop;
 
 // --- the frame source -------------------------------------------------------
 extern int g_source;
