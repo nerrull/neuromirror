@@ -368,14 +368,23 @@ extern mirror::DstRect g_mask_bbox;
 // the panel and, with MIRROR_PROFILE=1, the log every two seconds.
 extern std::string g_frame_profile;
 
-extern bool  g_face_size_on;
-// The size follows the person's distance: between `near` and `far` (the
-// tracked head's half-height in the camera frame, the proxy the sound's
-// proximity uses too -- the depth stream is off) the on-screen half-height
-// runs from g_face_size_near to g_face_size_far, linearly in distance,
-// held at the ends beyond them.
-extern float g_face_size_near, g_face_size_far;
-extern float g_face_near_hy, g_face_far_hy;
-// The on-screen half-height the placement is asking for at the current
-// distance (core_frame.h's PlaceScale() is the resample that gets there).
-float FaceSizeTarget();
+// The room, in centimetres: what turns the camera's picture into a mirror's
+// (main.mm's MirrorGeometry). The screen's height (its width follows from
+// the composition's aspect), the camera's height above the screen's centre
+// and its tilt down from level, and its horizontal field of view -- 84.1
+// degrees for the Kinect v2's colour camera. The trim multiplies the
+// distance the fitter's scale implies, for the head model's units being
+// only roughly centimetres: stand at a measured distance and match the
+// readout.
+extern float g_screen_h_cm;
+extern float g_cam_above_cm;
+extern float g_cam_tilt_deg;
+extern float g_cam_hfov_deg;
+extern float g_dist_trim;
+// How much the on-screen size shrinks with distance: 0 is a mirror (a
+// reflection on the glass is half life-size at any distance), 1 is the
+// camera's own 1/d, in between size goes as d^-k.
+extern float g_size_follows;
+// Readouts: where the visitor is, from the last fitted frame -- distance
+// along the camera's axis, and across/up from the screen's centre.
+extern float g_head_d_cm, g_head_x_cm, g_head_y_cm;

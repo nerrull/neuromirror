@@ -2510,6 +2510,43 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "a face's place across it is its place across the\n"
                         "screen.");
                 }
+                ImGui::Separator();
+                ImGui::TextUnformatted("the room");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "What makes the camera's picture a mirror's. A\n"
+                        "reflection is half life-size on the glass at any\n"
+                        "distance and sits at the viewer's own height,\n"
+                        "straight in front of them; the camera's face\n"
+                        "shrinks with distance and sits wherever a lens\n"
+                        "above the screen saw it. With the screen's size\n"
+                        "and the camera's place, the face is put where the\n"
+                        "mirror would put it. Distance comes from the\n"
+                        "fitted mesh's scale (the head model is in cm).");
+                }
+                ui::SliderFloat("screen height (cm)", &g_screen_h_cm, 20.f, 300.f, "%.0f");
+                ui::SliderFloat("camera above centre (cm)", &g_cam_above_cm, -100.f, 150.f, "%.0f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("The lens's height above the middle of the screen.");
+                }
+                ui::SliderFloat("camera tilt (deg)", &g_cam_tilt_deg, -45.f, 45.f, "%.0f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Down from level, positive.");
+                }
+                ui::SliderFloat("camera hfov (deg)", &g_cam_hfov_deg, 30.f, 120.f, "%.1f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Horizontal field of view. 84.1 for the Kinect v2's colour camera.");
+                }
+                ui::SliderFloat("distance trim", &g_dist_trim, 0.5f, 2.f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Multiplies the distance the fit implies. Stand at\n"
+                        "a measured distance and match the readout.");
+                }
+                ImGui::TextDisabled("%.0f cm away, %+.0f cm across, %+.0f cm up",
+                                    g_head_d_cm, g_head_x_cm, g_head_y_cm);
+
+                ImGui::Separator();
                 ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
                 ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
                 ui::SliderFloat("feed zoom", &g_feed.zoom, 0.25f, 4.f);
@@ -2960,70 +2997,36 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "The fraction of the shift left past the fade.\n"
                             "0 pins the far field to the room.");
                     }
-                    ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 5.f, "%.2f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "The on-screen face as a multiple of its size in\n"
-                            "the camera. The size still follows the person's\n"
-                            "distance, as a mirror's would; this makes the\n"
-                            "mirror a little larger or smaller than life.\n"
-                            "Anything but 1 costs a bilinear resample of the\n"
-                            "frame every frame.");
-                    }
                     ImGui::PopItemWidth();
                     if (!stab) ImGui::EndDisabled();
                 }
-                // The distance-driven size is for the other two modes: the
-                // input-shift one takes the multiplier above instead, so its
-                // size keeps following the person's distance.
-                ImGui::BeginDisabled(g_head_mode == (int)HeadMode::Stabilised);
-                ui::Checkbox("set face size", &g_face_size_on);
+                // The size, in every mode: a mirror's, from the room's
+                // geometry (the screen section), dialled here.
+                ImGui::PushItemWidth(110);
+                ui::SliderFloat("face size x", &g_stab_size_mul, 0.5f, 5.f, "%.2f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Resample the crop so the head is a chosen size on\n"
-                        "screen, instead of whatever distance the person\n"
-                        "happens to be standing at.\n\n"
-                        "Costs a bilinear resample every frame: at size 1:1\n"
-                        "the centred mode only shifts by whole pixels, which\n"
-                        "is deliberate -- refiltering the face every frame is\n"
-                        "the noise that mode exists to remove.");
+                        "The on-screen face as a multiple of a mirror's:\n"
+                        "1 is life-size in the glass, which is half the\n"
+                        "real head. Anything but exactly the camera's size\n"
+                        "costs a bilinear resample of the frame every\n"
+                        "frame.");
                 }
-                ImGui::BeginDisabled(!g_face_size_on);
-                ui::SliderFloat("size when near", &g_face_size_near, 0.05f, 0.5f, "%.2f");
+                ui::SliderFloat("shrinks with distance", &g_size_follows, 0.f, 1.f, "%.2f");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Half the head's height on screen as a fraction of\n"
-                        "the frame (0.25 fills half of it top to bottom) when\n"
-                        "the person is at 'near' or closer. The size follows\n"
-                        "their distance from here to 'size when far'.");
+                        "0: a mirror -- the reflection on the glass is the\n"
+                        "same size at any distance; the viewer stepping\n"
+                        "back is what makes it look smaller. 1: the\n"
+                        "camera's own picture, which shrinks with distance\n"
+                        "on top of that, so twice as fast as a mirror.\n"
+                        "Between: size goes as distance to the -k.");
                 }
-                ui::SliderFloat("size when far", &g_face_size_far, 0.05f, 0.5f, "%.2f");
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("The same, at 'far' or beyond.");
+                ImGui::PopItemWidth();
+                if (HaveCrop()) {
+                    ImGui::TextDisabled("%.0f cm away, %+.0f across, %+.0f up  ->  x%.2f",
+                                        g_head_d_cm, g_head_x_cm, g_head_y_cm, PlaceScale());
                 }
-                ui::SliderFloat("near (head height)", &g_face_near_hy, 0.05f, 0.5f, "%.2f");
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "How big the head looks to the camera (half-height,\n"
-                        "fraction of the frame) when the person counts as\n"
-                        "near. The readout below shows the live value; stand\n"
-                        "where 'near' should be and copy it in.");
-                }
-                ui::SliderFloat("far (head height)", &g_face_far_hy, 0.02f, 0.4f, "%.2f");
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("The same, where the person counts as far.");
-                }
-                ImGui::EndDisabled();
-                if (g_face_size_on && HaveCrop()) {
-                    ImGui::TextDisabled("head %.2f -> size %.2f  x%.2f", g_head_hy,
-                                        FaceSizeTarget(), PlaceScale());
-                    if (g_head_mode != (int)HeadMode::Centred) {
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("(in place)");
-                    }
-                }
-                ImGui::EndDisabled();
-
                 ImGui::SetNextItemWidth(110);
                 ui::SliderFloat("head smoothing", &g_head_smooth, 0.02f, 1.f,
                                    "%.2f");

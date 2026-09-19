@@ -21,7 +21,7 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## machine (22 parameters)
+## machine (27 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -41,14 +41,19 @@ land in `unassigned` and are listed below until somebody decides.
 | `roots/auto render-scale` | bool | -- | 1 |
 | `roots/root downscale` | int | 1 .. 6 | 1 |
 | `roots/target px` | int | 720 .. 3840 | 1920 |
+| `screen/camera above centre (cm)` | float | -100 .. 150 | 40 |
+| `screen/camera hfov (deg)` | float | 30 .. 120 | 84.1 |
+| `screen/camera tilt (deg)` | float | -45 .. 45 | 0 |
+| `screen/distance trim` | float | 0.5 .. 2 | 1 |
 | `screen/feed x` | float | 0 .. 1 | 0.5 |
 | `screen/feed y` | float | 0 .. 1 | 0.5 |
-| `screen/feed zoom` | float | 0.25 .. 4 | 0.717 |
+| `screen/feed zoom` | float | 0.25 .. 4 | 0.25 |
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
-| `screen/video edge crop` | float | 0 .. 0.45 | 0 |
+| `screen/screen height (cm)` | float | 20 .. 300 | 60 |
+| `screen/video edge crop` | float | 0 .. 0.45 | 0.191 |
 
-## fit (47 parameters)
+## fit (43 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -61,10 +66,9 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/crop/lr` | float | 0.0001 .. 0.02 | 0.0062 |
 | `fit/crop/steps` | int | 1 .. 32 | 8 |
 | `fit/dilate` | int | 0 .. 24 | 6 |
-| `fit/face size x` | float | 0.5 .. 2 | 1.82 |
+| `fit/face size x` | float | 0.5 .. 5 | 1.82 |
 | `fit/fade starts` | float | 0 .. 0.8 | 0 |
 | `fit/fade width` | float | 0.01 .. 1.5 | 0.515 |
-| `fit/far (head height)` | float | 0.02 .. 0.4 | 0.14 |
 | `fit/feed/grid` | int | 1 .. 8 | 3 |
 | `fit/feed/lr` | float | 0.0001 .. 0.02 | 0.003 |
 | `fit/feed/steps` | int | 1 .. 32 | 1 |
@@ -85,18 +89,15 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/lr warm-up from` | float | 0 .. 1 | 0.2 |
 | `fit/lr warm-up secs` | float | 0 .. 15 | 5 |
 | `fit/max colour` | float | 0 .. 1 | 0.72 |
-| `fit/near (head height)` | float | 0.05 .. 0.5 | 0.35 |
 | `fit/pad` | float | 0 .. 0.6 | 0.3 |
 | `fit/ramp secs` | float | 0 .. 8 | 4.3 |
 | `fit/ramp w0 for the fit` | bool | -- | 1 |
-| `fit/set face size` | bool | -- | 1 |
 | `fit/shift fade` | float | 0.05 .. 3 | 0.55 |
 | `fit/shift far` | float | 0 .. 1 | 0.04 |
 | `fit/shift gain (fit)` | float | 0 .. 2 | 1 |
 | `fit/shift gain (idle)` | float | 0 .. 1 | 0.21 |
 | `fit/shift reach` | float | 0 .. 3 | 0.29 |
-| `fit/size when far` | float | 0.05 .. 0.5 | 0.16 |
-| `fit/size when near` | float | 0.05 .. 0.5 | 0.2 |
+| `fit/shrinks with distance` | float | 0 .. 1 | 0 |
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 

@@ -425,18 +425,83 @@ bool HaveCrop() {
     return g_mask_fit && g_track_on && g_face.valid && g_head_valid;
 }
 
+// --- the room ---------------------------------------------------------------
+//
+// A reflection sits behind the glass at twice the viewer's distance, so on
+// the glass it is half life-size whatever the distance, and it is at the
+// viewer's own height, straight in front of them. The camera's picture is
+// neither: its face shrinks as 1/d and sits wherever the lens, above the
+// screen and looking down, saw it. This is the conversion, from the
+// fitter's scale (sensor pixels per centimetre of head, the head model
+// being in centimetres) and the camera's optics.
+
+// Sensor px per cm of head, from the last frame the mesh was fitted on.
+// Held across misses: the placement must not jump when the fit skips.
+static float g_head_ppcm = 0.f;
+
+// The visitor's place in the room: distance along the camera's axis, and
+// across / up from the screen's centre, all in cm. Also the sensor's focal
+// length in px, for whoever needs the same optics. False without a source
+// or a fitted frame yet.
+static bool MirrorGeometry(float& d, float& x, float& y, float& f) {
+    int sw = 0, sh = 0;
+    if (!g_feed_rect_valid || !SourceSize(sw, sh) || g_head_ppcm <= 0.f) return false;
+    const float hfov = std::min(170.f, std::max(10.f, g_cam_hfov_deg)) * float(M_PI) / 180.f;
+    f = 0.5f * float(sw) / std::tan(0.5f * hfov);
+    d = f / g_head_ppcm * std::max(0.1f, g_dist_trim);
+    // The head's centre in sensor px from the optical centre; y down.
+    const float X = g_feed_rect.x + g_head_cx * g_feed_rect.w - 0.5f * float(sw);
+    const float Y = g_feed_rect.y + g_head_cy * g_feed_rect.h - 0.5f * float(sh);
+    x = X / f * d;
+    // Tilted down by t, the camera's "down" leans toward the room and its
+    // "forward" dips: height relative to the lens is -(y cos t + d sin t).
+    const float t = g_cam_tilt_deg * float(M_PI) / 180.f;
+    y = g_cam_above_cm - ((Y / f * d) * std::cos(t) + d * std::sin(t));
+    return true;
+}
+
+// Where the head goes on screen, normalised: where the mirror would show it.
+// Before the first fitted frame, where it is across the sensor.
+static void HeadScreenPos(float& u, float& v) {
+    float d, x, y, f;
+    if (MirrorGeometry(d, x, y, f) && g_feed_rect.h > 0) {
+        const float H = std::max(1.f, g_screen_h_cm);
+        const float W = H * float(g_feed_rect.w) / float(g_feed_rect.h);
+        u = 0.5f + x / W;
+        v = 0.5f - y / H;
+        return;
+    }
+    u = g_head_cx; v = g_head_cy;
+    ScreenFromFeed(u, v);
+}
+
+// The scale that puts the head at a mirror's size: half life-size on the
+// glass, eased toward the camera's own size by g_size_follows, times the
+// artistic multiplier. 1 before the first fitted frame.
+static float MirrorScale() {
+    float d, x, y, f;
+    if (!MirrorGeometry(d, x, y, f) || g_feed_rect.h <= 0) return 1.f;
+    // A cm of head is g_head_ppcm sensor px, and the feed rect's height is
+    // the frame's; a mirror wants 0.5 cm of the screen's height per cm.
+    const float have = g_head_ppcm / float(g_feed_rect.h);
+    const float want = 0.5f / std::max(1.f, g_screen_h_cm);
+    const float k = std::min(1.f, std::max(0.f, g_size_follows));
+    const float mirror = std::pow(want / have, 1.f - k);
+    return mirror * std::max(0.1f, g_stab_size_mul);
+}
+
 // Where the crop lands in the frame, normalised. Everything but the centred
-// mode puts the subject where they are across the sensor (ScreenFromFeed).
+// mode puts the subject where the mirror would (HeadScreenPos).
 static float CropCX() {
     if (g_head_mode == (int)HeadMode::Centred) return 0.5f;
-    float u = g_head_cx, v = g_head_cy;
-    ScreenFromFeed(u, v);
+    float u, v;
+    HeadScreenPos(u, v);
     return u;
 }
 static float CropCY() {
     if (g_head_mode == (int)HeadMode::Centred) return 0.5f;
-    float u = g_head_cx, v = g_head_cy;
-    ScreenFromFeed(u, v);
+    float u, v;
+    HeadScreenPos(u, v);
     return v;
 }
 
@@ -639,27 +704,16 @@ static bool HeadPlacement(float& s, float& dcx, float& dcy) {
     dcx = dcy = 0.5f;
     if (!HaveCrop()) return false;
     const bool centred = (g_head_mode == (int)HeadMode::Centred);
-    // The input-shift mode does not take the distance-driven size: the size
-    // following the person's distance is what makes it read as a mirror. It
-    // takes a plain multiple of the camera's size instead, so that mirror can
-    // be made a little larger or smaller than life.
-    const bool stabilised = (g_head_mode == (int)HeadMode::Stabilised);
-    const bool resize = stabilised ? std::fabs(g_stab_size_mul - 1.f) > 1e-3f
-                                   : g_face_size_on;
 
-    if (resize)
-        s = stabilised ? std::min(6.f, std::max(0.1f, g_stab_size_mul))
-                       : std::min(6.f, std::max(0.1f, FaceSizeTarget() / std::max(g_head_hy, 1e-3f)));
+    s = std::min(6.f, std::max(0.1f, MirrorScale()));
+    if (std::fabs(s - 1.f) < 1e-3f) s = 1.f;
 
     if (!centred) {
-        // Where they are across the sensor, mapped onto the frame
-        // (ScreenFromFeed): the head box is in the feed crop's coordinates,
-        // where its pixels are, and the pixels are moved from there to here.
-        // With the feed at zoom 1 the two coincide in x and the move is
-        // nothing; with the full-width feed the band's height is spread
-        // over the frame's.
-        float mx = g_head_cx, my = g_head_cy;
-        ScreenFromFeed(mx, my);
+        // Where the mirror would show them (HeadScreenPos): the head box is
+        // in the feed crop's coordinates, where its pixels are, and the
+        // pixels are moved from there to here.
+        float mx, my;
+        HeadScreenPos(mx, my);
         // A scaled crop can run off the edge, and a subject half outside the
         // frame is half unsupervised. Clamped by the scaled half-extent, so
         // the box slides inward only as far as it must. A subject too big to
@@ -2564,7 +2618,17 @@ int main(int argc, char** argv) {
                                 }
                                 if (windowDone && g_id_resolve_secs <= 0.f) g_collect_id = false;
                             }
-                            g_fitter.update(g_face, g_face_w, g_face_h);
+                            if (g_fitter.update(g_face, g_face_w, g_face_h) &&
+                                g_feed_rect_valid && g_feed_rect.w > 0) {
+                                // px per cm in the fitter's frame, whose
+                                // width is the feed rect's.
+                                g_head_ppcm = g_fitter.pose().s *
+                                              float(g_feed_rect.w) / float(g_face_w);
+                                float d, x, y, f;
+                                if (MirrorGeometry(d, x, y, f)) {
+                                    g_head_d_cm = d; g_head_x_cm = x; g_head_y_cm = y;
+                                }
+                            }
                         }
                     }
                     // No `else` clearing the face: a miss is handled by the
@@ -3739,9 +3803,9 @@ int main(int argc, char** argv) {
             // setTrackedPosition.
             roots.setAmbientLevel(g_mic.level());
             {
-                // Where the visitor is across the sensor, as the screen sees it.
-                float tx = g_face.centre_x, ty = g_face.centre_y;
-                ScreenFromFeed(tx, ty);
+                // Where the mirror shows the visitor.
+                float tx, ty;
+                HeadScreenPos(tx, ty);
                 roots.setTrackedPosition(tx, ty, g_track_on && g_face.valid);
             }
 
