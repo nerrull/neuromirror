@@ -1,8 +1,18 @@
 next todo
 
-try multiple captures for the mesh fit
-use best face texture fit
+x try multiple captures for the mesh fit (identity re-solved through Fitting, best kept)
+x use best face texture fit - also give me the option to juste use a video frame for the texure (texture source: neural render / camera frame)
 framerate unstable during root growth
+
+glitch moving between faces
+chords don't look like a circle
+activate all chords for transition?
+stop cropping camera
+face mask sometimes not centered.
+
+tweek chord progression
+
+
 x dial in TAA settings  - currently too mushy
 
 turn off all notifications
@@ -13,7 +23,7 @@ test remote desktop connect
 x glitch face?
 dial in rumble (new sound?)
 
-fix mask lighting
+x fix mask lighting (albedo level)
 fade notes in more during fit
 finish fit with final chord during capture ( add some sort of music?) and switch to root drone when the roots appear
 

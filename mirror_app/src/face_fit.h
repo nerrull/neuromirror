@@ -131,9 +131,16 @@ public:
     // Solve identity over the collected frames. Returns false if there are
     // none. `residual_px` receives the mean landmark error afterwards, which is
     // the number worth watching: a good fit lands within a couple of pixels.
-    bool fitIdentity(float* residual_px = nullptr);
+    // `residual_rel` is the same error over the frames' mean inter-ocular
+    // distance: the number that compares two solves taken at different
+    // distances from the camera, which the pixel one cannot.
+    bool fitIdentity(float* residual_px = nullptr, float* residual_rel = nullptr);
     bool hasIdentity() const { return has_identity_; }
     const std::vector<float>& alpha() const { return alpha_; }
+    // Put a kept solve back. The caller re-solving through a sitting
+    // (main.mm's identity loop) holds the best alpha it has seen and restores
+    // it when a later solve comes out worse; the next update() wears it.
+    void setAlpha(const std::vector<float>& alpha);
 
     // --- per frame ---------------------------------------------------------
     // Expression + pose + mesh for the current frame. Returns false if the
@@ -196,6 +203,11 @@ public:
                        int src_w, int src_h, std::vector<float>& rgb_out,
                        float scale = 1.f, float u_off = 0.f,
                        float v_off = 0.f) const;
+    // The same off an 8-bit frame -- the camera's own (g_track_rgb), which is
+    // the frame the fit was solved in, so it takes no pin: the projection
+    // lands on the face by construction.
+    void sampleTexture(const unsigned char* image8, int img_w, int img_h,
+                       int src_w, int src_h, std::vector<float>& rgb_out) const;
 
     // The fitted mesh projected into normalised frame coordinates (0..1, y-down,
     // the same space the landmarks are in), with the same pinning offset. This

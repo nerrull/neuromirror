@@ -155,6 +155,28 @@ double g_last_id_sample = 0.0;
 double g_id_started = 0.0;
 float g_id_collect_secs = 5.0f;
 float g_id_residual  = -1.f;
+// The identity used to be solved once, over the frames of the first
+// g_id_collect_secs, and never again: whoever was mid-turn or mid-sentence in
+// those seconds kept that mesh for the rest of the show. Now the frames keep
+// being offered for as long as the collection runs (the retained set is a
+// ranking, so it only ever improves), and the solve is re-run every
+// g_id_resolve_secs after the first. A re-solve is kept if its residual over
+// the inter-ocular distance (FaceFitter::fitIdentity's residual_rel -- the
+// pixel one grows when the visitor steps closer) is no worse than the best so
+// far by more than a quarter; otherwise the best solve's alpha is put back.
+// 0 is the old one-shot.
+float g_id_resolve_secs = 2.0f;
+double g_id_last_solve = 0.0;
+std::vector<float> g_id_best_alpha;
+float g_id_best_rel = -1.f;
+int   g_id_solves = 0, g_id_rejected = 0;
+void ResetIdentityFit() {
+    if (g_fitter.valid()) g_fitter.clearIdentity();
+    g_id_residual = -1.f;
+    g_id_best_alpha.clear();
+    g_id_best_rel = -1.f;
+    g_id_solves = g_id_rejected = 0;
+}
 std::string g_track_err;
 // --- the show ---------------------------------------------------------------
 // The running order, when the piece is driving itself rather than being driven
@@ -323,6 +345,27 @@ int   g_capture_sel = -1;
 std::string g_capture_loaded;
 bool  g_texture_mask = true;
 bool  g_face_colors_fresh = false;
+int   g_texture_source = (int)TextureSource::Mirror;
+// The capture used to take g_face_colors as they stood on the frame of the
+// cut -- the visitor half-turned or stepping back at that instant wore that
+// on every mask for the rest of the show. So every sampling is scored
+// (frontality x how well the network had the face, or frontality alone off
+// the camera), and the best of the sitting is what the capture stores, with
+// the film and uv of the same instant so the capture stays one moment. Mask
+// 0 keeps wearing the live sampling through the press; only the capture
+// (and so the bank) takes the best.
+std::vector<float> g_face_colors_best;
+float g_face_colors_best_score = -1.f;
+std::vector<unsigned char> g_face_best_film;
+int   g_face_best_film_w = 0, g_face_best_film_h = 0;
+std::vector<float> g_face_best_uv;
+void ResetBestFaceColors() {
+    g_face_colors_best.clear();
+    g_face_colors_best_score = -1.f;
+    g_face_best_film.clear();
+    g_face_best_film_w = g_face_best_film_h = 0;
+    g_face_best_uv.clear();
+}
 // --- the frame source -------------------------------------------------------
 //
 // Tracking and fitting want the same picture at different sizes and depths

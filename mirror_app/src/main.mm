@@ -1869,19 +1869,31 @@ int main(int argc, char** argv) {
             mirror::RotateAboutCentroid(cap.verts, rt);
         }
         cap.tris  = g_fitter.basis().triangles();
-        cap.colors = g_face_colors;
-        float ps = 1.f, uo = 0.f, vo = 0.f;
-        PinTransform(ps, uo, vo);
-        g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, cap.uv);
-        // The film, gamma-encoded to 8 bits the way freezeFilm did it, so a
-        // capture from here and one from the transition decode alike.
-        const std::vector<float>& img = mirror.lastImageRGB();
-        const int fw = mirror.lowW(), fh = mirror.lowH();
-        if (fw > 0 && fh > 0 && img.size() == size_t(fw) * size_t(fh) * 3) {
-            cap.filmW = fw; cap.filmH = fh;
-            cap.film.resize(img.size());
-            for (size_t i = 0; i < img.size(); ++i)
-                cap.film[i] = (unsigned char)(std::pow(std::clamp(img[i], 0.f, 1.f), 1.f / 2.2f) * 255.f + 0.5f);
+        // The sitting's best sampling, with the film and uv of that same
+        // instant (see g_face_colors_best); the frame of the cut only when
+        // there was none.
+        const bool best = g_face_colors_best.size() == verts.size() &&
+                          g_face_best_uv.size() * 3 == verts.size() * 2;
+        if (best) {
+            cap.colors = g_face_colors_best;
+            cap.uv = g_face_best_uv;
+            cap.film = g_face_best_film;
+            cap.filmW = g_face_best_film_w; cap.filmH = g_face_best_film_h;
+        } else {
+            cap.colors = g_face_colors;
+            float ps = 1.f, uo = 0.f, vo = 0.f;
+            PinTransform(ps, uo, vo);
+            g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, cap.uv);
+            // The film, gamma-encoded to 8 bits the way freezeFilm did it, so a
+            // capture from here and one from the transition decode alike.
+            const std::vector<float>& img = mirror.lastImageRGB();
+            const int fw = mirror.lowW(), fh = mirror.lowH();
+            if (fw > 0 && fh > 0 && img.size() == size_t(fw) * size_t(fh) * 3) {
+                cap.filmW = fw; cap.filmH = fh;
+                cap.film.resize(img.size());
+                for (size_t i = 0; i < img.size(); ++i)
+                    cap.film[i] = (unsigned char)(std::pow(std::clamp(img[i], 0.f, 1.f), 1.f / 2.2f) * 255.f + 0.5f);
+            }
         }
         std::string cerr;
         if (!cap.valid()) return;
@@ -1890,8 +1902,11 @@ int main(int argc, char** argv) {
             thisSittingCaptureId = cap.id;
             g_capture_msg = "saved " + cap.id;
             g_capture_ids = mirror::ListCaptures();
-            printf("capture: saved %s (%zu verts, film %dx%d)\n",
-                   cap.id.c_str(), cap.vertexCount(), cap.filmW, cap.filmH);
+            printf("capture: saved %s (%zu verts, film %dx%d, %s, texture %s%s)\n",
+                   cap.id.c_str(), cap.vertexCount(), cap.filmW, cap.filmH,
+                   best ? "best frame" : "frame of the cut",
+                   g_texture_source == (int)TextureSource::Camera ? "camera" : "mirror",
+                   g_id_solves > 1 ? " -- identity re-solved" : "");
             // Into the cache too, film-less, so the next visitor's deal does
             // not go back to disk for the one capture this process just wrote.
             // Its track and plant do not exist yet; the saves that write them
@@ -2214,8 +2229,7 @@ int main(int argc, char** argv) {
                             // that then has to be cancelled.
                             if (g_auto_fit_id && !g_collect_id &&
                                 !g_fitter.hasIdentity() && nowT >= g_auto_fit_next) {
-                                g_fitter.clearIdentity();
-                                g_id_residual = -1.f;
+                                ResetIdentityFit();
                                 g_collect_id = true;
                                 g_id_started = nowT;
                                 g_auto_fit_next = nowT + g_id_collect_secs + 2.0;
@@ -2233,11 +2247,32 @@ int main(int argc, char** argv) {
                                 // the retained set is a ranking, so it keeps
                                 // improving for as long as it runs and would
                                 // never "fill".
-                                if (nowT - g_id_started > g_id_collect_secs) {
-                                    if (g_fitter.identityFrames() > 0)
-                                        g_fitter.fitIdentity(&g_id_residual);
-                                    g_collect_id = false;
+                                // ...and then, past the window, re-solved every
+                                // g_id_resolve_secs on the set as it stands,
+                                // keeping the best (see app_state.mm). The
+                                // collection runs until whatever forgets the
+                                // sitter ends it (Transition entry, Idle, a
+                                // lost face); 0 keeps the old single solve.
+                                const bool windowDone = nowT - g_id_started > g_id_collect_secs;
+                                const bool due = g_id_solves == 0 ||
+                                    (g_id_resolve_secs > 0.f &&
+                                     nowT - g_id_last_solve >= g_id_resolve_secs);
+                                if (windowDone && due && g_fitter.identityFrames() > 0) {
+                                    float px = -1.f, rel = -1.f;
+                                    if (g_fitter.fitIdentity(&px, &rel)) {
+                                        ++g_id_solves;
+                                        g_id_last_solve = nowT;
+                                        if (g_id_best_rel < 0.f || rel <= g_id_best_rel * 1.25f) {
+                                            g_id_best_alpha = g_fitter.alpha();
+                                            g_id_best_rel = rel;
+                                            g_id_residual = px;
+                                        } else {
+                                            ++g_id_rejected;
+                                            g_fitter.setAlpha(g_id_best_alpha);
+                                        }
+                                    }
                                 }
+                                if (windowDone && g_id_resolve_secs <= 0.f) g_collect_id = false;
                             }
                             g_fitter.update(g_face, g_track_w, g_track_h);
                         }
@@ -2450,8 +2485,8 @@ int main(int argc, char** argv) {
                             // on screen at this cut, so nothing jumps).
                             g_shift_x = g_shift_y = 0.f;
                             g_collect_id = false;
-                            g_id_residual = -1.f;
-                            if (g_fitter.valid()) g_fitter.clearIdentity();
+                            ResetIdentityFit();
+                            ResetBestFaceColors();
                             // The *neural* fit is the other half of the same
                             // forgetting, and it was not being done: the weights
                             // stayed trained on whoever was last in the room, so
@@ -2575,11 +2610,13 @@ int main(int argc, char** argv) {
                             // the `min` and the collection window overlap
                             // rather than running back to back.
                             if (g_fitter.valid()) {
-                                g_fitter.clearIdentity();
-                                g_id_residual = -1.f;
+                                ResetIdentityFit();
                                 g_collect_id = true;
                                 g_id_started = nowT;
                             }
+                            // The texture's best-of too: this sitting's, not
+                            // the last one's.
+                            ResetBestFaceColors();
                             // ...and start the fit itself. This phase *is* the
                             // fit -- the identity collection above only shapes
                             // the mesh -- but nothing here ever armed the feed
@@ -2635,6 +2672,11 @@ int main(int argc, char** argv) {
                             // has elapsed, and pinning it the rest of the way
                             // is exactly the arc's own ending.
                             g_chord.resolve();
+                            // The identity stands from here: the press and
+                            // the capture take the mesh as it is, not one
+                            // that might change under them.
+                            g_collect_id = false;
+                            if (!g_id_best_alpha.empty()) g_fitter.setAlpha(g_id_best_alpha);
                             // From the top, with whatever face the fitting
                             // phase ended up with. RootScene now renders
                             // continuously from here on -- see the
@@ -3458,15 +3500,46 @@ int main(int argc, char** argv) {
                 // render puts the face wherever the head mode put it.
                 //
                 // Cheap enough to do every frame: 2056 bilinear samples.
-                if (g_texture_mask && g_track_on && g_face.valid &&
-                    g_fitter.valid() && mirror.pond().fitted()) {
+                //
+                // Or off the camera frame (TextureSource::Camera): the real
+                // photograph, in the frame the fit was solved in, no pin.
+                const bool camSrc = g_texture_source == (int)TextureSource::Camera;
+                if (g_texture_mask && g_track_on && g_face.valid && g_fitter.valid() &&
+                    (camSrc ? !g_track_rgb.empty() : mirror.pond().fitted())) {
                     float ps = 1.f, uo = 0.f, vo = 0.f;
                     PinTransform(ps, uo, vo);
-                    g_fitter.sampleTexture(mirror.lastImageRGB(),
-                                           mirror.lowW(), mirror.lowH(),
-                                           g_track_w, g_track_h, g_face_colors,
-                                           ps, uo, vo);
+                    if (camSrc)
+                        g_fitter.sampleTexture(g_track_rgb.data(), g_track_w, g_track_h,
+                                               g_track_w, g_track_h, g_face_colors);
+                    else
+                        g_fitter.sampleTexture(mirror.lastImageRGB(),
+                                               mirror.lowW(), mirror.lowH(),
+                                               g_track_w, g_track_h, g_face_colors,
+                                               ps, uo, vo);
                     g_face_colors_fresh = true;
+                    // The sitting's best sampling, for the capture (see
+                    // app_state.mm): a frontal face, and off the mirror one
+                    // the network had converged on. A held (frozen) face is
+                    // not a new look at them.
+                    if (!g_face_held) {
+                        const float score = mirror::FaceFitter::Frontality(g_face.landmarks)
+                                          * (camSrc ? 1.f : g_fit_level_now);
+                        if (score > g_face_colors_best_score) {
+                            g_face_colors_best_score = score;
+                            g_face_colors_best = g_face_colors;
+                            g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo,
+                                                       g_face_best_uv);
+                            const std::vector<float>& img = mirror.lastImageRGB();
+                            const int fw = mirror.lowW(), fh = mirror.lowH();
+                            if (fw > 0 && fh > 0 && img.size() == size_t(fw) * size_t(fh) * 3) {
+                                g_face_best_film_w = fw; g_face_best_film_h = fh;
+                                g_face_best_film.resize(img.size());
+                                for (size_t i = 0; i < img.size(); ++i)
+                                    g_face_best_film[i] = (unsigned char)(
+                                        std::pow(std::clamp(img[i], 0.f, 1.f), 1.f / 2.2f) * 255.f + 0.5f);
+                            }
+                        }
+                    }
                 }
                 return out;
             };

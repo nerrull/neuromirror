@@ -220,10 +220,24 @@ int main() {
     }
     check(fitter.identityFrames() == 3, "three frames collected");
 
-    float residual = -1.0f;
-    check(fitter.fitIdentity(&residual), "fitIdentity solves");
-    std::printf("  mean landmark residual: %.4f px\n", residual);
+    float residual = -1.0f, rel = -1.0f;
+    check(fitter.fitIdentity(&residual, &rel), "fitIdentity solves");
+    std::printf("  mean landmark residual: %.4f px (%.5f of the eye distance)\n", residual, rel);
     check(residual >= 0.0f && residual < 1.0f, "residual under 1 px");
+    check(rel > 0.0f && rel < residual, "relative residual is the pixel one over the eye distance");
+
+    // A kept solve goes back in whole (main.mm's re-solve loop restores the
+    // best one when a later solve comes out worse).
+    {
+        const std::vector<float> kept = fitter.alpha();
+        std::vector<float> other(kept.size(), 0.f);
+        fitter.setAlpha(other);
+        check(fitter.alpha()[0] == 0.f, "setAlpha replaces the identity");
+        fitter.setAlpha(std::vector<float>(3, 1.f));
+        check(fitter.alpha()[0] == 0.f, "a wrong-sized alpha is refused");
+        fitter.setAlpha(kept);
+        check(fitter.alpha() == kept && fitter.hasIdentity(), "setAlpha restores the kept solve");
+    }
 
     // The coefficients themselves. This is a correlation, not an equality, and
     // it is not close to 1 by design: ridge=6 deliberately shrinks the solution
@@ -404,6 +418,21 @@ int main() {
                 if (x < IW / 2) p[0] = 1.f; else p[2] = 1.f;
             }
         fitter.sampleTexture(split, IW, IH, W, H, col);
+
+        // The 8-bit path (the camera frame) lands on the same texels: the
+        // same image quantised, sampled without a pin, must agree with the
+        // float path's unpinned sampling to within the quantisation.
+        {
+            std::vector<unsigned char> split8(split.size());
+            for (size_t i = 0; i < split.size(); ++i)
+                split8[i] = (unsigned char)(split[i] * 255.f + 0.5f);
+            std::vector<float> col8;
+            fitter.sampleTexture(split8.data(), IW, IH, W, H, col8);
+            bool same = col8.size() == col.size();
+            for (size_t i = 0; same && i < col.size(); ++i)
+                same = std::fabs(col8[i] - col[i]) < 1.f / 255.f + 1e-4f;
+            check(same, "the 8-bit sampler agrees with the float one");
+        }
 
         std::vector<float> px;
         fitter.projectVertices(px);

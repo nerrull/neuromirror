@@ -21,7 +21,7 @@ The mapping from a top-level panel section to a bank is `kBankRules` in
 `src/ui_params.cpp`. Add a section, add a rule -- otherwise its parameters
 land in `unassigned` and are listed below until somebody decides.
 
-## machine (18 parameters)
+## machine (19 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -31,6 +31,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `face tracking/fitted mesh drives the root masks` | bool | -- | 1 |
 | `face tracking/hold on loss` | float | 0 .. 3 | 0.6 |
 | `face tracking/source` | int | 0 .. 1 | 0 |
+| `face tracking/texture source` | int | 0 .. 1 | 0 |
 | `face tracking/texture the mask from the neural fit` | bool | -- | 1 |
 | `face tracking/track faces` | bool | -- | 1 |
 | `face tracking/tracker px` | int | 240 .. 960 | 480 |
@@ -44,7 +45,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `screen/orientation` | int | 0 .. 2 | 0 |
 | `screen/panel aspect (w-h)` | float | 0.3 .. 1 | 0.5625 |
 
-## fit (46 parameters)
+## fit (47 parameters)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -74,6 +75,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/identity/frames` | int | 1 .. 24 | 8 |
 | `fit/identity/head pose from tracker` | bool | -- | 1 |
 | `fit/identity/modes` | int | 10 .. 100 | 80 |
+| `fit/identity/re-solve every` | float | 0 .. 10 | 2 |
 | `fit/identity/ridge` | float | 0.01 .. 20 | 6 |
 | `fit/identity/secs` | float | 1 .. 15 | 5 |
 | `fit/kinect stall s` | float | 0.5 .. 15 | 3 |

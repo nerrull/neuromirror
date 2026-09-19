@@ -231,7 +231,13 @@ bool FaceFitter::offerIdentityFrame(const FaceResult& r, int w, int h) {
     return true;
 }
 
-bool FaceFitter::fitIdentity(float* residual_px) {
+void FaceFitter::setAlpha(const std::vector<float>& alpha) {
+    if (!basis_.valid() || alpha.size() != size_t(basis_.identityModes())) return;
+    alpha_ = alpha;
+    has_identity_ = true;
+}
+
+bool FaceFitter::fitIdentity(float* residual_px, float* residual_rel) {
     if (!basis_.valid() || frames_.empty()) return false;
 
     const int n_id = std::min(cfg_.n_identity, basis_.identityModes());
@@ -363,7 +369,7 @@ bool FaceFitter::fitIdentity(float* residual_px) {
     for (int m = 0; m < n_id; ++m) alpha_[size_t(m)] = float(a[size_t(m)]);
     has_identity_ = true;
 
-    if (residual_px) {
+    if (residual_px || residual_rel) {
         double err = 0.0;
         size_t count = 0;
         std::vector<float> lm;
@@ -387,7 +393,19 @@ bool FaceFitter::fitIdentity(float* residual_px) {
                 ++count;
             }
         }
-        *residual_px = count ? float(err / double(count)) : 0.0f;
+        const float px = count ? float(err / double(count)) : 0.0f;
+        if (residual_px) *residual_px = px;
+        if (residual_rel) {
+            // dlib-68: 36 and 45 are the outer eye corners.
+            double io = 0.0;
+            for (size_t k = 0; k < n_frames; ++k) {
+                const float* t = frames_[k].target.data();
+                const double dx = t[45 * 2] - t[36 * 2], dy = t[45 * 2 + 1] - t[36 * 2 + 1];
+                io += std::sqrt(dx * dx + dy * dy);
+            }
+            io /= double(n_frames);
+            *residual_rel = io > 1e-3 ? float(px / io) : px;
+        }
     }
     return true;
 }
@@ -532,18 +550,12 @@ void FaceFitter::projectNormalised(int src_w, int src_h, float scale, float u_of
     }
 }
 
-void FaceFitter::sampleTexture(const std::vector<float>& image, int img_w, int img_h,
-                               int src_w, int src_h, std::vector<float>& out,
-                               float scale, float u_off, float v_off) const {
-    const size_t n = verts_.size() / 3;
-    out.assign(n * 3, 0.5f);
-    if (image.size() < size_t(img_w) * img_h * 3 || img_w < 2 || img_h < 2 ||
-        src_w <= 0 || src_h <= 0 || n == 0)
-        return;
-
-    std::vector<float> uv;
-    projectNormalised(src_w, src_h, scale, u_off, v_off, uv);
-
+// One sampler for both pixel types: `at` reads channel c of pixel (x, y) as a
+// float in [0,1].
+template <class At>
+static void sampleAt(const std::vector<float>& uv, int img_w, int img_h, At at,
+                     std::vector<float>& out) {
+    const size_t n = uv.size() / 2;
     for (size_t i = 0; i < n; ++i) {
         // Normalised -> image pixels. Going through normalised coordinates is
         // what lets the mirror render at a different resolution from the one
@@ -558,14 +570,41 @@ void FaceFitter::sampleTexture(const std::vector<float>& image, int img_w, int i
         const float fx = uc - float(x0), fy = vc - float(y0);
 
         for (int c = 0; c < 3; ++c) {
-            const float a = image[(size_t(y0) * img_w + x0) * 3 + c];
-            const float b = image[(size_t(y0) * img_w + x1) * 3 + c];
-            const float d = image[(size_t(y1) * img_w + x0) * 3 + c];
-            const float e = image[(size_t(y1) * img_w + x1) * 3 + c];
+            const float a = at(x0, y0, c), b = at(x1, y0, c);
+            const float d = at(x0, y1, c), e = at(x1, y1, c);
             out[i * 3 + c] = (a * (1 - fx) + b * fx) * (1 - fy) +
                              (d * (1 - fx) + e * fx) * fy;
         }
     }
+}
+
+void FaceFitter::sampleTexture(const std::vector<float>& image, int img_w, int img_h,
+                               int src_w, int src_h, std::vector<float>& out,
+                               float scale, float u_off, float v_off) const {
+    const size_t n = verts_.size() / 3;
+    out.assign(n * 3, 0.5f);
+    if (image.size() < size_t(img_w) * img_h * 3 || img_w < 2 || img_h < 2 ||
+        src_w <= 0 || src_h <= 0 || n == 0)
+        return;
+    std::vector<float> uv;
+    projectNormalised(src_w, src_h, scale, u_off, v_off, uv);
+    sampleAt(uv, img_w, img_h,
+             [&](int x, int y, int c) { return image[(size_t(y) * img_w + x) * 3 + c]; },
+             out);
+}
+
+void FaceFitter::sampleTexture(const unsigned char* image8, int img_w, int img_h,
+                               int src_w, int src_h, std::vector<float>& out) const {
+    const size_t n = verts_.size() / 3;
+    out.assign(n * 3, 0.5f);
+    if (!image8 || img_w < 2 || img_h < 2 || src_w <= 0 || src_h <= 0 || n == 0) return;
+    std::vector<float> uv;
+    projectNormalised(src_w, src_h, 1.f, 0.f, 0.f, uv);
+    sampleAt(uv, img_w, img_h,
+             [&](int x, int y, int c) {
+                 return image8[(size_t(y) * img_w + x) * 3 + c] * (1.f / 255.f);
+             },
+             out);
 }
 
 void FaceFitter::projectLandmarks(std::vector<float>& out) const {

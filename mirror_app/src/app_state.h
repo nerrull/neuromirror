@@ -148,6 +148,14 @@ extern double g_last_id_sample;
 extern double g_id_started;
 extern float g_id_collect_secs;
 extern float g_id_residual;
+// The identity re-solved through the sitting, keeping the best -- see
+// app_state.mm.
+extern float g_id_resolve_secs;
+extern double g_id_last_solve;
+extern std::vector<float> g_id_best_alpha;
+extern float g_id_best_rel;
+extern int   g_id_solves, g_id_rejected;
+void ResetIdentityFit();      // clearIdentity + the best-solve state; nothing else
 extern std::string g_track_err;
 
 // --- the show ---------------------------------------------------------------
@@ -238,6 +246,17 @@ extern int   g_capture_sel;
 extern std::string g_capture_loaded;
 extern bool  g_texture_mask;
 extern bool  g_face_colors_fresh;
+// Where the mask's colours are sampled from: the mirror's own output (the
+// network's reconstruction, the piece's default) or the camera frame.
+enum class TextureSource { Mirror = 0, Camera = 1 };
+extern int   g_texture_source;
+// The best-scored sampling of the sitting -- see app_state.mm.
+extern std::vector<float> g_face_colors_best;
+extern float g_face_colors_best_score;
+extern std::vector<unsigned char> g_face_best_film;   // 1/2.2-encoded RGB8
+extern int   g_face_best_film_w, g_face_best_film_h;
+extern std::vector<float> g_face_best_uv;
+void ResetBestFaceColors();
 
 // --- screen orientation ------------------------------------------------------
 extern int   g_orientation;

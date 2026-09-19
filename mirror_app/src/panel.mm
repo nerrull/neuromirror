@@ -2663,6 +2663,23 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SameLine();
                         ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f), "captured");
                     }
+                    ImGui::TextUnformatted("texture from:"); ImGui::SameLine();
+                    ImGui::RadioButton("neural render", &g_texture_source,
+                                       (int)TextureSource::Mirror);
+                    ImGui::SameLine();
+                    ImGui::RadioButton("camera frame", &g_texture_source,
+                                       (int)TextureSource::Camera);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "The camera's own pixels at the fitted mesh, in\n"
+                            "the frame the fit was solved in -- the photograph\n"
+                            "rather than what the mirror made of it.");
+                    }
+                    ui::DeclareInt("texture source", &g_texture_source, 0, 1);
+                    if (g_face_colors_best_score >= 0.f)
+                        ImGui::TextDisabled("best frame of the sitting: score %.2f "
+                                            "(frontality x fit), the capture takes it",
+                                            g_face_colors_best_score);
 
                     // --- frame source --------------------------------------
                     ImGui::Separator();
@@ -2944,7 +2961,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ImGui::SameLine();
                 if (g_fitter.hasIdentity()) {
                     ImGui::TextColored(ImVec4(0.6f, 1.f, 0.7f, 1.f),
-                                       "fitted (%.2f px residual)", g_id_residual);
+                                       "fitted (%.2f px residual, %d solve%s, %d worse)%s",
+                                       g_id_residual, g_id_solves, g_id_solves == 1 ? "" : "s",
+                                       g_id_rejected, g_collect_id ? "  re-solving" : "");
                 } else if (g_collect_id) {
                     float best = 0, worst = 0;
                     g_fitter.identityScores(best, worst);
@@ -2959,8 +2978,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     if (g_collect_id) {
                         g_collect_id = false;
                     } else {
-                        g_fitter.clearIdentity();
-                        g_id_residual = -1.f;
+                        ResetIdentityFit();
                         g_collect_id = true;
                         g_id_started = pf.nowT;
                     }
@@ -2984,6 +3002,16 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 ImGui::SetNextItemWidth(90);
                 ui::SliderFloat("secs", &g_id_collect_secs, 1.f, 15.f, "%.0fs");
                 ImGui::EndDisabled();
+                ui::SliderFloat("re-solve every", &g_id_resolve_secs, 0.f, 10.f, "%.1fs");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "After the first solve, keep offering frames and\n"
+                        "solve again this often, keeping the best (by\n"
+                        "residual over the eye distance, so stepping\n"
+                        "closer does not count against it). A solve worse\n"
+                        "by more than a quarter is dropped and the best\n"
+                        "put back. 0 = solve once, as before.");
+                }
                 ui::Checkbox("fit automatically", &g_auto_fit_id);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
@@ -4817,9 +4845,10 @@ void DrawOverlayWindows(PanelFrameArgs& pf) {
                 // on its own -- a number with no scale beside it is not a
                 // diagnosis.
                 if (g_id_residual >= 0.f) {
-                    ImGui::TextDisabled("identity %.2f px (needs <= %.2f)%s",
+                    ImGui::TextDisabled("identity %.2f px (needs <= %.2f)%s  %d solve%s",
                                         g_id_residual, g_show_fit_px,
-                                        g_collect_id ? "  collecting" : "");
+                                        g_collect_id ? "  re-solving" : "",
+                                        g_id_solves, g_id_solves == 1 ? "" : "s");
                 } else if (g_collect_id) {
                     ImGui::TextDisabled("identity collecting %.1fs",
                                         g_id_collect_secs - (pf.nowT - g_id_started));
