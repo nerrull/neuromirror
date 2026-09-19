@@ -25,17 +25,17 @@ struct DownsampleCache {
     int w = 0, h = 0;
     uint64_t frame_id = 0;
     bool mirrored = false;
-    FeedCrop crop;
+    SrcRect rect;   // the source rect the entry was resampled from
     std::vector<unsigned char> rgb;
     bool valid = false;
 
     bool filtered = true;
 
-    bool matches(int qw, int qh, uint64_t id, bool mir, const FeedCrop& c,
+    bool matches(int qw, int qh, uint64_t id, bool mir, const SrcRect& r,
                  bool filt) const {
         return valid && w == qw && h == qh && frame_id == id && mirrored == mir &&
                filtered == filt &&
-               crop.cx == c.cx && crop.cy == c.cy && crop.zoom == c.zoom;
+               rect.x == r.x && rect.y == r.y && rect.w == r.w && rect.h == r.h;
     }
 };
 
@@ -443,16 +443,30 @@ bool KinectFitTarget::lastFrameRGB8(int w, int h,
     if (!impl_->have_frame || w <= 0 || h <= 0) return false;
     const FrameSnapshot& f = impl_->frame;
     if (!f.valid || f.data.empty()) return false;
+    return lastFrameRGB8(ComputeFeedRect(f.width, f.height, w, h, impl_->crop),
+                         w, h, rgb, filtered);
+}
+
+bool KinectFitTarget::frameSize(int& w, int& h) const {
+    if (!impl_->have_frame || !impl_->frame.valid) return false;
+    w = impl_->frame.width; h = impl_->frame.height;
+    return w > 0 && h > 0;
+}
+
+bool KinectFitTarget::lastFrameRGB8(const SrcRect& r, int w, int h,
+                                    std::vector<unsigned char>& rgb,
+                                    bool filtered) const {
+    if (!impl_->have_frame || w <= 0 || h <= 0) return false;
+    const FrameSnapshot& f = impl_->frame;
+    if (!f.valid || f.data.empty()) return false;
 
     for (const DownsampleCache& c : impl_->cache) {
-        if (!c.matches(w, h, impl_->frames, impl_->mirrored, impl_->crop,
-                       filtered)) continue;
+        if (!c.matches(w, h, impl_->frames, impl_->mirrored, r, filtered)) continue;
         rgb = c.rgb;                       // a copy of the result, not of the work
         return true;
     }
 
     const bool rgbx = (f.format == libfreenect2::Frame::RGBX);
-    const SrcRect r = ComputeFeedRect(f.width, f.height, w, h, impl_->crop);
     // The resampler's own `mirror` flag means "flip the raw frame"; ours
     // means "behave like a mirror" -- and libfreenect2's raw frame already
     // does (see setMirrored's comment in the header), so the two are
@@ -474,7 +488,7 @@ bool KinectFitTarget::lastFrameRGB8(int w, int h,
     slot.w = w; slot.h = h;
     slot.frame_id = impl_->frames;
     slot.mirrored = impl_->mirrored;
-    slot.crop = impl_->crop;
+    slot.rect = r;
     slot.filtered = filtered;
     slot.rgb = rgb;
     slot.valid = true;

@@ -175,6 +175,20 @@ SrcRect ComputeFeedRect(int src_w, int src_h, int dst_w, int dst_h,
     return r;
 }
 
+SrcRect ComputeTrackRect(int src_w, int src_h, const TrackCrop& c) {
+    SrcRect r;
+    if (src_w <= 0 || src_h <= 0) return r;
+    const double x0 = std::min(std::max(double(std::min(c.x0, c.x1)), 0.0), 1.0) * src_w;
+    const double x1 = std::min(std::max(double(std::max(c.x0, c.x1)), 0.0), 1.0) * src_w;
+    const double y0 = std::min(std::max(double(std::min(c.y0, c.y1)), 0.0), 1.0) * src_h;
+    const double y1 = std::min(std::max(double(std::max(c.y0, c.y1)), 0.0), 1.0) * src_h;
+    r.x = std::min(int(std::lround(x0)), src_w - 1);
+    r.y = std::min(int(std::lround(y0)), src_h - 1);
+    r.w = std::max(1, std::min(int(std::lround(x1)) - r.x, src_w - r.x));
+    r.h = std::max(1, std::min(int(std::lround(y1)) - r.y, src_h - r.y));
+    return r;
+}
+
 void DownsampleRGB8(const unsigned char* src, int src_w, int src_h,
                     int stride_px, int r_off, int b_off,
                     int dst_w, int dst_h, std::vector<float>& dst) {

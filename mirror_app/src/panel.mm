@@ -2493,8 +2493,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "screen does, so a portrait frame keeps a tall rect out\n"
                         "of it and throws the sides away -- about a third of\n"
                         "the width survives. This is where that rect sits.\n\n"
-                        "The tracker and the fit are given the same crop, so\n"
-                        "moving this cannot put the mask off the face.");
+                        "The fit is given this crop; so is the tracker unless\n"
+                        "it has its own (face tracking, 'own crop'), in which\n"
+                        "case moving this moves the picture under the mask.");
                 }
                 ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
                 ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
@@ -2637,15 +2638,40 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
                             "Long edge of the frame handed to MediaPipe. The\n"
-                            "short edge follows the composition's aspect and is\n"
-                            "not a choice: the tracker has to be looking at the\n"
-                            "same crop of the sensor as the fit grid, or the\n"
-                            "landmarks it returns describe a different\n"
-                            "rectangle from the one they get applied to.");
+                            "short edge follows the shape of what it looks at\n"
+                            "-- its own crop below, or the composition's\n"
+                            "aspect when it shares the feed crop -- and is not\n"
+                            "a choice: the landmarks come back normalised to\n"
+                            "the frame, so its shape is the rect they describe.");
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("%d x %d", g_track_w, g_track_h);
                     ImGui::PopItemWidth();
+
+                    ui::Checkbox("tracker: own crop of the sensor", &g_track_own_crop);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "On: the tracker looks at the rect below -- the\n"
+                            "whole sensor by default -- not the portrait crop\n"
+                            "the screen shows. Its landmarks are normalised to\n"
+                            "that rect, so its left edge is the screen's left\n"
+                            "edge and its right the screen's right: a visitor\n"
+                            "anywhere across the sensor is tracked, and where\n"
+                            "they stand across it is where they land on the\n"
+                            "screen. The shown picture is not touched.\n\n"
+                            "Off: the tracker sees exactly what the fit grid\n"
+                            "and the preview see (the feed crop), so the mask\n"
+                            "sits on the face in the picture.\n\n"
+                            "The camera mask is applied in the tracker's own\n"
+                            "rect when this is on.");
+                    }
+                    ImGui::PushItemWidth(120);
+                    ui::SliderFloat("tracker left",   &g_track_crop.x0, 0.f, 1.f, "%.3f");
+                    ui::SliderFloat("tracker right",  &g_track_crop.x1, 0.f, 1.f, "%.3f");
+                    ui::SliderFloat("tracker top",    &g_track_crop.y0, 0.f, 1.f, "%.3f");
+                    ui::SliderFloat("tracker bottom", &g_track_crop.y1, 0.f, 1.f, "%.3f");
+                    ImGui::PopItemWidth();
+                    if (ImGui::Button("whole sensor")) g_track_crop = mirror::TrackCrop{};
 #if !MIRROR_HAVE_KINECT
                     ImGui::TextDisabled("(no camera: tracking needs the Kinect target)");
 #endif

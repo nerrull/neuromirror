@@ -62,6 +62,14 @@ public:
     // nothing measures.
     bool lastFrameRGB8(int w, int h, std::vector<unsigned char>& rgb,
                        bool filtered = true) const;
+    // The same over an explicit rect of the sensor frame instead of the
+    // feed crop's -- the tracker's own crop (TrackCrop). Same retained
+    // snapshot, same mirroring.
+    bool lastFrameRGB8(const SrcRect& rect, int w, int h,
+                       std::vector<unsigned char>& rgb, bool filtered = true) const;
+    // The retained colour frame's size, for placing a rect in it. False
+    // before the first frame.
+    bool frameSize(int& w, int& h) const;
 
     // The retained frame as float in [0,1], with optional partial fill. Same as
     // lastFrameRGB8 but returns floats. Used by the fitter to ensure it works

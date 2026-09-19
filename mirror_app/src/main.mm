@@ -170,11 +170,14 @@ static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h) {
 
 // `filtered` false takes one source pixel per destination pixel instead of
 // averaging the footprint -- for the overlay, which only has to look right.
+// `rect` names a rect of the source to take instead of the feed crop's --
+// the tracker's own (TrackRect below). The camera mask is applied in the
+// coordinates of whatever rect was taken.
 static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
-                       bool filtered = true) {
+                       bool filtered = true, const mirror::SrcRect* rect = nullptr) {
     if (g_source == (int)Source::Photo) {
         if (g_photo.empty()) return false;
-        const mirror::SrcRect r =
+        const mirror::SrcRect r = rect ? *rect :
             mirror::ComputeFeedRect(g_photo_w, g_photo_h, w, h, g_feed);
         if (filtered) {
             mirror::DownsampleRectToRGB8(g_photo.data(), g_photo_w, g_photo_h,
@@ -187,12 +190,37 @@ static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
         return true;
     }
 #if MIRROR_HAVE_KINECT
-    if (!g_kinect.lastFrameRGB8(w, h, out, filtered)) return false;
+    if (!(rect ? g_kinect.lastFrameRGB8(*rect, w, h, out, filtered)
+               : g_kinect.lastFrameRGB8(w, h, out, filtered))) return false;
     ApplyCamMask8(out, w, h);
     return true;
 #else
     return false;
 #endif
+}
+
+// The source frame's size, whichever source: false until there is one.
+static bool SourceSize(int& w, int& h) {
+    if (g_source == (int)Source::Photo) {
+        w = g_photo_w; h = g_photo_h;
+        return !g_photo.empty() && w > 0 && h > 0;
+    }
+#if MIRROR_HAVE_KINECT
+    return g_kinect.frameSize(w, h);
+#else
+    return false;
+#endif
+}
+
+// The rect of the source the tracker looks at: its own crop when
+// g_track_own_crop, else the feed's for a comp of compW x compH (the same
+// rect the fit grid and the preview take). False when no source is up yet.
+static bool TrackRect(int compW, int compH, mirror::SrcRect& r) {
+    int sw = 0, sh = 0;
+    if (!SourceSize(sw, sh)) return false;
+    r = g_track_own_crop ? mirror::ComputeTrackRect(sw, sh, g_track_crop)
+                         : mirror::ComputeFeedRect(sw, sh, compW, compH, g_feed);
+    return r.w > 0 && r.h > 0;
 }
 
 // `fill` bounds the work to the part of the fit grid the training pass will
@@ -2076,17 +2104,26 @@ int main(int argc, char** argv) {
                      mirror::KinectUsbDetachTime());
 #endif
 
-        // And so does the tracker's frame. Derived here, from the same
-        // composition every other consumer of the feed is derived from, so the
-        // rect ComputeFeedRect selects for the tracker is the rect it selects
-        // for the fit grid and for the preview -- which is the whole reason
-        // landmarks normalised against one can be applied to the others.
-        if (compW >= compH) {
-            g_track_w = g_track_px;
-            g_track_h = std::max(1, int(int64_t(g_track_px) * compH / compW));
-        } else {
-            g_track_h = g_track_px;
-            g_track_w = std::max(1, int(int64_t(g_track_px) * compW / compH));
+        // And so does the tracker's frame. With the tracker on the feed's
+        // crop it is derived from the same composition every other consumer
+        // of the feed is, so the rect ComputeFeedRect selects for the tracker
+        // is the rect it selects for the fit grid and for the preview --
+        // which is what lets landmarks normalised against one be applied to
+        // the others. With the tracker on its own crop (g_track_own_crop)
+        // the frame takes that rect's shape instead: the landmarks are still
+        // normalised to the frame, so that rect's bounds land on the screen's.
+        mirror::SrcRect trackRect;
+        const bool haveTrackRect = TrackRect(compW, compH, trackRect);
+        {
+            const int aw = (g_track_own_crop && haveTrackRect) ? trackRect.w : compW;
+            const int ah = (g_track_own_crop && haveTrackRect) ? trackRect.h : compH;
+            if (aw >= ah) {
+                g_track_w = g_track_px;
+                g_track_h = std::max(1, int(int64_t(g_track_px) * ah / aw));
+            } else {
+                g_track_h = g_track_px;
+                g_track_w = std::max(1, int(int64_t(g_track_px) * aw / ah));
+            }
         }
 
         @autoreleasepool {
@@ -2187,7 +2224,8 @@ int main(int argc, char** argv) {
             // mask and the roots' mesh are built from the same detection
             // rather than from two frames a scene apart.
             if (g_track_on && g_tracker.isOpen() && SourceReady()) {
-                if (SourceRGB8(g_track_w, g_track_h, g_track_rgb)) {
+                if (SourceRGB8(g_track_w, g_track_h, g_track_rgb, /*filtered=*/true,
+                               (g_track_own_crop && haveTrackRect) ? &trackRect : nullptr)) {
                     // Video mode rejects a repeated or decreasing timestamp
                     // with a hard error rather than dropping the frame, and
                     // the render loop can outrun the sensor, so the clock here
