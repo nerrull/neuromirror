@@ -2497,8 +2497,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         "'full width' is the whole sensor across the frame, a\n"
                         "16:9 band with black above and below, so nobody is\n"
                         "ever out of the picture at the sides.\n\n"
-                        "The tracker and the fit are given the same crop, so\n"
-                        "moving this cannot put the mask off the face.");
+                        "The tracker sees the whole sensor and its landmarks\n"
+                        "are mapped into this rect, so moving this cannot put\n"
+                        "the mask off the face.");
                 }
                 ui::SliderFloat("feed x", &g_feed.cx, 0.f, 1.f);
                 ui::SliderFloat("feed y", &g_feed.cy, 0.f, 1.f);
@@ -2661,12 +2662,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderInt("tracker px", &g_track_px, 240, 960);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
-                            "Long edge of the frame handed to MediaPipe. The\n"
-                            "short edge follows the composition's aspect and is\n"
-                            "not a choice: the tracker has to be looking at the\n"
-                            "same crop of the sensor as the fit grid, or the\n"
-                            "landmarks it returns describe a different\n"
-                            "rectangle from the one they get applied to.");
+                            "Long edge of the frame handed to MediaPipe: the\n"
+                            "whole sensor, whatever the feed crop shows, so a\n"
+                            "face anywhere across it is found at full size.\n"
+                            "The landmarks are mapped into the feed's crop as\n"
+                            "they arrive, so a face outside the picture is\n"
+                            "placed past its edge, still tracked.");
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("%d x %d", g_track_w, g_track_h);

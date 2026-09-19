@@ -118,6 +118,27 @@ bool LoadPhotoSource(const char* path, std::string& err) {
 }
 
 // Coverage at a normalised point: 1 inside, 0 outside, smooth across the edge.
+// The source frame's size, whichever source: false until there is one.
+static bool SourceSize(int& w, int& h) {
+    if (g_source == (int)Source::Photo) {
+        w = g_photo_w; h = g_photo_h;
+        return !g_photo.empty() && w > 0 && h > 0;
+    }
+#if MIRROR_HAVE_KINECT
+    return g_kinect.frameSize(w, h);
+#else
+    return false;
+#endif
+}
+
+// The feed's rect of the source this frame (ComputeFeedRect for the
+// composition), and the same rect in the tracker's pixels: g_face_w x
+// g_face_h is the frame the landmarks are normalised to, and the frame the
+// mesh fit is solved in. Set each frame ahead of the tracking (below).
+static mirror::SrcRect g_feed_rect;
+static bool g_feed_rect_valid = false;
+static int g_face_w = 480, g_face_h = 270;
+
 static float CamMaskAt(float u, float v) {
     if (!g_cam_mask_on) return 1.f;
     const float f = std::max(g_cam_feather, 1e-4f);
@@ -155,12 +176,21 @@ static void ApplyCamMaskF(std::vector<float>& rgb, int w, int h,
     }
 }
 
-static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h) {
+// `from`/`to`: the image is of source rect `from` while the mask is drawn
+// in the coordinates of rect `to` (the feed's) -- the tracker's whole-frame
+// image. Without them the image is the feed itself.
+static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h,
+                          const mirror::SrcRect* from = nullptr,
+                          const mirror::SrcRect* to = nullptr) {
     if (!g_cam_mask_on || w <= 0 || h <= 0 || rgb.size() != size_t(w) * h * 3) return;
+    const bool remap = from && to && from->w > 0 && from->h > 0 && to->w > 0 && to->h > 0;
     for (int y = 0; y < h; ++y) {
-        const float v = (float(y) + 0.5f) / float(h);
+        float v = (float(y) + 0.5f) / float(h);
+        if (remap) v = (v * from->h + from->y - to->y) / float(to->h);
         for (int x = 0; x < w; ++x) {
-            const float m = CamMaskAt((float(x) + 0.5f) / float(w), v);
+            float u = (float(x) + 0.5f) / float(w);
+            if (remap) u = (u * from->w + from->x - to->x) / float(to->w);
+            const float m = CamMaskAt(u, v);
             if (m >= 1.f) continue;
             unsigned char* p = &rgb[(size_t(y) * w + x) * 3];
             for (int c = 0; c < 3; ++c) p[c] = (unsigned char)(p[c] * m + 0.5f);
@@ -170,11 +200,21 @@ static void ApplyCamMask8(std::vector<unsigned char>& rgb, int w, int h) {
 
 // `filtered` false takes one source pixel per destination pixel instead of
 // averaging the footprint -- for the overlay, which only has to look right.
+// `whole` takes the source's whole frame instead of the feed crop -- the
+// tracker's picture (see the tracking block in the loop); the camera mask
+// is still the feed's, remapped onto it.
 static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
-                       bool filtered = true) {
+                       bool filtered = true, bool whole = false) {
+    int sw = 0, sh = 0;
+    mirror::SrcRect wholeRect, feedRect;
+    if (whole) {
+        if (!SourceSize(sw, sh)) return false;
+        wholeRect = mirror::SrcRect{0, 0, sw, sh};
+        feedRect = g_feed_rect;
+    }
     if (g_source == (int)Source::Photo) {
         if (g_photo.empty()) return false;
-        const mirror::SrcRect r =
+        const mirror::SrcRect r = whole ? wholeRect :
             mirror::ComputeFeedRect(g_photo_w, g_photo_h, w, h, g_feed);
         if (filtered) {
             mirror::DownsampleRectToRGB8(g_photo.data(), g_photo_w, g_photo_h,
@@ -183,12 +223,13 @@ static bool SourceRGB8(int w, int h, std::vector<unsigned char>& out,
             mirror::PointSampleRectToRGB8(g_photo.data(), g_photo_w, g_photo_h,
                                           3, 0, 2, r, w, h, out);
         }
-        ApplyCamMask8(out, w, h);
+        ApplyCamMask8(out, w, h, whole ? &wholeRect : nullptr, whole ? &feedRect : nullptr);
         return true;
     }
 #if MIRROR_HAVE_KINECT
-    if (!g_kinect.lastFrameRGB8(w, h, out, filtered)) return false;
-    ApplyCamMask8(out, w, h);
+    if (!(whole ? g_kinect.lastFrameRGB8(wholeRect, w, h, out, filtered)
+                : g_kinect.lastFrameRGB8(w, h, out, filtered))) return false;
+    ApplyCamMask8(out, w, h, whole ? &wholeRect : nullptr, whole ? &feedRect : nullptr);
     return true;
 #else
     return false;
@@ -1883,7 +1924,7 @@ int main(int argc, char** argv) {
             cap.colors = g_face_colors;
             float ps = 1.f, uo = 0.f, vo = 0.f;
             PinTransform(ps, uo, vo);
-            g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, cap.uv);
+            g_fitter.projectNormalised(g_face_w, g_face_h, ps, uo, vo, cap.uv);
             // The film, gamma-encoded to 8 bits the way freezeFilm did it, so a
             // capture from here and one from the transition decode alike.
             const std::vector<float>& img = mirror.lastImageRGB();
@@ -2076,17 +2117,36 @@ int main(int argc, char** argv) {
                      mirror::KinectUsbDetachTime());
 #endif
 
-        // And so does the tracker's frame. Derived here, from the same
-        // composition every other consumer of the feed is derived from, so the
-        // rect ComputeFeedRect selects for the tracker is the rect it selects
-        // for the fit grid and for the preview -- which is the whole reason
-        // landmarks normalised against one can be applied to the others.
-        if (compW >= compH) {
-            g_track_w = g_track_px;
-            g_track_h = std::max(1, int(int64_t(g_track_px) * compH / compW));
-        } else {
-            g_track_h = g_track_px;
-            g_track_w = std::max(1, int(int64_t(g_track_px) * compW / compH));
+        // And so does the tracker's frame: the *whole* sensor, at tracker px
+        // on its long edge, whatever the feed shows -- a detector fed the
+        // feed's crop lost anyone outside it, and fed the full-width feed
+        // (a 16:9 band across a portrait frame) saw faces a few dozen
+        // pixels high. Its landmarks, normalised to that frame, are mapped
+        // into the feed rect's coordinates the moment they arrive (the
+        // tracking block), so everything downstream -- the mask, the
+        // region, the fit, the strum -- still trades in the feed's
+        // normalised coordinates, as it always did, and a face's place
+        // across the sensor is its place across the picture. Without a
+        // source yet the two frames coincide.
+        {
+            int sw = 0, sh = 0;
+            g_feed_rect_valid = SourceSize(sw, sh);
+            const int aw = g_feed_rect_valid ? sw : compW;
+            const int ah = g_feed_rect_valid ? sh : compH;
+            if (aw >= ah) {
+                g_track_w = g_track_px;
+                g_track_h = std::max(1, int(int64_t(g_track_px) * ah / aw));
+            } else {
+                g_track_h = g_track_px;
+                g_track_w = std::max(1, int(int64_t(g_track_px) * aw / ah));
+            }
+            if (g_feed_rect_valid) {
+                g_feed_rect = mirror::ComputeFeedRect(sw, sh, compW, compH, g_feed);
+                g_face_w = std::max(1, int(std::lround(double(g_track_w) * g_feed_rect.w / sw)));
+                g_face_h = std::max(1, int(std::lround(double(g_track_h) * g_feed_rect.h / sh)));
+            } else {
+                g_face_w = g_track_w; g_face_h = g_track_h;
+            }
         }
 
         @autoreleasepool {
@@ -2187,7 +2247,8 @@ int main(int argc, char** argv) {
             // mask and the roots' mesh are built from the same detection
             // rather than from two frames a scene apart.
             if (g_track_on && g_tracker.isOpen() && SourceReady()) {
-                if (SourceRGB8(g_track_w, g_track_h, g_track_rgb)) {
+                if (SourceRGB8(g_track_w, g_track_h, g_track_rgb, /*filtered=*/true,
+                               /*whole=*/g_feed_rect_valid)) {
                     // Video mode rejects a repeated or decreasing timestamp
                     // with a hard error rather than dropping the frame, and
                     // the render loop can outrun the sensor, so the clock here
@@ -2197,6 +2258,32 @@ int main(int argc, char** argv) {
                     r.blendshape_names = g_face.blendshape_names;   // filled once
                     const bool hit = g_tracker.detect(g_track_rgb.data(), g_track_w,
                                                       g_track_h, g_track_ts, r);
+                    // Whole-sensor landmarks into the feed rect's normalised
+                    // coordinates (see the frame derivation above). A face
+                    // outside the feed's crop maps outside 0..1, and is
+                    // placed there -- off the picture's edge, still tracked.
+                    if (hit && g_feed_rect_valid) {
+                        int sw = 0, sh = 0;
+                        if (SourceSize(sw, sh) && g_feed_rect.w > 0 && g_feed_rect.h > 0) {
+                            const float kx = float(sw) / float(g_feed_rect.w);
+                            const float ky = float(sh) / float(g_feed_rect.h);
+                            const float ox = float(g_feed_rect.x) / float(g_feed_rect.w);
+                            const float oy = float(g_feed_rect.y) / float(g_feed_rect.h);
+                            float mnx = 1e9f, mny = 1e9f, mxx = -1e9f, mxy = -1e9f;
+                            for (mirror::FaceLandmark& L : r.landmarks) {
+                                L.x = L.x * kx - ox;
+                                L.y = L.y * ky - oy;
+                                L.z *= kx;   // MediaPipe's z is in x-units
+                                mnx = std::min(mnx, L.x); mxx = std::max(mxx, L.x);
+                                mny = std::min(mny, L.y); mxy = std::max(mxy, L.y);
+                            }
+                            if (!r.landmarks.empty()) {
+                                r.min_x = mnx; r.max_x = mxx; r.min_y = mny; r.max_y = mxy;
+                                r.centre_x = 0.5f * (mnx + mxx);
+                                r.centre_y = 0.5f * (mny + mxy);
+                            }
+                        }
+                    }
                     // Hysteresis both ways. A detection is not believed until
                     // it has repeated, and a gap is not believed until it has
                     // lasted: MediaPipe drops frames on a blink or a turn, and
@@ -2240,8 +2327,8 @@ int main(int argc, char** argv) {
                             // fit exists to average out landmark noise, and
                             // near-identical frames have the same noise in them.
                             if (g_collect_id && nowT - g_last_id_sample > 0.1) {
-                                g_fitter.offerIdentityFrame(g_face, g_track_w,
-                                                            g_track_h);
+                                g_fitter.offerIdentityFrame(g_face, g_face_w,
+                                                            g_face_h);
                                 g_last_id_sample = nowT;
                                 // Collection ends on the clock, not on a count:
                                 // the retained set is a ranking, so it keeps
@@ -2274,7 +2361,7 @@ int main(int argc, char** argv) {
                                 }
                                 if (windowDone && g_id_resolve_secs <= 0.f) g_collect_id = false;
                             }
-                            g_fitter.update(g_face, g_track_w, g_track_h);
+                            g_fitter.update(g_face, g_face_w, g_face_h);
                         }
                     }
                     // No `else` clearing the face: a miss is handled by the
@@ -2989,7 +3076,7 @@ int main(int argc, char** argv) {
             // has to keep arriving for the smoothing to walk the sound down.
             {
                 g_presence.update(g_face,
-                                  g_track_h > 0 ? (float)g_track_w / (float)g_track_h : 1.f,
+                                  g_face_h > 0 ? (float)g_face_w / (float)g_face_h : 1.f,
                                   (float)dt);
                 const mirror::PresenceSignals& ps = g_presence.signals();
 
@@ -3510,13 +3597,17 @@ int main(int argc, char** argv) {
                     (camSrc ? !g_track_rgb.empty() : mirror.pond().fitted())) {
                     float ps = 1.f, uo = 0.f, vo = 0.f;
                     PinTransform(ps, uo, vo);
-                    if (camSrc)
-                        g_fitter.sampleTexture(g_track_rgb.data(), g_track_w, g_track_h,
-                                               g_track_w, g_track_h, g_face_colors);
-                    else
+                    // The camera frame the fit was solved in is the feed's
+                    // rect (g_face_w x g_face_h), not the tracker's whole
+                    // frame: resampled here, on demand.
+                    static std::vector<unsigned char> feedRGB;
+                    if (camSrc && SourceRGB8(g_face_w, g_face_h, feedRGB))
+                        g_fitter.sampleTexture(feedRGB.data(), g_face_w, g_face_h,
+                                               g_face_w, g_face_h, g_face_colors);
+                    else if (!camSrc)
                         g_fitter.sampleTexture(mirror.lastImageRGB(),
                                                mirror.lowW(), mirror.lowH(),
-                                               g_track_w, g_track_h, g_face_colors,
+                                               g_face_w, g_face_h, g_face_colors,
                                                ps, uo, vo);
                     g_face_colors_fresh = true;
                     // The sitting's best sampling, for the capture (see
@@ -3529,7 +3620,7 @@ int main(int argc, char** argv) {
                         if (score > g_face_colors_best_score) {
                             g_face_colors_best_score = score;
                             g_face_colors_best = g_face_colors;
-                            g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo,
+                            g_fitter.projectNormalised(g_face_w, g_face_h, ps, uo, vo,
                                                        g_face_best_uv);
                             const std::vector<float>& img = mirror.lastImageRGB();
                             const int fw = mirror.lowW(), fh = mirror.lowH();
@@ -3878,7 +3969,7 @@ int main(int argc, char** argv) {
                     float ps = 1.f, uo = 0.f, vo = 0.f;
                     PinTransform(ps, uo, vo);
                     static std::vector<float> mesh_uv;
-                    g_fitter.projectNormalised(g_track_w, g_track_h, ps, uo, vo, mesh_uv);
+                    g_fitter.projectNormalised(g_face_w, g_face_h, ps, uo, vo, mesh_uv);
                     static bool tris_sent = false;
                     fitview.setMesh(mesh_uv, g_face_colors,
                                     tris_sent ? std::vector<int>()

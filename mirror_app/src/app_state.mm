@@ -127,6 +127,12 @@ bool  g_drive_roots  = true;    // fitted mesh -> the root scene's face masks
 // across the tracker's frame landed at 0.74 across the fit's. Hence a mask
 // visibly offset from the face in the overlay -- and, since the same numbers
 // build the training mask, a fit supervised on the wrong pixels.
+//
+// Since then the tracker looks at the *whole* sensor (its frame is the
+// sensor's shape) and main.mm maps its landmarks into the feed rect's
+// coordinates as they arrive -- the same invariant, kept by a transform
+// instead of by sharing the crop, so a face outside the feed's crop is
+// still found and placed past the picture's edge.
 int   g_track_w      = 480;
 int   g_track_h      = 270;
 // Long edge of that frame. MediaPipe wants more resolution than the fit grid --
