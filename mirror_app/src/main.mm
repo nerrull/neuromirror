@@ -2187,8 +2187,12 @@ int main(int argc, char** argv) {
             }
             if (g_feed_rect_valid) {
                 g_feed_rect = mirror::ComputeFeedRect(sw, sh, compW, compH, g_feed);
-                g_face_w = std::max(1, int(std::lround(double(g_track_w) * g_feed_rect.w / sw)));
-                g_face_h = std::max(1, int(std::lround(double(g_track_h) * g_feed_rect.h / sh)));
+                // The tracker's scale is set against the video frame, so
+                // the feed rect goes through that, not the sensor -- with an
+                // edge crop the two differ in width and the face would
+                // stretch by the difference.
+                g_face_w = std::max(1, int(std::lround(double(g_track_w) * g_feed_rect.w / vr.w)));
+                g_face_h = std::max(1, int(std::lround(double(g_track_h) * g_feed_rect.h / vr.h)));
             } else {
                 g_face_w = g_track_w; g_face_h = g_track_h;
             }
