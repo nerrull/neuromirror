@@ -528,6 +528,7 @@ static void applyPostOverride(RootScene& roots, const char* spec) {
         else if (k == "aoInt")      A.intensity = v;
         else if (k == "aoRad")      A.radius = v;
         else if (k == "aoSamples")  A.samples = (int)v;
+        else if (k == "aoDs")       A.downscale = (int)v;
         else if (k == "faceRough")  F.roughness = v;
         else if (k == "faceLight")  F.lightIntensity = v;
         else if (k == "faceLevel")  F.albedoLevel = v;
@@ -2326,7 +2327,10 @@ int clothshot(const char* prefix, int frames, int W, int H, float fps,
 // scene step -- which is the number to run at the installation's own size
 // (1080 1920) with SEQSHOT_BANK=1 and SEQSHOT_POST="bloom=0,dof=0" (the
 // show preset) before touching anything in the renderer for speed; and the
-// orbit's shimmer figure (below). Also
+// orbit's shimmer figure (below). SEQSHOT_PROFILE=1 on top of that renders
+// every frame and prints the same costs a second at a time *through* Grow,
+// stopping at its end -- the mid-growth drop lives in that ramp, not in the
+// lit hood. Also
 // reports how long the variations took to bake, which is the one-off stall
 // the plan accepts on the first Orbit.
 int seqshot(const char* prefix, int W, int H,
@@ -2552,6 +2556,11 @@ int seqshot(const char* prefix, int W, int H,
     int shimmerFrames = 0, shimmerPairs = 0;
     double orbitGpuMs = 0, orbitEncMs = 0, orbitAdvMs = 0, lastAdvanceMs = 0;
     std::vector<std::pair<std::string, double>> orbitPass;
+    // SEQSHOT_PROFILE=1 (see the loop): a line a second through the stages.
+    const bool profile = getenv("SEQSHOT_PROFILE") && atoi(getenv("SEQSHOT_PROFILE")) != 0;
+    int profN = 0;
+    double profGpu = 0, profEnc = 0, profAdv = 0, profStep = 0, profGpuMax = 0, profAdvMax = 0;
+    std::vector<std::pair<std::string, double>> profPass;
     double shimmerDiff = 0.0, shimmerLuma = 0.0;
     std::vector<float> shimmerPrev, shimmerPrev2;
     bool turnLitBad = false;   // any structure lit while Turn is running (should never be)
@@ -2759,6 +2768,7 @@ int seqshot(const char* prefix, int W, int H,
                 }
                 if (realtime) break;
             }
+            if (profile && last == RootSequence::Stage::Grow) break;   // Grow was the stretch under test
             if (seq.stage() == RootSequence::Stage::Orbit) {
                 printf("seqshot: no structure lit during turn: %s\n", turnLitBad ? "FAIL" : "OK");
                 if (turnLitBad) return 1;
@@ -2769,6 +2779,45 @@ int seqshot(const char* prefix, int W, int H,
         }
         if (seq.stage() == RootSequence::Stage::Turn) {
             for (const auto& n : roots.neighbours) turnLitBad = turnLitBad || n.lit;
+        }
+        // SEQSHOT_PROFILE=1: the frame's cost *through* Grow, not only once
+        // the hood stands -- every frame rendered, a line a second with the
+        // CPU of the scene step, the CPU of the encode, the GPU of the
+        // frame, and the two dearest passes. The framerate drop the show
+        // sees mid-growth lives in one of those columns.
+        if (profile && seq.stage() != RootSequence::Stage::Face) {
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [ctx.queue() commandBuffer];
+                const auto c0 = std::chrono::steady_clock::now();
+                roots.renderer().profilePasses = true;
+                roots.render(cb);
+                const auto c1 = std::chrono::steady_clock::now();
+                [cb commit]; [cb waitUntilCompleted];
+                roots.renderer().profilePasses = false;
+                const double gpu = (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
+                const double enc = std::chrono::duration<double, std::milli>(c1 - c0).count();
+                profGpu += gpu; profEnc += enc; profAdv += lastAdvanceMs; profStep += stepSecs * 1e3;
+                profGpuMax = std::max(profGpuMax, gpu);
+                profAdvMax = std::max(profAdvMax, lastAdvanceMs);
+                for (const auto& pt : roots.renderer().resolvePassTimes()) {
+                    auto it = std::find_if(profPass.begin(), profPass.end(),
+                                           [&](const auto& q) { return q.first == pt.name; });
+                    if (it == profPass.end()) profPass.push_back({pt.name, pt.ms});
+                    else it->second += pt.ms;
+                }
+                if (++profN == 60) {
+                    std::sort(profPass.begin(), profPass.end(),
+                              [](const auto& a, const auto& b) { return a.second > b.second; });
+                    printf("seqshot: profile %5.1fs %-5s step %5.2f  adv %5.2f (max %5.2f)  enc %5.2f  gpu %5.2f (max %5.2f) ms",
+                           clock, RootSequence::stageName(seq.stage()), profStep / profN,
+                           profAdv / profN, profAdvMax, profEnc / profN, profGpu / profN, profGpuMax);
+                    for (size_t i = 0; i < profPass.size() && i < 3; ++i)
+                        printf("  %s %.2f", profPass[i].first.c_str(), profPass[i].second / profN);
+                    printf("\n");
+                    profN = 0; profGpu = profEnc = profAdv = profStep = profGpuMax = profAdvMax = 0;
+                    profPass.clear();
+                }
+            }
         }
         // Quarter-way stills through the chain, with where the tip is on
         // screen against the anchor: growing *toward* the lens means the

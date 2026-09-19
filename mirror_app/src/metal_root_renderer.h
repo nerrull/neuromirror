@@ -301,7 +301,7 @@ public:
         float intensity = 2.0f;
         float bias      = 0.04f;
         int   samples   = 10;
-        int   downscale = 2;       // AO buffer is this much smaller than the scene
+        int   downscale = 2;       // AO buffer is this much smaller than the OUTPUT (not the supersampled scene)
     };
     // The final composite: everything between the fog image and the drawable.
     struct PostParams {

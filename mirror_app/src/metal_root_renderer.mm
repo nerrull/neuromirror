@@ -247,14 +247,16 @@ void MetalRootRenderer::buildTargets() {
     fogColorTex_ = make2D(kColorFmt, sw_, sh_, MTLStorageModeShared);
     postTex_     = make2D(kColorFmt, w_,  h_,  MTLStorageModeShared);
 
+    // The AO and fog buffers are sized from the OUTPUT resolution, not the
+    // supersampled scene resolution: neither integral's quality has anything
+    // to do with how finely the geometry is sampled, and tying them to the
+    // scene grid silently multiplied their cost by the supersample squared --
+    // AO at "downscale 1" under supersample 3 was 18.7 Mpx at the show's
+    // size, 30 ms a frame at the peak of Grow, and the whole framerate drop.
     const int ds = std::max(1, std::min(ao.downscale, 4));
-    aoTex_     = make2D(kAOFmt, sw_ / ds, sh_ / ds, MTLStorageModePrivate);
-    aoBlurTex_ = make2D(kAOFmt, sw_ / ds, sh_ / ds, MTLStorageModePrivate);
+    aoTex_     = make2D(kAOFmt, w_ / ds, h_ / ds, MTLStorageModePrivate);
+    aoBlurTex_ = make2D(kAOFmt, w_ / ds, h_ / ds, MTLStorageModePrivate);
 
-    // Sized from the OUTPUT resolution, not the supersampled scene resolution:
-    // the integral's quality has nothing to do with how finely the geometry is
-    // sampled, and tying it to the scene grid would silently quadruple its cost
-    // the moment supersampling was turned on.
     const int fds = std::max(1, std::min(fog.downscale, 4));
     fogVolTex_ = make2D(kColorFmt, w_ / fds, h_ / fds, MTLStorageModePrivate);
 
@@ -1269,7 +1271,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
 
     [ge endEncoding];
 
-    // --- Pass 2: ambient occlusion (depth only, half resolution) ---
+    // --- Pass 2: ambient occlusion (depth only, at output resolution / downscale) ---
     // Runs before the fog because the fog pass is what applies it, and it reads
     // the geometry pass's depth, which is finished by now.
     const bool aoOn = ao.enabled && aoPipe_ && aoBlurPipe_;
@@ -1278,7 +1280,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         RootAOU au = {};
         au.cam = cam;
         au.eye = gu.eye;
-        au.res = (simd_float2){(float)(sw_ / ds), (float)(sh_ / ds)};
+        au.res = (simd_float2){(float)(w_ / ds), (float)(h_ / ds)};
         au.fov = fov; au.nearZ = nearZ; au.farZ = farZ;
         au.radius = ao.radius; au.intensity = ao.intensity; au.bias = ao.bias;
         au.samples = std::max(1, ao.samples);
