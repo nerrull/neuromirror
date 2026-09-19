@@ -139,6 +139,18 @@ static mirror::SrcRect g_feed_rect;
 static bool g_feed_rect_valid = false;
 static int g_face_w = 480, g_face_h = 270;
 
+// Feed-normalised coordinates to the screen's: where a point of the feed's
+// crop sits across the *sensor*, normalised, which is where it lands across
+// the screen -- the face's place in the room mapped 16:9 onto 9:16, whatever
+// the feed crop shows. Identity until a source is up.
+static void ScreenFromFeed(float& u, float& v) {
+    int sw = 0, sh = 0;
+    if (!g_feed_rect_valid || !SourceSize(sw, sh) || g_feed_rect.w <= 0 || g_feed_rect.h <= 0)
+        return;
+    u = (u * g_feed_rect.w + g_feed_rect.x) / float(sw);
+    v = (v * g_feed_rect.h + g_feed_rect.y) / float(sh);
+}
+
 static float CamMaskAt(float u, float v) {
     if (!g_cam_mask_on) return 1.f;
     const float f = std::max(g_cam_feather, 1e-4f);
@@ -394,12 +406,18 @@ bool HaveCrop() {
 }
 
 // Where the crop lands in the frame, normalised. Everything but the centred
-// mode leaves the subject where the camera found it.
+// mode puts the subject where they are across the sensor (ScreenFromFeed).
 static float CropCX() {
-    return g_head_mode == (int)HeadMode::Centred ? 0.5f : g_head_cx;
+    if (g_head_mode == (int)HeadMode::Centred) return 0.5f;
+    float u = g_head_cx, v = g_head_cy;
+    ScreenFromFeed(u, v);
+    return u;
 }
 static float CropCY() {
-    return g_head_mode == (int)HeadMode::Centred ? 0.5f : g_head_cy;
+    if (g_head_mode == (int)HeadMode::Centred) return 0.5f;
+    float u = g_head_cx, v = g_head_cy;
+    ScreenFromFeed(u, v);
+    return v;
 }
 
 // Which pixels of the fit grid the live target supervises.
@@ -608,25 +626,31 @@ static bool HeadPlacement(float& s, float& dcx, float& dcy) {
     const bool stabilised = (g_head_mode == (int)HeadMode::Stabilised);
     const bool resize = stabilised ? std::fabs(g_stab_size_mul - 1.f) > 1e-3f
                                    : g_face_size_on;
-    if (!centred && !resize) return false;
 
     if (resize)
         s = stabilised ? std::min(6.f, std::max(0.1f, g_stab_size_mul))
                        : std::min(6.f, std::max(0.1f, FaceSizeTarget() / std::max(g_head_hy, 1e-3f)));
 
     if (!centred) {
-        // Stay where they are -- but a scaled crop can run off the edge, and a
-        // subject half outside the frame is half unsupervised. Clamped by the
-        // scaled half-extent, so the box slides inward only as far as it must.
-        // A subject too big to fit is centred instead, which is the only
-        // placement that keeps as much of them as possible.
+        // Where they are across the sensor, mapped onto the frame
+        // (ScreenFromFeed): the head box is in the feed crop's coordinates,
+        // where its pixels are, and the pixels are moved from there to here.
+        // With the feed at zoom 1 the two coincide in x and the move is
+        // nothing; with the full-width feed the band's height is spread
+        // over the frame's.
+        float mx = g_head_cx, my = g_head_cy;
+        ScreenFromFeed(mx, my);
+        // A scaled crop can run off the edge, and a subject half outside the
+        // frame is half unsupervised. Clamped by the scaled half-extent, so
+        // the box slides inward only as far as it must. A subject too big to
+        // fit is centred instead, which is the only placement that keeps as
+        // much of them as possible.
         const float hx = g_head_hx * s, hy = g_head_hy * s;
-        dcx = (hx >= 0.5f) ? 0.5f
-                           : std::min(std::max(g_head_cx, hx), 1.f - hx);
-        dcy = (hy >= 0.5f) ? 0.5f
-                           : std::min(std::max(g_head_cy, hy), 1.f - hy);
+        dcx = (hx >= 0.5f) ? 0.5f : std::min(std::max(mx, hx), 1.f - hx);
+        dcy = (hy >= 0.5f) ? 0.5f : std::min(std::max(my, hy), 1.f - hy);
         // No scale change and no move: nothing worth a resample.
-        if (s == 1.f) return false;
+        if (s == 1.f && std::fabs(dcx - g_head_cx) < 1e-4f && std::fabs(dcy - g_head_cy) < 1e-4f)
+            return false;
     }
     return true;
 }
@@ -3528,8 +3552,12 @@ int main(int argc, char** argv) {
             // where these are consumed. See RootScene::setAmbientLevel/
             // setTrackedPosition.
             roots.setAmbientLevel(g_mic.level());
-            roots.setTrackedPosition(g_face.centre_x, g_face.centre_y,
-                                     g_track_on && g_face.valid);
+            {
+                // Where the visitor is across the sensor, as the screen sees it.
+                float tx = g_face.centre_x, ty = g_face.centre_y;
+                ScreenFromFeed(tx, ty);
+                roots.setTrackedPosition(tx, ty, g_track_on && g_face.valid);
+            }
 
             g_prof.mark("show");
             id<MTLTexture> sceneTex = nil;
