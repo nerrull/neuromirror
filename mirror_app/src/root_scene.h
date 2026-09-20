@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <memory>
 #include <string>
 #include <map>
@@ -495,19 +496,20 @@ public:
     void setPondTexture(id<MTLTexture> pond) { pondTex_ = pond; }
 
     // --- the harp's strings ----------------------------------------------
-    // One hair-thin vertical line per string of the resolved window's strum
-    // (main.mm), pinned to the top and bottom of the screen, at the anchor
-    // circle around the anchor mask (radius `radius` x the mask's half-width,
-    // running `height` x its half-height above and below its centre), at
-    // azimuth `az[i]` (-1..1 of the yaw range that plucks it, + = the mask's
-    // right) over an arc of `arcDeg` about the mask's facing. `widthPx[i]` is
-    // its half-width in output pixels, `wobPx[i]` the belly of its standing
-    // wave this frame, pixels, signed. It inverts what is behind it
-    // (root_wire.metal). n = 0 clears them. Packed for the renderer in
-    // advance(), like the cloth.
+    // One hair-thin line per string of the resolved window's strum
+    // (main.mm): a meridian of a spheroid around the anchor mask -- `radius`
+    // x the nose's stand-off at the mask's level, meeting at a point
+    // `height` x its half-height above its centre and another below -- at
+    // azimuth `az[i]` (-1..1 of the yaw range that plucks it, + = screen
+    // right, where the nose turns) over an arc of `arcDeg` about the mask's
+    // facing. `widthPx[i]` is its half-width in output pixels; `ampPx[i]`
+    // and `phase[i]` (cycles) its wave this frame, `modes` wavelengths along
+    // the string. It inverts what is behind it (root_wire.metal). n = 0
+    // clears them. Packed for the renderer in advance(), like the cloth.
     static constexpr int kMaxHarpWires = 8;
-    void setHarpWires(const float* az, const float* widthPx, const float* wobPx, int n,
-                      float arcDeg, float radius, float height);
+    void setHarpWires(const float* az, const float* widthPx, const float* ampPx,
+                      const float* phase, int n, float arcDeg, float radius,
+                      float height, float modes);
 
     // Begin the hold->release->fall timeline from t=0, with a fresh,
     // fully-pinned flat sheet -- the RootScene analogue of
@@ -713,9 +715,22 @@ private:
     void updateClothClearance();
     void packClothMesh();            // cloth_ -> interleaved buffer -> rr_->uploadClothMesh
     void advanceCloth(double dt);
+    // The solve runs on a worker thread, one frame behind: advanceCloth()
+    // prepares this frame's collider and forces, advance()'s tail packs the
+    // *previous* step's result for the renderer and only then launches this
+    // one, which the next frame joins. Measured at ~9 ms a frame on the
+    // show's M4 (72-wide sheet, 24 iterations x 2 substeps) -- more than
+    // half the frame budget, and all of it off the render thread now. Every
+    // touch of cloth_ / clothField_ from the main thread goes through
+    // joinClothStep() first; nothing else may read them while a job is out.
+    void joinClothStep();            // wait for the job out, if any; then normals + clearance
+    void launchClothStep();          // start the step advanceCloth() armed, if any
 
     Cloth     cloth_;
     MaskField clothField_;
+    std::future<void> clothJob_;     // the step in flight, or invalid
+    bool   clothStepArmed_ = false;  // advanceCloth() wants a step launched this frame
+    double clothStepDt_ = 0.0;       // ...over this much time
     id<MTLTexture> pondTex_ = nil;
     double clothT_ = 0.0;
     bool   clothActive_ = false;     // false until restartCloth() is called
@@ -780,9 +795,11 @@ private:
     // See setHarpWires / packHarpWires.
     float harpAz_[kMaxHarpWires] = {};
     float harpWidth_[kMaxHarpWires] = {};
-    float harpWob_[kMaxHarpWires] = {};
-    float harpArcDeg_ = 70.f, harpRadius_ = 1.25f, harpHeight_ = 4.f;
+    float harpAmp_[kMaxHarpWires] = {};
+    float harpPhase_[kMaxHarpWires] = {};
+    float harpArcDeg_ = 70.f, harpRadius_ = 1.25f, harpHeight_ = 4.f, harpModes_ = 2.f;
     int   harpWireCount_ = 0;
+    float harpFront_ = -1.f;   // the nose's stand-off the strings were placed on, < 0 = not yet
     void  packHarpWires();
 
     std::unique_ptr<MetalRootRenderer> rr_;

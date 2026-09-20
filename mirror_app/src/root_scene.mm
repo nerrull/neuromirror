@@ -1395,6 +1395,8 @@ void RootScene::rebuildDebugMarkers() {
 // ---------------------------------------------------------------------------
 
 void RootScene::skipCloth() {
+    joinClothStep();
+    clothStepArmed_ = false;
     // Parked past the end of the timeline rather than at zero, so clothDone()
     // agrees with clothActive_ -- the phase gate in main.mm reads clothDone(),
     // and a scene that never had a film has certainly finished playing one.
@@ -1411,6 +1413,8 @@ void RootScene::skipCloth() {
 }
 
 void RootScene::restartCloth() {
+    joinClothStep();
+    clothStepArmed_ = false;
     clothT_ = 0.0;
     clothActive_ = true;
     clothClearanceVal_ = -1e9f;
@@ -1847,6 +1851,11 @@ void RootScene::packClothMesh() {
 // Transition entry onward instead of handing off to a separate scene.
 void RootScene::advanceCloth(double dt) {
     if (!clothActive_) return;
+    // The step launched last frame lands here (with its normals and
+    // clearance -- see joinClothStep), before anything below touches the
+    // sheet or the collider it is reading.
+    joinClothStep();
+    clothStepArmed_ = false;
     // The film is gone once the fall is over, and "gone" has to mean not drawn.
     // Nothing else retires it: RootScene keeps rendering straight through into
     // the Roots phase now (main.mm no longer swaps scenes here), so a sheet
@@ -1946,12 +1955,31 @@ void RootScene::advanceCloth(double dt) {
     if (sideRamp > 0.f) grav.x += sideForceMag * sideRamp * sizeK;
     cloth_.gravity = grav;
 
-    const int ss = std::max(1, clothSubsteps);
-    for (int i = 0; i < ss; ++i) cloth_.step(float(dt) / float(ss));
+    // Not stepped here: advance()'s tail packs what the last step left and
+    // then launches this one (launchClothStep), so the renderer never reads
+    // a sheet mid-solve and the solve never holds up the frame.
+    clothStepArmed_ = true;
+    clothStepDt_ = dt;
+}
+
+void RootScene::joinClothStep() {
+    if (!clothJob_.valid()) return;
+    clothJob_.wait();
+    clothJob_ = std::future<void>();
+    // What the step left, finished off on this thread: the normals the pack
+    // shades with and the clearance the phase gate reads.
     cloth_.computeNormals();
     updateClothClearance();
-    // No pack here: advance() does it once the camera has stopped moving for
-    // this frame, so the sheet is always solved against the camera that draws it.
+}
+
+void RootScene::launchClothStep() {
+    if (!clothStepArmed_ || !clothActive_) return;
+    clothStepArmed_ = false;
+    const int ss = std::max(1, clothSubsteps);
+    const float sub = float(clothStepDt_) / float(ss);
+    clothJob_ = std::async(std::launch::async, [this, ss, sub] {
+        for (int i = 0; i < ss; ++i) cloth_.step(sub);
+    });
 }
 
 void RootScene::faceNormalisation(const std::vector<float>& verts, float centre[3],
@@ -2583,27 +2611,34 @@ void RootScene::advance(double dt) {
     // configuration, building before the ease put the film 0.34 mean absolute
     // away from the pond it is supposed to be identical to; building after it
     // brings that back to 0.006.
-    if (clothActive_) { ensureClothSheet(); packClothMesh(); }
+    //
+    // Joined first: a held frame (dt 0) skips advanceCloth() and its join,
+    // and the step launched the frame before may still be writing.
+    if (clothActive_) { joinClothStep(); ensureClothSheet(); packClothMesh(); launchClothStep(); }
     packHarpWires();
 }
 
-void RootScene::setHarpWires(const float* az, const float* widthPx, const float* wobPx, int n,
-                             float arcDeg, float radius, float height) {
+void RootScene::setHarpWires(const float* az, const float* widthPx, const float* ampPx,
+                             const float* phase, int n, float arcDeg, float radius,
+                             float height, float modes) {
     harpWireCount_ = std::clamp(n, 0, kMaxHarpWires);
     for (int i = 0; i < harpWireCount_; ++i) {
-        harpAz_[i] = az[i]; harpWidth_[i] = widthPx[i]; harpWob_[i] = wobPx[i];
+        harpAz_[i] = az[i]; harpWidth_[i] = widthPx[i];
+        harpAmp_[i] = ampPx[i]; harpPhase_[i] = phase[i];
     }
-    harpArcDeg_ = arcDeg; harpRadius_ = radius; harpHeight_ = height;
+    harpArcDeg_ = arcDeg; harpRadius_ = radius; harpHeight_ = height; harpModes_ = modes;
 }
 
-// The strings' geometry: each stands on the circle around the anchor mask
-// (refreshClothAnchor) at its azimuth about the mask's facing, from below
-// the mask to above it along the mask's up; the vertex shader places it on
-// screen from its two ends -- kWireSegs quads up the string so the wave can
-// bend it, MetalRootRenderer::kWireFloats a vertex.
+// The strings' geometry: each is a meridian of a spheroid around the anchor
+// mask (refreshClothAnchor) -- widest at the mask's level, on the circle at
+// its azimuth about the mask's facing, and closing to a point above the
+// mask along its up and another below -- so the set reads as a cage
+// standing in the room rather than a row of lines. kWireSegs segments up
+// the string, each its two world ends for the vertex shader to place on
+// screen, MetalRootRenderer::kWireFloats a vertex.
 void RootScene::packHarpWires() {
     if (!rr_) return;
-    constexpr int kWireSegs = 24;
+    constexpr int kWireSegs = 32;
     std::vector<float> data;
     if (harpWireCount_ > 0) {
         refreshClothAnchor();
@@ -2613,39 +2648,52 @@ void RootScene::packHarpWires() {
         // scale; see rasteriseClothField for the same placement) -- so at 1
         // the front string grazes the nose and above it stands clear.
         // Against the mask's width it was either behind the nose or out of
-        // the Face stage's frame, which sits close.
-        measureClothFaceDepth();
-        const float front = std::max(-clothAnchorRD_ * faceRecess
-                                     + clothFaceZMax_ * faceScale * std::max(0.05f, clothAnchorFU_),
-                                     0.25f * clothAnchorRW_);
-        const float r = harpRadius_ * front;
-        const simd_float3 up = clothAnchorB_ * (harpHeight_ * clothAnchorRH_);
+        // the Face stage's frame, which sits close. Measured once, when the
+        // strings first show: the mesh is the live, posed face, and its
+        // forward extent moves with every nod and turn -- measured every
+        // frame, the strings moved with the head.
+        if (harpFront_ < 0.f) {
+            measureClothFaceDepth();
+            harpFront_ = std::max(-clothAnchorRD_ * faceRecess
+                                  + clothFaceZMax_ * faceScale * std::max(0.05f, clothAnchorFU_),
+                                  0.25f * clothAnchorRW_);
+        }
+        const float r = harpRadius_ * harpFront_;
+        const float hh = harpHeight_ * clothAnchorRH_;
         if (getenv("WIRES_DEBUG"))
             fprintf(stderr, "wires: front %.2f rW %.2f rH %.2f rD %.2f r %.2f\n",
-                    front, clothAnchorRW_, clothAnchorRH_, clothAnchorRD_, r);
+                    harpFront_, clothAnchorRW_, clothAnchorRH_, clothAnchorRD_, r);
         data.reserve(size_t(harpWireCount_) * kWireSegs * 6 * MetalRootRenderer::kWireFloats);
         for (int i = 0; i < harpWireCount_; ++i) {
             if (harpWidth_[i] <= 0.f) continue;
-            // The string's azimuth: 0 straight in front of the face, + to
-            // the mask's right (the side the head turns toward to pluck it
-            // -- the visitor faces the mask, so their right is its left on
-            // screen and the sign is flipped into the mask's frame).
+            // The string's azimuth: 0 straight in front of the face, + along
+            // the mask's tangent -- screen right from the camera the Face
+            // stage stands down the mask's normal, the side the nose turns
+            // to when the head's yaw is +.
             const float th = harpAz_[i] * 0.5f * harpArcDeg_ * (float)M_PI / 180.f;
-            const simd_float3 p = c + clothAnchorN_ * (r * std::cos(th))
-                                    - clothAnchorT_ * (r * std::sin(th));
-            const simd_float3 a = p - up, b = p + up;
-            auto put = [&](float side, float t) {
-                data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t,
-                                         harpWidth_[i], harpWob_[i]});
+            const simd_float3 radial = clothAnchorN_ * std::cos(th) + clothAnchorT_ * std::sin(th);
+            // u runs 0 (the point below) to 1 (the point above); the
+            // meridian's latitude is (u - 1/2) pi.
+            auto at = [&](float u) {
+                const float lat = (u - 0.5f) * (float)M_PI;
+                return c + radial * (r * std::cos(lat)) + clothAnchorB_ * (hh * std::sin(lat));
             };
             for (int s = 0; s < kWireSegs; ++s) {
-                const float t0 = (float)s / kWireSegs, t1 = (float)(s + 1) / kWireSegs;
-                put(-1.f, t0); put(1.f, t0); put(1.f, t1);
-                put(-1.f, t0); put(1.f, t1); put(-1.f, t1);
+                const float u0 = (float)s / kWireSegs, u1 = (float)(s + 1) / kWireSegs;
+                const simd_float3 a = at(u0), b = at(u1);
+                auto put = [&](float side, float t) {
+                    data.insert(data.end(), {a.x, a.y, a.z, b.x, b.y, b.z, side, t,
+                                             u0 + (u1 - u0) * t, harpWidth_[i],
+                                             harpAmp_[i], harpPhase_[i]});
+                };
+                put(-1.f, 0.f); put(1.f, 0.f); put(1.f, 1.f);
+                put(-1.f, 0.f); put(1.f, 1.f); put(-1.f, 1.f);
             }
         }
+    } else {
+        harpFront_ = -1.f;
     }
-    rr_->uploadWires(data);
+    rr_->uploadWires(data, harpModes_);
 }
 
 // Resolve the key's aim. See root_scene.h's LightMode/LightFocus for what each

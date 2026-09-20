@@ -68,6 +68,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Headless check of the MLX→Metal texture path (no window): render a few mirror
@@ -1784,6 +1785,7 @@ int main(int argc, char** argv) {
     constexpr int kStrumScaleCount = sizeof(kStrumScales) / sizeof(kStrumScales[0]);
     constexpr int kMaxStrings = RootScene::kMaxHarpWires;
     int strumOrder[kMaxStrings] = {0, 1, 2, 3, 4, 5, 6, 7};
+    bool strumShuffleWas = false;   // g_strum_shuffle as last dealt, so a flip re-deals
     auto strumScale = [&]() -> const StrumScale& {
         return kStrumScales[std::clamp(g_strum_scale, 0, kStrumScaleCount - 1)];
     };
@@ -1796,8 +1798,9 @@ int main(int argc, char** argv) {
     };
     // The strings drawn (RootScene::setHarpWires): one per string,
     // g_strum_wire_px wide at rest, and on a pluck widening by
-    // g_strum_wire_pluck_width and vibrating g_strum_wire_vib_px either
-    // way, decaying over g_strum_wire_decay_s, at the note's frequency over
+    // g_strum_wire_pluck_width and carrying a wave g_strum_wire_vib_px
+    // high, g_strum_wire_modes wavelengths along the string, decaying over
+    // g_strum_wire_decay_s and running at the note's frequency over
     // g_strum_wire_pulse_div -- a slow wave of the pitch itself.
     float strumWireEnv[kMaxStrings] = {};    // the pluck's flare, 1 -> 0
     float strumWireHz[kMaxStrings] = {};     // its wave's rate
@@ -1910,70 +1913,125 @@ int main(int argc, char** argv) {
         mirror::RootStructure plant;   // valid() false when there is none
     };
     std::unordered_map<std::string, BankEntry> bankCache;
-    // Deal the bank onto the masks: the most recent captures, newest first,
-    // as many as the chain and the capped hood can wear, minus `excludeId`
-    // (the sitting now on mask 0, once it has been saved). RootScene does
-    // the dealing; this only decides which files to open. The same deal
-    // hands RootScene the plants (structure k's is the plant of the capture
-    // on its mask 0, per RootScene::structureFaces) and starts the bank's
-    // face playback, both behind their show/roots toggles.
+    // The bank for this sitting: the N-1 most recent captures, newest first,
+    // for the chain, then kBankSample more drawn at random from everything
+    // else -- minus `excludeId` (the sitting now on mask 0, once it has
+    // been saved). A fresh sample every visitor. RootScene does the
+    // dealing (the chain wears the recent ones, the other structures and
+    // the pluck flash's swaps draw on the sample); this only decides which
+    // files to open. The same deal hands RootScene the plants (structure
+    // k's is the plant of the capture on its mask 0, per
+    // RootScene::structureFaces) and starts the bank's face playback, both
+    // behind their show/roots toggles.
+    static constexpr int kBankSample = 64;
+    // Captures that would not read, so the idle-time warm below does not
+    // go back to the same half-written directory every frame.
+    std::unordered_set<std::string> bankUnreadable;
+    // One capture into the cache, off disk, or from the cache if it is
+    // already there. Null when the file would not read -- skipped, not
+    // fatal: the bank is a directory anyone can leave a half-written entry
+    // in.
+    auto cacheBankEntry = [&](const std::string& id) -> const BankEntry* {
+        auto c = bankCache.find(id);
+        if (c != bankCache.end()) return &c->second;
+        if (bankUnreadable.count(id)) return nullptr;
+        BankEntry e;
+        std::string err;
+        if (!mirror::LoadCapture(id, e.cap, err)) {
+            fprintf(stderr, "face bank: %s\n", err.c_str());
+            bankUnreadable.insert(id);
+            return nullptr;
+        }
+        e.cap.film.clear();
+        e.cap.film.shrink_to_fit();
+        e.cap.filmW = e.cap.filmH = 0;
+        // A capture saved before the basis punched its eye and mouth
+        // holes carries the closed skin; same vertices, so the
+        // basis's own triangles apply.
+        if (g_fitter.valid() && e.cap.verts.size() == g_fitter.basis().neutral().size())
+            e.cap.tris = g_fitter.basis().triangles();
+        // Square of its sitter's head pose (see autoCaptureAtCut):
+        // captures from before that was saved out carry 10-40
+        // degrees of it, and a face that tilted on its mask read as
+        // askew from the nest. A no-op on one already square.
+        if (g_fitter.valid()) {
+            const float deg = mirror::SquareCaptureToNeutral(e.cap, g_fitter.basis().neutral());
+            if (deg > 2.f) printf("face bank: %s squared by %.0f deg\n", id.c_str(), deg);
+        }
+        // Absent is the ordinary case for both (err left empty);
+        // only a file that is there and unreadable is worth a line.
+        if (!mirror::LoadFaceTrack(id, e.track, err) && !err.empty())
+            fprintf(stderr, "face bank: %s\n", err.c_str());
+        // The plant is only ever stood up as a hood structure.
+        if (g_root_seq.hood_enabled
+            && !mirror::LoadRootStructure(id, e.plant, err) && !err.empty())
+            fprintf(stderr, "face bank: %s\n", err.c_str());
+        return &bankCache.emplace(id, std::move(e)).first->second;
+    };
+    // The cache filled ahead of the deal, a couple of captures a frame
+    // through the idle wait, so the Transition edge finds everything it
+    // samples already in memory. Left to the deal alone, each sitting's
+    // fresh random sample went to disk for whatever it had not seen yet --
+    // 64 files, a few ms each -- on the one frame the film must not hitch.
+    // Only once the fitter is up: the entries are squared against its
+    // basis as they load, and a capture cached before that would stay
+    // unsquared for the life of the process.
+    size_t bankWarmNext = 0;
+    auto warmBankCache = [&]() {
+        if (!g_fitter.valid()) return;
+        for (int n = 0; n < 2 && bankWarmNext < g_capture_ids.size(); ++bankWarmNext) {
+            const std::string& id = g_capture_ids[bankWarmNext];
+            if (bankCache.count(id) || bankUnreadable.count(id)) continue;
+            cacheBankEntry(id);
+            ++n;
+        }
+    };
     auto dealBankFaces = [&](const std::string& excludeId) {
         if (!roots.valid()) return;
         const int N = std::max(1, roots.simParams().N);
-        const int hood = std::max(g_root_seq.reveal_max_structures, g_root_seq.reveal_structures);
-        const int want = (N - 1) + std::max(0, hood) * N;
+        const int want = N - 1;
         std::vector<mirror::FaceCapture> bank;
         std::vector<mirror::FaceTrack> tracks;
         std::vector<const mirror::RootStructure*> plants;   // parallel to bank
+        // Open (or take from the cache) one capture and append it; false
+        // when the file would not read.
+        auto load = [&](const std::string& id) -> bool {
+            const BankEntry* e = cacheBankEntry(id);
+            if (!e) return false;
+            bank.push_back(e->cap);
+            tracks.push_back(g_root_seq.bank_replay ? e->track : mirror::FaceTrack{});
+            plants.push_back(&e->plant);
+            return true;
+        };
         // g_capture_ids is oldest first (ListCaptures); the bank is newest first.
-        for (auto it = g_capture_ids.rbegin();
-             it != g_capture_ids.rend() && (int)bank.size() < want; ++it) {
+        std::vector<std::string> rest;   // what the deal did not take
+        for (auto it = g_capture_ids.rbegin(); it != g_capture_ids.rend(); ++it) {
             if (*it == excludeId) continue;
-            auto c = bankCache.find(*it);
-            if (c == bankCache.end()) {
-                BankEntry e;
-                std::string err;
-                if (!mirror::LoadCapture(*it, e.cap, err)) {
-                    // An unreadable capture is skipped, not fatal: the bank is
-                    // a directory anyone can leave a half-written entry in.
-                    fprintf(stderr, "face bank: %s\n", err.c_str());
-                    continue;
-                }
-                e.cap.film.clear();
-                e.cap.film.shrink_to_fit();
-                e.cap.filmW = e.cap.filmH = 0;
-                // A capture saved before the basis punched its eye and mouth
-                // holes carries the closed skin; same vertices, so the
-                // basis's own triangles apply.
-                if (g_fitter.valid() && e.cap.verts.size() == g_fitter.basis().neutral().size())
-                    e.cap.tris = g_fitter.basis().triangles();
-                // Square of its sitter's head pose (see autoCaptureAtCut):
-                // captures from before that was saved out carry 10-40
-                // degrees of it, and a face that tilted on its mask read as
-                // askew from the nest. A no-op on one already square.
-                if (g_fitter.valid()) {
-                    const float deg = mirror::SquareCaptureToNeutral(e.cap, g_fitter.basis().neutral());
-                    if (deg > 2.f) printf("face bank: %s squared by %.0f deg\n", it->c_str(), deg);
-                }
-                // Absent is the ordinary case for both (err left empty);
-                // only a file that is there and unreadable is worth a line.
-                if (!mirror::LoadFaceTrack(*it, e.track, err) && !err.empty())
-                    fprintf(stderr, "face bank: %s\n", err.c_str());
-                if (!mirror::LoadRootStructure(*it, e.plant, err) && !err.empty())
-                    fprintf(stderr, "face bank: %s\n", err.c_str());
-                c = bankCache.emplace(*it, std::move(e)).first;
-            }
-            bank.push_back(c->second.cap);
-            tracks.push_back(g_root_seq.bank_replay ? c->second.track : mirror::FaceTrack{});
-            plants.push_back(&c->second.plant);
+            if ((int)bank.size() < want) load(*it);
+            else rest.push_back(*it);
         }
-        roots.assignBankFaces(bank, g_root_seq.reveal_max_structures,
-                              g_root_seq.reveal_min_structures, g_root_seq.reveal_structures);
+        const size_t recent = bank.size();
+        // The sample, from what is left. Shuffled rather than sampled so a
+        // capture that will not read is simply passed over for the next.
+        {
+            static std::mt19937 rng{std::random_device{}()};
+            std::shuffle(rest.begin(), rest.end(), rng);
+            for (const auto& id : rest) {
+                if ((int)(bank.size() - recent) >= kBankSample) break;
+                load(id);
+            }
+        }
+        // Without the hood (the show's setting) no structure is dealt
+        // anything: the sample is there for the swaps alone.
+        const bool hood = g_root_seq.hood_enabled;
+        roots.assignBankFaces(bank, hood ? g_root_seq.reveal_max_structures : 0,
+                              hood ? g_root_seq.reveal_min_structures : 0,
+                              hood ? g_root_seq.reveal_structures : 0);
         // Structure k's plant: the one saved with the capture its mask 0
         // wears (structureFaces()[k].captureIdx[0]); an empty slot leaves
         // RootScene to its seeded growth for that structure.
         std::vector<mirror::RootStructure> dealt;
-        if (g_root_seq.bank_plants) {
+        if (hood && g_root_seq.bank_plants) {
             const auto& sf = roots.structureFaces();
             dealt.resize(sf.size());
             for (size_t k = 0; k < sf.size(); ++k) {
@@ -2000,8 +2058,8 @@ int main(int argc, char** argv) {
         int withTrack = 0, withPlant = 0;
         for (const auto& t : tracks) withTrack += t.valid() ? 1 : 0;
         for (const auto* pl : plants) withPlant += pl->valid() ? 1 : 0;
-        printf("face bank: dealt %zu captures (%d with a track, %d with a plant)\n",
-               bank.size(), withTrack, withPlant);
+        printf("face bank: %zu recent + %zu sampled (%d with a track, %d with a plant)\n",
+               recent, bank.size() - recent, withTrack, withPlant);
     };
     // The auto-capture, at the Transition -> Roots cut: the live fit, its
     // colours as sampled off the mirror (what mask 0 has been wearing through
@@ -2026,6 +2084,14 @@ int main(int argc, char** argv) {
     // grows their own root system. Logged, so a plant worth keeping can be
     // reproduced by putting base + offset in the preset.
     std::mt19937 sittingSeedRng{std::random_device{}()};
+    // The strum's strings' order across the yaw (strumOrder above): low to
+    // high, or dealt at random.
+    auto strumDeal = [&]() {
+        const int n = strumScale().n;
+        for (int i = 0; i < kMaxStrings; ++i) strumOrder[i] = i;
+        if (g_strum_shuffle)
+            std::shuffle(strumOrder, strumOrder + n, sittingSeedRng);
+    };
     auto newSittingSeed = [&]() {
         const unsigned offset = g_root_seq.vary_seed
             ? 1u + unsigned(sittingSeedRng() % 1000000u) : 0u;
@@ -3079,7 +3145,7 @@ int main(int argc, char** argv) {
                                 g_colour_ease_t0 = -1.0;
                             }
                             break;
-                        case show::Phase::Transition:
+                        case show::Phase::Transition: {
                             // The harmony resolves here unconditionally, not
                             // just when the fit actually earned it: a fit that
                             // hit the time limit and is being carried into
@@ -3111,7 +3177,15 @@ int main(int argc, char** argv) {
                             // second visitor of the day walked up to a root
                             // system that was already fully grown before their
                             // press had even started.
+                            // Timed, and logged: this edge is the one frame
+                            // of the show that does real work all at once
+                            // (a replant, the bank read off disk, the
+                            // sequence's growth probe), and a hitch here is
+                            // seen as the film freezing at the cut. The
+                            // numbers say which part, without a profiler.
+                            double tEntry0 = glfwGetTime(), tEntry1 = 0, tEntry2 = 0, tEntry3 = 0;
                             if (roots.valid()) { newSittingSeed(); roots.replant(); roots.restartCloth(); }
+                            tEntry1 = glfwGetTime();
                             rootFaceTrisUploaded = false;
                             // Previous visitors onto the other masks, now
                             // rather than at the cut: they are not seen
@@ -3120,7 +3194,12 @@ int main(int argc, char** argv) {
                             // sitting's own capture does not exist yet, so
                             // nothing is excluded.
                             dealBankFaces(std::string());
+                            tEntry2 = glfwGetTime();
                             rootSeq.begin(roots, g_root_seq);
+                            tEntry3 = glfwGetTime();
+                            printf("transition entry: replant %.0f ms, bank %.0f ms, sequence %.0f ms\n",
+                                   (tEntry1 - tEntry0) * 1e3, (tEntry2 - tEntry1) * 1e3,
+                                   (tEntry3 - tEntry2) * 1e3);
                             rootSeqBegunForSitting = true;
                             rootFaceSeqBegunForSitting = false;
                             // The previous sitting's replay must not carry
@@ -3141,6 +3220,7 @@ int main(int argc, char** argv) {
                             transitionExitPhaseTime = 0.0;
                             rootsClock = 0.0;
                             break;
+                        }
                         default:
                             break;
                     }
@@ -3465,7 +3545,11 @@ int main(int argc, char** argv) {
                 // pluck, the drone and the drops all sit on the note the pluck
                 // has been ringing through the idle wait -- and `PadOctave`,
                 // which drops the pad alone onto the chord's root.
-                g_chord.update(ap.fit_level, ap.movement, (float)dt);
+                // `ShowFacePresent()` rather than ps.present: the former
+                // already rides out detection gaps, so an empty room is a
+                // person gone, not a blink -- what the pinned pluck's
+                // empty-room octave (see Chord::Config) should answer to.
+                g_chord.update(ap.fit_level, ap.movement, (float)dt, ShowFacePresent());
                 ap.comb_hz = g_chord.voicing().comb_hz;
                 ap.key = g_chord.keyNote();
                 ap.pad_octave = g_chord.padOctave();
@@ -3523,12 +3607,16 @@ int main(int argc, char** argv) {
                     strumRate = 0.f;
                     // The strings' order across the yaw: low to high, or
                     // dealt at random for this sitting.
-                    const int n = strumScale().n;
-                    for (int i = 0; i < kMaxStrings; ++i) strumOrder[i] = i;
-                    if (g_strum_shuffle)
-                        std::shuffle(strumOrder, strumOrder + n, sittingSeedRng);
+                    strumDeal();
+                    strumShuffleWas = g_strum_shuffle;
                 } else if (resolvedWindowActive) {
                     tResolvedWindow += (float)dt;
+                    // The panel's checkbox flipped mid-window: deal again
+                    // now, not at the next sitting.
+                    if (g_strum_shuffle != strumShuffleWas) {
+                        strumDeal();
+                        strumShuffleWas = g_strum_shuffle;
+                    }
                 }
                 if (!resolvedWindowActive && wasResolvedWindow && g_audio_on && g_audio_auto) {
                     // The window just closed -- the mouth started opening, or
@@ -3667,7 +3755,7 @@ int main(int argc, char** argv) {
                     const int n = strumScale().n;
                     const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
                     const float gap = 2.f * span / std::max(n - 1, 1);
-                    float xoff[kMaxStrings], width[kMaxStrings], wob[kMaxStrings];
+                    float xoff[kMaxStrings], width[kMaxStrings], amp[kMaxStrings];
                     for (int i = 0; i < n; ++i) {
                         const float q = -span + gap * i;
                         const float yaw = q + (q > 0.f ? g_strum_dead_deg : q < 0.f ? -g_strum_dead_deg : 0.f);
@@ -3675,11 +3763,11 @@ int main(int argc, char** argv) {
                         strumWireEnv[i] *= std::exp(-(float)dt / std::max(g_strum_wire_decay_s, 0.01f));
                         strumWirePhase[i] = std::fmod(strumWirePhase[i] + (float)dt * strumWireHz[i], 1.f);
                         width[i] = strumWireVis * g_strum_wire_px * (1.f + g_strum_wire_pluck_width * strumWireEnv[i]);
-                        wob[i] = g_strum_wire_vib_px * strumWireEnv[i] * std::sin(strumWirePhase[i] * 6.2831853f);
+                        amp[i] = g_strum_wire_vib_px * strumWireEnv[i];
                     }
-                    roots.setHarpWires(xoff, width, wob, strumWireVis > 0.f ? n : 0,
+                    roots.setHarpWires(xoff, width, amp, strumWirePhase, strumWireVis > 0.f ? n : 0,
                                        g_strum_wire_arc_deg, g_strum_wire_radius,
-                                       g_strum_wire_height);
+                                       g_strum_wire_height, g_strum_wire_modes);
                 }
             }
 
@@ -3872,6 +3960,9 @@ int main(int argc, char** argv) {
                 // Where the mirror shows the visitor, smoothed.
                 roots.setTrackedPosition(g_head_ex, g_head_ey, g_head_e_valid);
             }
+            // The face bank read in through the idle wait, not at the
+            // Transition edge -- see warmBankCache.
+            if (g_show.phase() == show::Phase::Idle) warmBankCache();
 
             g_prof.mark("show");
             id<MTLTexture> sceneTex = nil;
@@ -4352,17 +4443,19 @@ int main(int argc, char** argv) {
                 // still pinned -- renderMirror() is the same trained-and-
                 // rendered path Scene::Mirror uses, and it also samples face
                 // colours, which uploadFaceColorsIfFresh() below already
-                // expects. Once the pins let go the film has to stop
-                // changing mid-fall, so from there it is just re-rendered
-                // without another training step: the last trained frame is
-                // the skin the sheet falls away with.
+                // expects. Once the pins let go the film is frozen: the
+                // mirror is not rendered again at all, and the pond texture
+                // RootScene already holds (MirrorScene::render writes one
+                // texture in place) is the skin the sheet falls away with.
+                // It used to be re-rendered every frame of the fall without
+                // a training step, which is still the whole network's
+                // forward pass on top of the root scene's own frame -- the
+                // press ran at 16 fps for it. The freeze is not seen as
+                // one because the sheet starts moving on the same frame;
+                // `cloth/hold` is how long the picture stays live and still
+                // before that.
                 mirror.ensureSize(compW / std::max(1, downscale), compH / std::max(1, downscale));
-                if (roots.clothPinned() && !rootHold) {
-                    roots.setPondTexture(renderMirror());
-                } else {
-                    if (!rootHold) mirror.advance(dt);
-                    roots.setPondTexture(mirror.render());
-                }
+                if (roots.clothPinned() && !rootHold) roots.setPondTexture(renderMirror());
 
                 // The mask's *shape*, re-sent every frame rather than latched
                 // when the phase opened, so an expression keeps moving

@@ -2221,7 +2221,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SetTooltip("When the mouth opens and the roots start, every string is\nplucked once and slides down to 20 Hz at this glide.");
                     ui::Checkbox("strum wires", &g_strum_wires);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Draw the strings: a hair-thin line each, standing on a circle\naround the mask at the yaw that plucks it, inverting what is\nbehind it. A pluck widens it and sets it vibrating.");
+                        ImGui::SetTooltip("Draw the strings: a hair-thin line each, a meridian of a\nspheroid around the mask at the yaw that plucks it, meeting\nabove and below, inverting the finished picture behind it.\nA pluck widens it and sends a wave along it.");
                     ui::SliderFloat("wire arc (deg)", &g_strum_wire_arc_deg, 10.f, 360.f);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The arc the strings span around the mask, outermost to\noutermost, about its facing; the rest lie between by their yaw.");
@@ -2230,7 +2230,7 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SetTooltip("The circle the strings stand on, as a multiple of how far the\\nnose stands out from the mask's centre: 1 grazes it.");
                     ui::SliderFloat("wire height (x mask)", &g_strum_wire_height, 0.5f, 20.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("How far the strings run above and below the mask's centre,\nin its half-heights.");
+                        ImGui::SetTooltip("How far above and below the mask's centre the strings meet,\nin its half-heights.");
                     ui::BeginRetired("wire spread");
                     ui::SliderFloat("wire spread", &g_strum_wire_spread, 0.f, 1.f);
                     ui::EndRetired();
@@ -2240,7 +2240,10 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         ImGui::SetTooltip("How much wider a plucked string is, as a multiple of its width.");
                     ui::SliderFloat("wire pluck vibration (px)", &g_strum_wire_vib_px, 0.f, 60.f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("How far a plucked string swings either way at its belly --\na standing wave, a node at each end of the screen.");
+                        ImGui::SetTooltip("How far a plucked string's wave swings either way, at its\nhighest -- the string's ends stay put.");
+                    ui::SliderFloat("wire wave modes", &g_strum_wire_modes, 0.5f, 8.f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Wavelengths of the pluck's wave along a string; it travels\nalong the string at the pulse rate below. 0.5 is one belly,\nthe whole string swinging together.");
                     ui::SliderFloat("wire pluck decay (s)", &g_strum_wire_decay_s, 0.05f, 5.f);
                     ui::SliderFloat("wire pulse divisor", &g_strum_wire_pulse_div, 1.f, 512.f, "%.0f");
                     if (ImGui::IsItemHovered())
@@ -2395,9 +2398,12 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "way, snapped to a tone of the current chord. 16 with\n"
                             "chord octave -1 ends on the chord's top voice.");
                     }
+                    ui::SliderInt("pluck empty-room octave", &cc.pluck_empty_octave, -3, 1);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The pluck's register while nobody is in front of the\npiece (fit at 0, no face), octaves from the visitor's\nnote. Somebody arriving lifts it to the idle octave.");
                     ui::SliderInt("pluck idle octave", &cc.pluck_idle_octave, -3, 1);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("The pluck's register through the idle wait (fit at 0),\noctaves from the visitor's note. The comb alone -- the\nchord's root and Key stay put.");
+                        ImGui::SetTooltip("The pluck's register through the idle wait (fit at 0,\nsomebody there), octaves from the visitor's note. The\ncomb alone -- the chord's root and Key stay put.");
                     ui::SliderInt("pluck fitting octave", &cc.pluck_fit_octave, -3, 1);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The pluck's register while the fit climbs, octaves,\napplied after the snap to a chord tone. Comb_Tuning\nstops at 4000 Hz, so +1 is as high as the climb clears.");

@@ -1,35 +1,35 @@
 next todo
 
-x try multiple captures for the mesh fit (identity re-solved through Fitting, best kept)
-x use best face texture fit - also give me the option to juste use a video frame for the texure (texture source: neural render / camera frame)
-framerate unstable during root growth
+- pluck one octave lower during idle with no person; detected presence raises it to the normal level
+- fade notes in one second at a time when fit starts 
+- freeze on transition to cloth + mask
+- framerate drops to 16 while cloth sim is running
 
-glitch moving between faces
-chords don't look like a circle
-activate all chords for transition?
-stop cropping camera
-face mask sometimes not centered.
+tweak chord progression
 
-tweek chord progression
-
-
-x dial in TAA settings  - currently too mushy
-
+Manual:
 turn off all notifications
 turn on do not disturb
 turn off apple updates
 test remote desktop connect 
 
+
+x try multiple captures for the mesh fit (identity re-solved through Fitting, best kept)
+x use best face texture fit - also give me the option to juste use a video frame for the texure (texture source: neural render / camera frame)
+x framerate unstable during root growth
+x glitch moving between faces
+x stop cropping camera
+x face mask sometimes not centered.
+x dial in TAA settings  - currently too mushy
+
 x glitch face?
 dial in rumble (new sound?)
 
 x fix mask lighting (albedo level)
-fade notes in more during fit
-finish fit with final chord during capture ( add some sort of music?) and switch to root drone when the roots appear
+x finish fit with final chord during capture ( add some sort of music?) and switch to root drone when the roots appear
 
 x head/ mouth jump on grow
 
-Adjust size of things for shit monitor
 x control panel is offscreen
 x fullscreen by default
 
@@ -54,16 +54,12 @@ cloth
 - freeze time a bit long
 
 Mirror
-There'se still fucking weakass marker triggers. sometimes feels perfect but often ripples seem random.
 
-Dial in idle/fit timing
-Dial in face size during fit - maybe vary size if person gets closer?
+
 
 
 sound
-- switch to second set of drones maybe too early?
 -x start chord progression at the current tuning note?
-- beef up the drone in the root scene
 -x time pad fadein better with the fit transition
 
 setup
@@ -75,14 +71,15 @@ setup
 
 
 Build 
-- fit screen
-- black tape
+- power button hole on box
+-x fit screen
+-x black tape
 -x insert mac
 -x power cable length
-- attach cam
+-x attach cam
 - cam angle
-- bolts for frame
-- spacers for frame
+-x bolts for frame
+-x spacers for frame
 
 
 working root sysyems 

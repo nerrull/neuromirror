@@ -141,13 +141,17 @@ public:
         // (MIDI ~111), an octave clear of a G5 centre, +5 offset and 16 up.
         float pluck_climb = 16.f;
 
-        // The pluck's register, octaves, while it is pinned (fit at 0: the
-        // idle wait) and while it is climbing (fit above 0: the fitting).
-        // A shift of the comb alone -- the visitor's note, the chord's root
-        // and `Key` stay where they are, and the climb's snap to a chord
-        // tone is taken before the shift, so it still lands on one. Wwise's
-        // Comb_Tuning stops at 4000 Hz, so +1 is the most the G5 centre
-        // clears with the climb on top of it.
+        // The pluck's register, octaves, while it is pinned (fit at 0) with
+        // nobody in the room, while it is pinned with somebody there (the
+        // idle wait proper, and the first frames of Fitting), and while it
+        // is climbing (fit above 0: the fitting). A shift of the comb alone
+        // -- the visitor's note, the chord's root and `Key` stay where they
+        // are, and the climb's snap to a chord tone is taken before the
+        // shift, so it still lands on one. Wwise's Comb_Tuning stops at
+        // 4000 Hz, so +1 is the most the G5 centre clears with the climb on
+        // top of it. The empty room sits an octave under the idle wait so
+        // somebody arriving is heard as the pluck lifting to meet them.
+        int pluck_empty_octave = -1;
         int pluck_idle_octave = 0;
         int pluck_fit_octave = 0;
 
@@ -192,9 +196,12 @@ public:
     // and the visitor leaving mid-fit.
     void resolve();
 
-    // One frame. `fit` is 0..1 (AudioParams::fit_level), `movement` is 0..1.
+    // One frame. `fit` is 0..1 (AudioParams::fit_level), `movement` is 0..1,
+    // `present` is whether anybody is in front of the piece -- it only
+    // matters while the fit is at 0, where it picks the pinned pluck's
+    // register (`pluck_empty_octave` vs `pluck_idle_octave`).
     // A no-op on the checkpoint itself after `resolve()`, until `reset()`.
-    void update(float fit, float movement, float dt);
+    void update(float fit, float movement, float dt, bool present = true);
 
     const ChordVoicing& voicing() const { return v_; }
 

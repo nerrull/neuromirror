@@ -108,7 +108,7 @@ void Chord::resolve() {
     v_.stage = stage_;
 }
 
-void Chord::update(float fit, float movement, float dt) {
+void Chord::update(float fit, float movement, float dt, bool present) {
     fit = std::clamp(fit, 0.f, 1.f);
     movement = std::clamp(movement, 0.f, 1.f);
     dt = std::max(0.f, dt);
@@ -166,9 +166,10 @@ void Chord::update(float fit, float movement, float dt) {
     //
     // Pinned on the visitor's note while the fit is at zero -- the whole idle
     // wait, and the first frames of Fitting before the pond is training --
-    // and, once the fit is moving, lifted by the checkpoint: stage s of the
-    // last one puts it s/4 of the way up `pluck_climb`, snapped to a tone of
-    // the current chord. Stage 0 is the note itself (a chord tone of every
+    // dropped an octave under that while nobody is there (`present`), and,
+    // once the fit is moving, lifted by the checkpoint: stage s of the last
+    // one puts it s/4 of the way up `pluck_climb`, snapped to a tone of the
+    // current chord. Stage 0 is the note itself (a chord tone of every
     // stage: the root, octaves up), so the first frame the fit leaves zero
     // nothing moves; the last stage lands on the resolved chord's top voice.
     // Movement is deliberately not in this any more -- the pluck's pitch
@@ -176,7 +177,8 @@ void Chord::update(float fit, float movement, float dt) {
     // at the Transition handoff is not a note at all -- it happens outside
     // Chord (see main.mm).
     if (fit <= 0.f) {
-        v_.pluck_note = visitorNote() + 12.f * (float)cfg_.pluck_idle_octave;
+        const int octave = present ? cfg_.pluck_idle_octave : cfg_.pluck_empty_octave;
+        v_.pluck_note = visitorNote() + 12.f * (float)octave;
         v_.comb_hz = NoteToHz(v_.pluck_note);
         if (cfg_.pluck_wander_enabled) {
             wander_time_ += dt;
