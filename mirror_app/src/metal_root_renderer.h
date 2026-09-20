@@ -505,14 +505,15 @@ public:
     // setPondTexture used to receive. nil skips the cloth draw entirely rather
     // than sampling an unbound texture.
     void setClothTexture(id<MTLTexture> tex) { clothTex_ = tex; }
-    // The harp's strings: kWireFloats per vertex (bottom end3, top end3,
-    // side, t, half-width in output pixels, wave displacement in pixels)
-    // -- matches WireVertex in root_wire.metal; built by
-    // RootScene::packHarpWires. Drawn over the fog composite, against the
-    // geometry depth, inverting what is under them. Empty data clears the
-    // pass.
-    static constexpr int kWireFloats = 10;
-    void uploadWires(const std::vector<float>& interleaved);
+    // The harp's strings: kWireFloats per vertex (segment end3, end3, side,
+    // t, u along the string, half-width in output pixels, wave amplitude in
+    // pixels, wave phase in cycles) -- matches WireVertex in
+    // root_wire.metal; built by RootScene::packHarpWires. `modes` is the
+    // wave's wavelengths along a string. Drawn last, over the finished
+    // picture with no depth, inverting what is under them. Empty data
+    // clears the pass.
+    static constexpr int kWireFloats = 12;
+    void uploadWires(const std::vector<float>& interleaved, float modes);
     // Candidates for the automatic focus distance (post.dofFocus == 0): the
     // world positions of the masks being drawn. Replaced each call.
     void setFocusPoints(const std::vector<std::array<float, 3>>& pts) { focusPoints_ = pts; }
@@ -697,6 +698,7 @@ private:
 
     id<MTLBuffer> wireBuf_ = nil;
     int wireVertCount_ = 0;
+    float wireModes_ = 2.f;
     id<MTLRenderPipelineState> wirePipe_ = nil;
 
     // The scene passes (geometry, mask, fog) run at sw_ x sh_, which is the

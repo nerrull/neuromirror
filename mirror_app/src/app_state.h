@@ -236,6 +236,7 @@ extern float g_strum_wire_pluck_width; // 0..4, how much wider a plucked string 
 extern float g_strum_wire_vib_px;     // 0..60, the pluck's wave, pixels either way at its belly
 extern float g_strum_wire_decay_s;    // 0.05..5, the pluck's decay
 extern float g_strum_wire_pulse_div;  // 1..512, the wave runs at the note's Hz / this
+extern float g_strum_wire_modes;      // 0.5..8, wavelengths of the wave along a string
 extern std::string g_audio_err;
 
 extern std::vector<float> g_face_colors;

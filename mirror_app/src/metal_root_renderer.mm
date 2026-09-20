@@ -147,12 +147,12 @@ MetalRootRenderer::MetalRootRenderer(const MetalContext& ctx, const std::string&
     }
     {
         // No blend state: the fragment reads the target itself (framebuffer
-        // fetch) and writes the mix, alpha included, unchanged.
+        // fetch) and writes the mix, alpha included, unchanged. No depth:
+        // the strings go over the finished picture, on top of everything.
         MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
         d.vertexFunction   = [wireLib newFunctionWithName:@"root_wire_vs"];
         d.fragmentFunction = [wireLib newFunctionWithName:@"root_wire_fs"];
         d.colorAttachments[0].pixelFormat = kColorFmt;
-        d.depthAttachmentPixelFormat = kDepthFmt;
         wirePipe_ = [device_ newRenderPipelineStateWithDescriptor:d error:&err];
         if (!wirePipe_) { NSLog(@"wire pipeline failed: %@", err); return; }
     }
@@ -590,7 +590,8 @@ void MetalRootRenderer::uploadClothMesh(const std::vector<float>& interleaved) {
                      interleaved.size() * sizeof(float));
 }
 
-void MetalRootRenderer::uploadWires(const std::vector<float>& interleaved) {
+void MetalRootRenderer::uploadWires(const std::vector<float>& interleaved, float modes) {
+    wireModes_ = modes;
     wireVertCount_ = (int)(interleaved.size() / kWireFloats);
     if (wireVertCount_ > 0)
         uploadBuffer(wireBuf_, wireCap_, interleaved.data(),
@@ -1361,27 +1362,25 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     [fe drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [fe endEncoding];
 
-    // --- Pass 3c: the harp's strings, over the fogged picture ---
-    // Inverting the composite rather than the geometry pass (see
-    // root_wire.metal), against the geometry depth so the mask still hides
-    // the strings behind it. The depth is loaded, not cleared, and not
-    // stored: nothing after this reads it for the strings.
-    if (wireVertCount_ > 0 && wirePipe_ && wireBuf_) {
+    // --- the harp's strings, last of all ---
+    // Over the finished picture, whatever it is by then -- so the inversion
+    // is of the pixel that reaches the screen, not of the fogged scene that
+    // the post chain then regrades -- and with no depth, so nothing covers
+    // them (see root_wire.metal).
+    auto encodeWires = [&](id<MTLTexture> target) {
+        if (wireVertCount_ <= 0 || !wirePipe_ || !wireBuf_) return;
         MTLRenderPassDescriptor* wp = [MTLRenderPassDescriptor renderPassDescriptor];
-        wp.colorAttachments[0].texture = fogColorTex_;
+        wp.colorAttachments[0].texture = target;
         wp.colorAttachments[0].loadAction = MTLLoadActionLoad;
         wp.colorAttachments[0].storeAction = MTLStoreActionStore;
-        wp.depthAttachment.texture = rootDepthTex_;
-        wp.depthAttachment.loadAction = MTLLoadActionLoad;
-        wp.depthAttachment.storeAction = MTLStoreActionDontCare;
         if (g_passProf) g_passProf->attach(wp, "wires");
         RootWireU wu = {};
         wu.viewProj = vpJ;
-        wu.res = gu.res;
-        wu.pxScale = (float)sw_ / (float)w_;
+        wu.res = (simd_float2){(float)target.width, (float)target.height};
+        wu.pxScale = (float)target.width / (float)w_;
+        wu.modes = wireModes_;
         id<MTLRenderCommandEncoder> we = [cb renderCommandEncoderWithDescriptor:wp];
         [we setRenderPipelineState:wirePipe_];
-        [we setDepthStencilState:depthState_];
         [we setCullMode:MTLCullModeNone];
         [we setVertexBuffer:wireBuf_ offset:0 atIndex:0];
         [we setVertexBytes:&wu length:sizeof(wu) atIndex:1];
@@ -1389,13 +1388,14 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
         [we drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
                 vertexCount:(NSUInteger)wireVertCount_];
         [we endEncoding];
-    }
+    };
 
     if (!post.enabled) {
         // Still record the camera: the glitch stage's freeze needs an unbroken
         // history of it, and post.enabled is a live checkbox.
         prevViewProj_ = vp; prevViewProjValid_ = true;
         taaHistValid_ = false;
+        encodeWires(fogColorTex_);
         outTex_ = fogColorTex_; return fogColorTex_;
     }
 
@@ -1624,6 +1624,7 @@ id<MTLTexture> MetalRootRenderer::render(id<MTLCommandBuffer> cb,
     prevViewProj_ = vp;
     prevViewProjValid_ = true;
 
+    encodeWires(result);
     outTex_ = result;
     return result;
 }

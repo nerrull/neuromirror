@@ -28,26 +28,3 @@ Thresholds +/- hysteresis 0.03. resolve() = stage 4 regardless of fit.
 | 4            | N + 6         | 5th (+7)           | N + 19      | fifth     |
 
 linear = N + stage/4 x climb, snapped to the nearest tone of that stage's chord (any octave), + 12 x octave slider.
-
-## The knobs
-
-| knob                     | where                                   | preset              |
-|--------------------------|-----------------------------------------|---------------------|
-| pluck centre (MIDI)      | panel sound / pluck_center_note         | 79                  |
-| offset range (semitones) | panel sound / pluck_offset_max_semitones| 5                   |
-| chord octave             | panel sound / chord_octave              | -3                  |
-| thresholds[1..4]         | Chord::Config::thresholds (no panel)    | 0.25 0.50 0.75 0.95 |
-| checkpoint hysteresis    | panel sound / hysteresis                | 0.03                |
-| pluck climb (semitones)  | panel sound / pluck_climb               | 6                   |
-| pluck idle octave        | panel sound / pluck_idle_octave         | +1                  |
-| pluck fitting octave     | panel sound / pluck_fit_octave          | +1                  |
-| strum scale / octave     | panel resolved / g_strum_scale, _octave | lydian / +1         |
-
-## Wwise, as found (2026-09-18)
-
-| event    | plays / stops                                  | note                               |
-|----------|------------------------------------------------|------------------------------------|
-| Play_Pad | Mirror_Pad, Mirror_Pad_01, Mirror_Pad_Shepherd | two chord tables sound at once     |
-| Stop_Pad | Mirror_Pad, Mirror_Pad_Shepherd                | Mirror_Pad_01 is never stopped     |
-
-Mirror_Pad_01's table (cents / 100): stage 0 = 0/19/22/27, 1 = 6/21/24/28, 2 = 7/17/20/23, 3 = 0/19/23/28, 4 = 0/31/35/16.

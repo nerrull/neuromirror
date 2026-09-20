@@ -248,13 +248,13 @@ struct RootLeafU {
     float   _pad0;
 };
 
-// The harp's strings (root_wire.metal): screen-height lines that invert
-// what is behind them.
+// The harp's strings (root_wire.metal): curved lines around the mask that
+// invert what is behind them.
 struct RootWireU {
     RS_F4X4 viewProj;
-    RS_F2   res;        // the scene target's size, for the pixel width
-    float   pxScale;    // scene pixels per output pixel (the supersample)
-    float   _pad0;
+    RS_F2   res;        // the target's size, for the pixel width
+    float   pxScale;    // target pixels per output pixel (1 on the finished picture)
+    float   modes;      // wavelengths of the pluck's wave along a string
 };
 
 // Fog post-process pass (root_fog.metal).

@@ -205,14 +205,16 @@ static void applyPostOverride(RootScene& roots, const char* spec);
 static void applyWiresOverride(RootScene& roots, const char* spec) {
     if (!spec) return;
     const int n = std::clamp(atoi(spec), 1, RootScene::kMaxHarpWires);
-    float xoff[RootScene::kMaxHarpWires], width[RootScene::kMaxHarpWires], wob[RootScene::kMaxHarpWires];
+    float xoff[RootScene::kMaxHarpWires], width[RootScene::kMaxHarpWires],
+          amp[RootScene::kMaxHarpWires], phase[RootScene::kMaxHarpWires];
     for (int i = 0; i < n; ++i) {
         xoff[i] = n > 1 ? -1.f + 2.f * (float)i / (float)(n - 1) : 0.f;
         width[i] = g_strum_wire_px * (1.f + ((i & 1) ? g_strum_wire_pluck_width : 0.f));
-        wob[i] = (i & 1) ? g_strum_wire_vib_px : 0.f;
+        amp[i] = (i & 1) ? g_strum_wire_vib_px : 0.f;
+        phase[i] = 0.25f;
     }
-    roots.setHarpWires(xoff, width, wob, n, g_strum_wire_arc_deg, g_strum_wire_radius,
-                       g_strum_wire_height);
+    roots.setHarpWires(xoff, width, amp, phase, n, g_strum_wire_arc_deg, g_strum_wire_radius,
+                       g_strum_wire_height, g_strum_wire_modes);
 }
 
 // Headless live-growth check: steps the CPlantBox sim `steps` frames, then

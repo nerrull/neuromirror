@@ -334,6 +334,7 @@ float g_strum_wire_pluck_width = 1.f;
 float g_strum_wire_vib_px = 14.f;
 float g_strum_wire_decay_s = 1.2f;
 float g_strum_wire_pulse_div = 64.f;
+float g_strum_wire_modes = 2.f;
 
 std::string g_audio_err;
 

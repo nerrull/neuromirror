@@ -103,7 +103,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `fit/soft edge` | bool | -- | 1 |
 | `fit/track live feed` | bool | -- | 1 |
 
-## show (133 parameters, 2 retired)
+## show (134 parameters, 2 retired)
 
 | parameter | type | range | value |
 |---|---|---|---|
@@ -226,6 +226,7 @@ land in `unassigned` and are listed below until somebody decides.
 | `sound/resolved/wire pulse divisor` | float | 1 .. 512 | 128 |
 | `sound/resolved/wire radius (x nose)` | float | 0.5 .. 6 | 1.36 |
 | `sound/resolved/wire spread` _(retired)_ | float | 0 .. 1 | 0.7 |
+| `sound/resolved/wire wave modes` | float | 0.5 .. 8 | 2 |
 | `sound/resolved/wire width (px)` | float | 0.25 .. 8 | 3.178 |
 | `sound/rise (s)` | float | 0.01 .. 1 | 0.12 |
 | `sound/shepherd rate max (st-s)` | float | 0 .. 3 | 0.6 |
