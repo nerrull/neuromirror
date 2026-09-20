@@ -2706,7 +2706,14 @@ int main(int argc, char** argv) {
                             // streak everything else here is, so a single
                             // spurious detection cannot kick off a collection
                             // that then has to be cancelled.
-                            if (g_auto_fit_id && !g_collect_id &&
+                            // Not in the show's Idle: Face entry resets the
+                            // identity and starts its own collection, so one
+                            // begun here -- and re-solved every
+                            // g_id_resolve_secs for as long as someone
+                            // stands there -- is thrown away unread.
+                            const bool showIdle = g_show_on &&
+                                                  g_show.phase() == show::Phase::Idle;
+                            if (g_auto_fit_id && !showIdle && !g_collect_id &&
                                 !g_fitter.hasIdentity() && nowT >= g_auto_fit_next) {
                                 ResetIdentityFit();
                                 g_collect_id = true;
@@ -3001,6 +3008,13 @@ int main(int argc, char** argv) {
                             g_fit_arm = false;
                             mirror.pond().clearFit();
                             g_fit_level_now = 0.f;
+                            // ...and disarm the feed. Face entry arms it
+                            // again; left on, the camera frame kept being
+                            // resampled into the fit grid every frame of
+                            // every Idle after the first sitting -- the whole
+                            // grid, with nobody there to bound it -- for a
+                            // trainer that clearFit() had just stopped.
+                            g_fit_live = false;
                             // Put the idle field back the way the preset had
                             // it, or every pass through the piece would leave
                             // the mirror a little more textured than the last.
