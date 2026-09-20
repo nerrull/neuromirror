@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jardins racine — Materials</title>
+<title>Neuromirror</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital,wght@0,400;1,400&family=Work+Sans:wght@300;400;500&display=swap">
 <style>
@@ -89,14 +89,6 @@
     margin: 0;
   }
   .year { color: var(--ink-soft); font-weight: 300; }
-  .medium {
-    font-family: "Libre Caslon Text", Georgia, serif;
-    font-style: italic;
-    color: var(--ink-soft);
-    margin: 10px 0 0;
-    max-width: 44ch;
-  }
-
   hr {
     border: 0;
     border-top: 1px solid var(--rule);
@@ -149,87 +141,95 @@
 </head>
 <body>
 <main class="label">
-  <h1>Jardins racine</h1>
+  <h1>Neuromirror</h1>
   <p class="artist">Etienne Richan <span class="year">— 2026</span></p>
-  <p class="medium">Neural mirror, simulated root growth, Kinect, sound. Software written in C++ and Metal.</p>
 
   <hr>
 
   <section class="group">
-    <p class="eyebrow">Seeing</p>
+    <p class="eyebrow">Neural rendering</p>
     <dl>
       <div class="item">
-        <dt><a href="https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker">MediaPipe Face Landmarker</a> <span class="role">— 478 landmarks, 52 blendshapes, a head pose</span></dt>
-        <dd>Google · Apache-2.0</dd>
-      </div>
-      <div class="item">
-        <dt><a href="https://github.com/ICT-VGL/ICT-FaceKit">ICT-FaceKit</a> <span class="role">— morphable face model fitted to the visitor</span></dt>
-        <dd>USC Institute for Creative Technologies · MIT</dd>
-      </div>
-      <div class="item">
-        <dt><a href="https://github.com/OpenKinect/libfreenect2">libfreenect2</a> <span class="role">— Kinect v2 depth and colour</span></dt>
-        <dd>OpenKinect · Apache-2.0 / GPL-2</dd>
-      </div>
-    </dl>
-  </section>
-
-  <section class="group">
-    <p class="eyebrow">Mirroring</p>
-    <dl>
-      <div class="item">
-        <dt><a href="https://github.com/ml-explore/mlx">MLX</a> <span class="role">— a small coordinate network trained live on the face, on the GPU</span></dt>
-        <dd>Apple · MIT</dd>
-      </div>
-      <div class="item">
-        <dt><a href="https://link.springer.com/article/10.1007/s10710-007-9028-8">Compositional pattern-producing networks</a> <span class="role">— the idea of a network that draws an image from its coordinates</span></dt>
+        <dt><a href="https://link.springer.com/article/10.1007/s10710-007-9028-8">CPPN</a> <span class="role">— compositional pattern-producing networks</span></dt>
         <dd>Kenneth O. Stanley, 2007</dd>
       </div>
       <div class="item">
-        <dt><a href="https://blog.otoro.net/2016/03/25/generating-abstract-patterns-with-tensorflow/">Generating Abstract Patterns with TensorFlow</a> <span class="role">— the blog post the mirror's look comes from</span></dt>
+        <dt><a href="https://blog.otoro.net/2016/03/25/generating-abstract-patterns-with-tensorflow/">Generating Abstract Patterns with TensorFlow</a> <span class="role">— CPPN image generation</span></dt>
         <dd>David Ha, otoro.net, 2016</dd>
       </div>
       <div class="item">
-        <dt><a href="https://www.vincentsitzmann.com/siren/">SIREN</a> <span class="role">— sinusoidal activations that let the network hold fine detail</span></dt>
-        <dd>Sitzmann et al., NeurIPS 2020</dd>
+        <dt><a href="https://www.vincentsitzmann.com/siren/">SIREN</a> <span class="role">— sinusoidal activations</span></dt>
+        <dd>Sitzmann et al., 2020</dd>
       </div>
     </dl>
   </section>
 
   <section class="group">
-    <p class="eyebrow">Growing</p>
+    <p class="eyebrow">Simulation</p>
     <dl>
       <div class="item">
-        <dt><a href="https://github.com/Plant-Root-Soil-Interactions-Modelling/CPlantBox">CPlantBox</a> <span class="role">— functional–structural root growth, day by day</span></dt>
+        <dt><a href="https://github.com/Plant-Root-Soil-Interactions-Modelling/CPlantBox">CPlantBox</a> <span class="role">— root growth</span></dt>
         <dd>Forschungszentrum Jülich · GPL-3</dd>
       </div>
     </dl>
   </section>
 
   <section class="group">
-    <p class="eyebrow">Sounding</p>
+    <p class="eyebrow">Face tracking</p>
     <dl>
       <div class="item">
-        <dt><a href="https://github.com/pichenettes/eurorack">Mutable Instruments DSP</a> <span class="role">— Rings, Clouds, Elements, Plaits and Peaks, run as plug-ins</span></dt>
-        <dd>Émilie Gillet · MIT</dd>
+        <dt><a href="https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker">MediaPipe Face Landmarker</a> <span class="role">— landmarks and head pose</span></dt>
+        <dd>Google · Apache-2.0</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://github.com/ICT-VGL/ICT-FaceKit">ICT-FaceKit</a> <span class="role">— morphable face model</span></dt>
+        <dd>USC ICT · MIT</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://github.com/OpenKinect/libfreenect2">libfreenect2</a> <span class="role">— Kinect v2</span></dt>
+        <dd>OpenKinect · Apache-2.0 / GPL-2</dd>
       </div>
     </dl>
   </section>
 
   <section class="group">
-    <p class="eyebrow">Framing</p>
+    <p class="eyebrow">Sound</p>
     <dl>
       <div class="item">
-        <dt><a href="https://github.com/ocornut/imgui">Dear ImGui</a> <span class="role">— the control panel</span></dt>
-        <dd>Omar Cornut · MIT</dd>
+        <dt><a href="https://github.com/pichenettes/eurorack">Mutable Instruments DSP</a> <span class="role">— Plaits, Elements</span></dt>
+        <dd>Émilie Gillet · MIT</dd>
       </div>
       <div class="item">
-        <dt><a href="https://www.glfw.org/">GLFW</a> <span class="role">— the window</span></dt>
-        <dd>zlib</dd>
+        <dt><a href="https://www.audiokinetic.com/wwise/">Wwise</a> <span class="role">— audio engine</span></dt>
+        <dd>Audiokinetic</dd>
+      </div>
+      <div class="item">
+        <dt><a href="https://www.youtube.com/watch?v=KGMN3m2bB-A">Alexis Dionne</a> <span class="role">— harmony consultant</span></dt>
+        <dd></dd>
       </div>
     </dl>
   </section>
 
-  <p class="note">Runs on Apple Metal, with sound through Audiokinetic Wwise. The Mutable Instruments name and module names are trademarks; only the code is borrowed.</p>
+  <section class="group">
+    <p class="eyebrow">Woodworking</p>
+    <dl>
+      <div class="item">
+        <dt>Pierre Roy</dt>
+        <dd></dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">AI code generation</p>
+    <dl>
+      <div class="item">
+        <dt><a href="https://claude.com/claude-code">Claude Code</a> <span class="role">— wrote the software</span></dt>
+        <dd>Anthropic</dd>
+      </div>
+    </dl>
+  </section>
+
   <p class="note">Source: <a href="https://github.com/nerrull/roots">github.com/nerrull/roots</a></p>
 </main>
 </body>
