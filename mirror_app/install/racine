@@ -33,26 +33,29 @@ kiosk_home="$(dscl . -read "/Users/$KIOSK_USER" NFSHomeDirectory 2>/dev/null \
 PLIST="${kiosk_home:-/Users/$KIOSK_USER}/Library/LaunchAgents/$LABEL.plist"
 
 # Reaching into another user's GUI domain needs root; our own does not.
-if [ "$(id -u)" = "$kiosk_uid" ]; then AS=(); else AS=(sudo); fi
+# A function, not an array: macOS's bash 3.2 treats an empty array as unset
+# under `set -u`, so `"${AS[@]}"` killed every command run as the kiosk user
+# (the Desktop shortcuts) with "AS[@]: unbound variable".
+if [ "$(id -u)" = "$kiosk_uid" ]; then as() { "$@"; }; else as() { sudo "$@"; }; fi
 
 usage() { sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
 
 case "${1:-}" in
 start)
-    "${AS[@]}" launchctl bootstrap "$DOMAIN" "$PLIST"
+    as launchctl bootstrap "$DOMAIN" "$PLIST"
     echo "started"
     ;;
 stop)
     # bootout unloads the agent, so KeepAlive does not fight the stop.
-    "${AS[@]}" launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    as launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
     echo "stopped"
     ;;
 restart)
-    "${AS[@]}" launchctl kickstart -k "$DOMAIN/$LABEL"
+    as launchctl kickstart -k "$DOMAIN/$LABEL"
     echo "restarted"
     ;;
 status)
-    "${AS[@]}" launchctl print "$DOMAIN/$LABEL" 2>/dev/null \
+    as launchctl print "$DOMAIN/$LABEL" 2>/dev/null \
         | grep -E '^\s+(state|pid|last exit code|runs) ' \
         || echo "not loaded"
     ;;
@@ -81,8 +84,8 @@ display)
             [ -x "$DP" ] || { echo "no displayplacer -- brew install displayplacer" >&2; exit 1; }
             cmd="$("$DP" list | grep '^displayplacer ')"
             [ -n "$cmd" ] || { echo "displayplacer printed no arrangement" >&2; exit 1; }
-            "${AS[@]}" tee "$ARR" >/dev/null <<<"$cmd"
-            "${AS[@]}" chmod 644 "$ARR"
+            as tee "$ARR" >/dev/null <<<"$cmd"
+            as chmod 644 "$ARR"
             echo "saved to $ARR:"; echo "  $cmd";;
         install)
             # A LaunchAgent for the account running this, in its own domain
@@ -105,8 +108,8 @@ keep-awake)
     # a file you can see, so it is hard to leave set by accident.
     MARKER=/Users/Shared/racine/keep-awake
     case "${2:-}" in
-        on)  "${AS[@]}" touch "$MARKER"; echo "gate overridden -- remember to turn it off";;
-        off) "${AS[@]}" rm -f "$MARKER"; echo "gate back in charge";;
+        on)  as touch "$MARKER"; echo "gate overridden -- remember to turn it off";;
+        off) as rm -f "$MARKER"; echo "gate back in charge";;
         *)   [ -e "$MARKER" ] && echo "on (gate overridden)" || echo "off (gate in charge)";;
     esac
     ;;

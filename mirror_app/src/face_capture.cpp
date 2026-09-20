@@ -229,11 +229,29 @@ bool LoadCapture(const std::string& id, FaceCapture& c, std::string& err) {
 bool DeleteCapture(const std::string& id, std::string& err) {
     if (!SafeId(id)) { err = "bad capture id"; return false; }
     const std::string dir = Dir(id);
-    remove((dir + "/film.ppm").c_str());
-    remove((dir + "/mesh.bin").c_str());
-    remove((dir + "/meta").c_str());
+    // Everything in it, not a fixed list: the sitting's sidecars (track.bin,
+    // roots.bin) live here too, and a name this does not know would leave
+    // the directory behind for rmdir to refuse.
+    if (DIR* d = opendir(dir.c_str())) {
+        while (struct dirent* e = readdir(d)) {
+            const std::string n = e->d_name;
+            if (n == "." || n == "..") continue;
+            remove((dir + "/" + n).c_str());
+        }
+        closedir(d);
+    }
     if (rmdir(dir.c_str()) != 0) { err = "cannot remove " + dir; return false; }
     return true;
+}
+
+int DeleteAllCaptures(std::string& err) {
+    int n = 0;
+    for (const std::string& id : ListCaptures()) {
+        std::string e;
+        if (DeleteCapture(id, e)) ++n;
+        else if (err.empty()) err = e;
+    }
+    return n;
 }
 
 void BakeCaptureColors(FaceCapture& c) {

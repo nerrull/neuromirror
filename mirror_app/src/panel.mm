@@ -4573,6 +4573,42 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     }
                 }
 
+                // --- the face bank ----------------------------------------
+                // Everything in captures/: the saved masks the roots wear for
+                // the visitors who came before. Two clicks, since one stray
+                // click here would empty a run's worth of faces.
+                ImGui::Separator();
+                {
+                    static bool armed = false;
+                    static std::string msg;
+                    const size_t n = g_capture_ids.size();
+                    ImGui::Text("%zu saved mask%s", n, n == 1 ? "" : "s");
+                    ImGui::SameLine();
+                    if (!armed) {
+                        if (ImGui::Button("clear saved masks")) armed = true;
+                    } else {
+                        if (ImGui::Button("really delete them all")) {
+                            std::string e;
+                            const int gone = mirror::DeleteAllCaptures(e);
+                            g_capture_ids = mirror::ListCaptures();
+                            g_capture_sel = -1;
+                            g_capture_loaded.clear();
+                            msg = "deleted " + std::to_string(gone) + " capture(s)";
+                            if (!e.empty()) msg += " -- " + e;
+                            armed = false;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("keep them")) armed = false;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Delete every capture in captures/ -- film, mesh,\n"
+                            "track and plant. The face bank then deals nothing\n"
+                            "until new visitors sit; faces already dealt onto\n"
+                            "the masks stay until the next sitting.");
+                    if (!msg.empty()) ImGui::TextDisabled("%s", msg.c_str());
+                }
+
                 // The master document, written from the registry that is live
                 // in this frame. Since declaring no longer depends on what is
                 // open, one frame is the whole app -- which is what makes a

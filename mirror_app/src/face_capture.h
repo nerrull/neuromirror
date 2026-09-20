@@ -69,6 +69,9 @@ std::vector<std::string> ListCaptures();
 bool SaveCapture(const FaceCapture& c, std::string& err);
 bool LoadCapture(const std::string& id, FaceCapture& c, std::string& err);
 bool DeleteCapture(const std::string& id, std::string& err);
+// Every capture on disk -- the whole face bank. Returns how many went; `err`
+// holds the first failure, if any.
+int DeleteAllCaptures(std::string& err);
 
 // Bilinear sample of `film` at every uv, into 3 floats/vertex, decoded to
 // linear (the film is 1/2.2-encoded). Clamped at the edges, the way every
