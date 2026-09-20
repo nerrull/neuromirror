@@ -40,7 +40,7 @@
 //           Play_Amb_Mirror / Stop_Amb_Mirror     the old mirror bed, unused by
 //                                                 the show since the phase
 //                                                 became pluck + pad
-//   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt   (the room)
+//   RTPCs   Proximity, Movement, Centering, HeadYaw, HeadTilt, HeadPitch   (the room)
 //           FitLevel, SceneProgress                             (the piece)
 //           Key, Intensity, Transpose                            (the operator)
 //           Comb_Tuning, Comb_Glide, FlangerRate, FlangerMix        (the harmony)
@@ -48,7 +48,7 @@
 //           Strum_Velocity 0..1, Strum_Glide ms                  (the harp, per voice: loudness, portamento)
 //           PluckMute 0..1                                       (the FirePlucker's volume, faded)
 //   States  Phase      = Idle | Fitting | Transition | Roots
-//           ChordStage = Stage0..Stage4
+//           ChordStage = Stage0..Stage4 | Modes0..Modes4  (one row per progression, see chord.h)
 //
 // ## Without the SDK
 //
@@ -83,6 +83,7 @@ struct AudioParams {
     float centering = 0.f;      // -1..1
     float head_yaw = 0.f;       // -60..60 degrees
     float head_tilt = 0.f;      // -45..45 degrees
+    float head_pitch = 0.f;     // -30..30 degrees, + = chin up
     float fit_level = 0.f;      // 0..1, how well the face has been captured
     float scene_progress = 0.f; // 0..1 through the current phase
     float key = 48.f;           // MIDI note, 24..84 -- the piece's base pitch

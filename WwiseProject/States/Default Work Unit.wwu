@@ -20,6 +20,11 @@
 						<State Name="Stage2" ID="{E9CBF2D4-9CC8-42E4-A480-D405E9D0C1AB}"/>
 						<State Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 						<State Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
+						<State Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+						<State Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+						<State Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+						<State Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+						<State Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
 					</ChildrenList>
 					<TransitionList>
 						<Transition>

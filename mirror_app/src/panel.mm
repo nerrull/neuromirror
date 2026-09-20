@@ -1174,14 +1174,15 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 // whatever was asked for above it, which is a silent way to
                 // make every reposition below do nothing at all.
                 if (panel_was_hidden) { want_pos = panel_pos; want_pos_set = true; }
-                // Coming back in -- the box unticked, or --reset-panel for a
-                // panel that imgui.ini has parked on a monitor that is not
-                // plugged in any more. Over the main window is the only place a
-                // panel that is not its own window can be.
+                // Coming back in -- the box unticked, or --reset-panel / F3
+                // for a panel that imgui.ini has parked on a monitor that is
+                // not plugged in any more. Over the main window is the only
+                // place a panel that is not its own window can be.
                 const bool attaching = (panel_was_detached && !g_ui_detached);
                 if (attaching || g_panel_reset) {
-                    want_pos = ImVec2(mainvp->WorkPos.x + 20,
-                                      mainvp->WorkPos.y + 20);
+                    const float inset = g_panel_reset ? 10.f : 20.f;
+                    want_pos = ImVec2(mainvp->WorkPos.x + inset,
+                                      mainvp->WorkPos.y + inset);
                     want_pos_set = true;
                     if (g_panel_reset) {
                         want_size = ImVec2(340, 0);
@@ -2198,6 +2199,13 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                         }
                         ui::DeclareInt("strum scale", &g_strum_scale, 0, IM_ARRAYSIZE(kScales) - 1);
                     }
+                    ui::SliderInt("strum strings per side", &g_strum_per_side, 1, 4);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Strings either side of the dead zone. Fewer than the\n"
+                            "scale has tones picks them spread evenly across it,\n"
+                            "ends included: lydian at 3 a side is 0 2 6 7 11 12.");
+                    }
                     ui::Checkbox("strum shuffled", &g_strum_shuffle);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Deal the tones across the yaw in a random order, drawn fresh\nat each window's opening, instead of low-left to high-right.");
@@ -2298,6 +2306,8 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ImGui::Text("HeadYaw    %+.0f deg", a.head_yaw);
                     ImGui::SameLine();
                     ImGui::Text("HeadTilt %+.0f deg", a.head_tilt);
+                    ImGui::Text("HeadPitch  %+.0f deg", a.head_pitch);
+                    ImGui::SameLine(); ImGui::TextDisabled("(raw %+.0f)", raw.head_pitch);
                     ImGui::Text("FitLevel   %.2f", a.fit_level);
                     ImGui::SameLine();
                     ImGui::Text("SceneProgress %.2f", a.scene_progress);
@@ -2329,6 +2339,22 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                 mirror::Chord::Config& cc = g_chord.config();
                 ui::BeginHeader("chord tuning", /*default_open=*/false);
                 {
+                    static const char* const kProgNames[mirror::Chord::kProgressions] = {
+                        "arc  (Cm7b13 -> Cm9 -> Cm(add9) -> Cmaj9 -> Cmaj)",
+                        "modes  (D mixo -> Eb lyd -> Bbm mel -> Db lyd#5 -> C lyd)",
+                    };
+                    if (ui::Visible())
+                        ImGui::Combo("progression", &cc.progression, kProgNames,
+                                     mirror::Chord::kProgressions);
+                    ui::DeclareInt("progression", &cc.progression, 0,
+                                   mirror::Chord::kProgressions - 1);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Which stage table the pad walks (see chord.h). Both\n"
+                            "are measured from the visitor's root and share the\n"
+                            "checkpoint sliders below. Switching mid-sitting\n"
+                            "moves the pad on the next frame.");
+                    }
                     ui::SliderFloat("pad octave (semitones)", &cc.octave, -36.f, 12.f, "%.0f");
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip(
@@ -2401,6 +2427,9 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                     ui::SliderInt("pluck empty-room octave", &cc.pluck_empty_octave, -3, 1);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The pluck's register while nobody is in front of the\npiece (fit at 0, no face), octaves from the visitor's\nnote. Somebody arriving lifts it to the idle octave.");
+                    ui::SliderFloat("pluck empty-room delay (s)", &cc.pluck_empty_delay_s, 0.f, 10.f, "%.1f");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How long the room must stay empty before the pluck\ndrops to the empty-room octave. The lift when somebody\narrives is immediate; this only guards the drop against\na face lost for a moment.");
                     ui::SliderInt("pluck idle octave", &cc.pluck_idle_octave, -3, 1);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The pluck's register through the idle wait (fit at 0,\nsomebody there), octaves from the visitor's note. The\ncomb alone -- the chord's root and Key stay put.");
@@ -2437,6 +2466,17 @@ void DrawControlPanel(PanelFrameArgs& pf) {
                             "drives is stretched between them.");
                     }
                     ui::SliderFloat("movement full scale", &pc.move_full, 0.2f, 4.f);
+                    ui::SliderFloat("pitch neutral (nose 0..1 eyes->chin)", &pc.pitch_neutral, 0.2f, 0.7f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Where the nose tip sits between the eye line and\n"
+                            "the chin for a level head. Set it so HeadPitch's\n"
+                            "raw readout above sits on 0 for someone looking\n"
+                            "straight at the mirror; it moves with the camera's\n"
+                            "height.");
+                    }
+                    ui::SliderFloat("pitch span (nod for full scale)", &pc.pitch_span, 0.05f, 0.5f, "%.2f");
+                    ui::SliderFloat("pitch full scale (deg)", &pc.pitch_full, 10.f, 60.f, "%.0f");
                     ui::SliderFloat("rise (s)", &pc.rise_tau, 0.01f, 1.f, "%.2f");
                     ui::SliderFloat("fall (s)", &pc.fall_tau, 0.05f, 4.f, "%.2f");
                 }

@@ -163,6 +163,12 @@ Presets saved from the panel *in the show tree* stay in the show tree
 (`setup-kiosk.sh` made `mirror_app/presets/` writable by `expo`); copy them
 back to dev if they're keepers.
 
+The face pool is per tree too: captures land in `<tree>/mirror_app/captures/`
+(compiled in, gitignored), so the show keeps its own visitors and never sees
+the dev pool. `setup-kiosk.sh` creates it `1777`; if it is missing the log
+fills with `capture: save failed: cannot create ...` and the face bank deals
+nothing (this is what happened 2026-09-16 to 09-20).
+
 If the CMake config was ever wiped (`rm build/CMakeCache.txt`), reconfigure with
 `-DWWISE_CONFIG=Profile` -- the default is Profile too, but check the configure
 output says `Wwise sound engine enabled`.

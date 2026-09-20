@@ -324,6 +324,7 @@ float g_strum_mute_fade_ms = 500.f;
 float g_strum_drop_glide_ms = 1500.f;
 int   g_strum_scale = 1;
 bool  g_strum_shuffle = false;
+int   g_strum_per_side = 3;
 bool  g_strum_wires = true;
 float g_strum_wire_spread = 0.7f;
 float g_strum_wire_arc_deg = 70.f;

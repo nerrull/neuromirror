@@ -259,6 +259,8 @@ void WwiseAudio::update(const AudioParams& p) {
         AK::SoundEngine::SetRTPCValue("HeadYaw", p.head_yaw);
     if (all || Moved(p.head_tilt, sent_.head_tilt))
         AK::SoundEngine::SetRTPCValue("HeadTilt", p.head_tilt);
+    if (all || Moved(p.head_pitch, sent_.head_pitch))
+        AK::SoundEngine::SetRTPCValue("HeadPitch", p.head_pitch);
     if (all || Moved(p.fit_level, sent_.fit_level))
         AK::SoundEngine::SetRTPCValue("FitLevel", p.fit_level);
     if (all || Moved(p.scene_progress, sent_.scene_progress))

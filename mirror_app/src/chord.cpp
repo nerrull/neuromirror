@@ -10,12 +10,30 @@ namespace {
 // chord.h for what each row is called. Read down a column to see a voice's
 // path: voice 0 never moves, voice 1 makes one move (b7 -> 5th), voice 2 makes
 // the one that matters (b3 -> 3rd), voice 3 opens the top out twice.
-const float kOffsets[Chord::kStages][kChordVoices] = {
-    { 0.f, 10.f, 15.f, 22.f },   // Cm7(b13)
-    { 0.f, 10.f, 15.f, 26.f },   // Cm9
-    { 0.f,  7.f, 15.f, 26.f },   // Cm(add9)
-    { 0.f,  7.f, 16.f, 26.f },   // Cmaj9
-    { 0.f,  7.f, 16.f, 28.f },   // Cmaj
+// The second table is the modes progression (chord.h has both, with names).
+const float kOffsets[Chord::kProgressions][Chord::kStages][kChordVoices] = {
+    {
+        { 0.f, 10.f, 15.f, 22.f },   // Cm7(b13)
+        { 0.f, 10.f, 15.f, 26.f },   // Cm9
+        { 0.f,  7.f, 15.f, 26.f },   // Cm(add9)
+        { 0.f,  7.f, 16.f, 26.f },   // Cmaj9
+        { 0.f,  7.f, 16.f, 28.f },   // Cmaj
+    },
+    {
+        {  2.f, 12.f, 18.f, 26.f },  // D mixolydian
+        {  3.f, 10.f, 15.f, 19.f },  // Eb lydian
+        { 10.f, 13.f, 17.f, 21.f },  // Bb melodic minor
+        { 13.f, 17.f, 21.f, 24.f },  // Db lydian #5
+        { 16.f, 19.f, 23.f, 26.f },  // C lydian (Cmaj9, rootless)
+    },
+};
+
+// One Wwise state per (progression, stage) -- both rows live in the one
+// `ChordStage` State Group so a switch of progression is just another
+// SetState, glided by the same transition.
+const char* const kStateNames[Chord::kProgressions][Chord::kStages] = {
+    { "Stage0", "Stage1", "Stage2", "Stage3", "Stage4" },
+    { "Modes0", "Modes1", "Modes2", "Modes3", "Modes4" },
 };
 
 // Alternating up the stack, so that voices whose harmonics coincide -- the root
@@ -34,11 +52,11 @@ float NoteToHz(float midi) {
 // sounding like it belongs to the chord instead of sliding across it on its
 // own scale. A target that already *is* a chord tone (the visitor's note, an
 // octave-multiple of the root by construction) comes back unchanged.
-float SnapToChordTone(float linear_target, float root, int stage) {
+float SnapToChordTone(float linear_target, float root, const float* offsets) {
     float best = linear_target;
     float best_dist = 1e9f;
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tone = root + kOffsets[stage][i];
+        const float tone = root + offsets[i];
         const float candidate = tone + 12.f * std::round((linear_target - tone) / 12.f);
         const float dist = std::fabs(candidate - linear_target);
         if (dist < best_dist) {
@@ -51,8 +69,18 @@ float SnapToChordTone(float linear_target, float root, int stage) {
 
 }  // namespace
 
-const float* Chord::StageOffsets(int stage) {
-    return kOffsets[std::clamp(stage, 0, kStages - 1)];
+const float* Chord::StageOffsets(int stage, int progression) {
+    return kOffsets[std::clamp(progression, 0, kProgressions - 1)]
+                   [std::clamp(stage, 0, kStages - 1)];
+}
+
+const char* Chord::StateName(int progression, int stage) {
+    return kStateNames[std::clamp(progression, 0, kProgressions - 1)]
+                      [std::clamp(stage, 0, kStages - 1)];
+}
+
+const char* Chord::stateName() const {
+    return StateName(cfg_.progression, stage_);
 }
 
 float Chord::StageThreshold(int stage) const {
@@ -74,7 +102,7 @@ void Chord::reset() {
 
     const float base = effectiveRoot() + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tgt = base + kOffsets[0][i];
+        const float tgt = base + stageOffsets(0)[i];
         v_.note[i] = tgt;
         v_.target[i] = tgt;
     }
@@ -101,7 +129,7 @@ void Chord::resolve() {
 
     const float base = effectiveRoot() + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tgt = base + kOffsets[stage_][i];
+        const float tgt = base + stageOffsets(stage_)[i];
         v_.target[i] = tgt;
         v_.note[i] = tgt;
     }
@@ -146,6 +174,11 @@ void Chord::update(float fit, float movement, float dt, bool present) {
     // update() runs `stage_` already *is* the post-resolve/reset value and
     // so looks unchanged from this call's own point of view.
     stage_changed_ = stage_changed_ || (stage_ != prev_stage);
+    // A progression switch is a chord change too, on the same stage number.
+    if (cfg_.progression != last_progression_) {
+        last_progression_ = cfg_.progression;
+        stage_changed_ = true;
+    }
 
     // --- the voicing (diagnostics only) -------------------------------------
     //
@@ -156,7 +189,7 @@ void Chord::update(float fit, float movement, float dt, bool present) {
     const float root = effectiveRoot();
     const float base = root + cfg_.octave;
     for (int i = 0; i < kChordVoices; ++i) {
-        const float tgt = base + kOffsets[stage_][i];
+        const float tgt = base + stageOffsets(stage_)[i];
         v_.target[i] = tgt;
         v_.note[i] = tgt + kDetuneDir[i] * movement * cfg_.detune_cents / 100.f;
     }
@@ -176,8 +209,10 @@ void Chord::update(float fit, float movement, float dt, bool present) {
     // says where the fit is, nothing else. The drop to a very low register
     // at the Transition handoff is not a note at all -- it happens outside
     // Chord (see main.mm).
+    if (present) absent_time_ = 0.f; else absent_time_ += dt;
     if (fit <= 0.f) {
-        const int octave = present ? cfg_.pluck_idle_octave : cfg_.pluck_empty_octave;
+        const bool gone = !present && absent_time_ >= cfg_.pluck_empty_delay_s;
+        const int octave = gone ? cfg_.pluck_empty_octave : cfg_.pluck_idle_octave;
         v_.pluck_note = visitorNote() + 12.f * (float)octave;
         v_.comb_hz = NoteToHz(v_.pluck_note);
         if (cfg_.pluck_wander_enabled) {
@@ -192,7 +227,7 @@ void Chord::update(float fit, float movement, float dt, bool present) {
     } else {
         const float climb = (float)stage_ / (float)(kStages - 1);
         const float linear = visitorNote() + climb * cfg_.pluck_climb;
-        v_.pluck_note = SnapToChordTone(linear, root, stage_)
+        v_.pluck_note = SnapToChordTone(linear, root, stageOffsets(stage_))
                       + 12.f * (float)cfg_.pluck_fit_octave;
         v_.comb_hz = NoteToHz(v_.pluck_note);
         wander_time_ = 0.f;

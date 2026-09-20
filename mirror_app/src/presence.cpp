@@ -14,6 +14,7 @@ constexpr int kEyeOuterR = 263;   // outer corner, frame-right eye
 constexpr int kNoseTip   = 1;
 constexpr int kCheekL    = 234;   // frame-left silhouette, ear height
 constexpr int kCheekR    = 454;   // frame-right silhouette
+constexpr int kChin      = 152;   // bottom of the silhouette
 
 inline float Clamp(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -84,6 +85,19 @@ void Presence::update(const FaceResult& r, float aspect, float dt) {
                                   -cfg_.yaw_full, cfg_.yaw_full);
         }
 
+        // --- pitch: the nose tip between the eye line and the chin ----------
+        // Looking down brings the tip toward the chin, looking up toward the
+        // eyes; the ratio is free of scale and of the aspect ratio, since it
+        // is all one axis. See Config for the two numbers it is read against.
+        {
+            const float eye_y = 0.5f * (L[kEyeOuterL].y + L[kEyeOuterR].y);
+            const float face_h = std::max(1e-4f, L[kChin].y - eye_y);
+            const float t = (L[kNoseTip].y - eye_y) / face_h;
+            raw_.head_pitch = Clamp((cfg_.pitch_neutral - t) / std::max(1e-4f, cfg_.pitch_span)
+                                        * cfg_.pitch_full,
+                                    -cfg_.pitch_full, cfg_.pitch_full);
+        }
+
         // --- movement: landmark travel, in face widths per second ------------
         // Per-landmark mean rather than the bounding box or the centroid: a
         // centroid barely moves while somebody turns their head or opens their
@@ -125,6 +139,7 @@ void Presence::update(const FaceResult& r, float aspect, float dt) {
     sig_.centering = Slew(sig_.centering, raw_.centering, dt, cfg_.rise_tau, cfg_.rise_tau);
     sig_.head_yaw  = Slew(sig_.head_yaw,  raw_.head_yaw,  dt, cfg_.rise_tau, cfg_.rise_tau);
     sig_.head_tilt = Slew(sig_.head_tilt, raw_.head_tilt, dt, cfg_.rise_tau, cfg_.rise_tau);
+    sig_.head_pitch = Slew(sig_.head_pitch, raw_.head_pitch, dt, cfg_.rise_tau, cfg_.rise_tau);
 }
 
 }  // namespace mirror

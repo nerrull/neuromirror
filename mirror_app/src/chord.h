@@ -92,9 +92,38 @@ public:
     //   stage 2   0  7 15 26   Cm(add9)   the b7 resolves to the 5th
     //   stage 3   0  7 16 26   Cmaj9      Eb -> E, the turn
     //   stage 4   0  7 16 28   Cmaj       wide, open, done
+    //
+    // That is `kProgArc`. There is a second progression, `kProgModes`, of the
+    // same five stages -- one mode per checkpoint, each voiced as a four-note
+    // stack, all measured from the visitor's root (C in the names):
+    //
+    //   stage 0   2 12 18 26   D mixolydian        D  C  F# E   (R b7 3 9)
+    //   stage 1   3 10 15 19   Eb lydian           Eb A  D  G   (R #11 7 3)
+    //   stage 2  10 13 17 21   Bb melodic minor    Bb Db F  A   (R b3 5 7)
+    //   stage 3  13 17 21 24   Db lydian #5        Db F  A  C   (R 3 #5 7)
+    //   stage 4  16 19 23 26   C lydian            E  G  B  D   (3 5 7 9)
+    //
+    // From stage 1 on every voice rises or holds, so the last three chords
+    // are heard climbing. The final one has no root in the pad: the pluck,
+    // the drone and the resolved window's strum (C lydian) all carry C, and
+    // against them E G B D reads as Cmaj9 with the strum's F# for the lydian
+    // colour -- and with no major seventh stacked against the root inside
+    // the pad itself, which is what clashed with the strum.
+    //
+    // Which one plays is `Config::progression`; both share the checkpoint
+    // thresholds. Each has its own row of `ChordStage` states in Wwise
+    // (Stage0..4 for the arc, Modes0..4 for the modes) -- see stateName().
     static constexpr int kStages = 5;
+    static constexpr int kProgressions = 2;
+    static constexpr int kProgArc = 0;
+    static constexpr int kProgModes = 1;
 
     struct Config {
+        // Which stage table the pad walks: kProgArc or kProgModes (see the
+        // tables above). Switching mid-sitting reposts the current stage's
+        // state on the next update(), so the pad moves at once.
+        int progression = kProgArc;
+
         // Where the chord's root sits relative to the visitor's note, in
         // octaves. -1 puts the chord an octave under the pluck, so its
         // resolved top voice (+28) ends up a major third over the pluck's
@@ -154,6 +183,11 @@ public:
         int pluck_empty_octave = -1;
         int pluck_idle_octave = 0;
         int pluck_fit_octave = 0;
+        // How long the room must stay empty before the pinned pluck drops
+        // back to `pluck_empty_octave` -- a face lost for a moment must not
+        // bounce the pluck an octave and back. The lift on arrival is
+        // immediate.
+        float pluck_empty_delay_s = 2.f;
 
         // Wander: a slow, continuous drift of the comb Hz while the pluck is
         // pinned (fit at 0), gone the moment the fit starts moving it. An
@@ -223,8 +257,14 @@ public:
     // The stage table, for the panel and the test. Offsets are fixed (the
     // voicing itself is not something a fit level should be able to detune),
     // but the threshold is `cfg_.thresholds` -- see Config.
-    static const float* StageOffsets(int stage);
+    static const float* StageOffsets(int stage, int progression = kProgArc);
+    const float* stageOffsets(int stage) const { return StageOffsets(stage, cfg_.progression); }
     float StageThreshold(int stage) const;
+
+    // The Wwise `ChordStage` state for the current progression and stage --
+    // what the caller posts on stageChanged().
+    const char* stateName() const;
+    static const char* StateName(int progression, int stage);
 
     // This visitor's note: the pinned pluck's centre plus their offset. What
     // the pluck rings while pinned, and the pitch class the root is built on.
@@ -254,6 +294,9 @@ private:
     ChordVoicing v_;
     int  stage_ = 0;
     bool stage_changed_ = false;
+    // The progression the last update() saw, so a panel switch of
+    // `cfg_.progression` is caught as a stage edge and the state reposted.
+    int  last_progression_ = kProgArc;
     // Set by resolve(), cleared by reset(): while true, update() holds the
     // final checkpoint instead of tracking `fit`.
     bool resolved_ = false;
@@ -261,6 +304,8 @@ private:
     // The wander's own clock, zeroed whenever the fit leaves zero so it never
     // carries a phase into the next pin.
     float wander_time_ = 0.f;
+    // How long `present` has been false, for the drop's refractory period.
+    float absent_time_ = 0.f;
     int   pluck_offset_semitones_ = 0;
     std::mt19937 rng_{std::random_device{}()};
 };

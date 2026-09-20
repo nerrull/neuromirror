@@ -1786,6 +1786,7 @@ int audiotest(double seconds, const char* wav_out) {
         p.centering      = std::sin((float)u * 6.2831853f);
         p.head_yaw       = 60.f * std::sin((float)u * 3.1415927f);
         p.head_tilt      = 45.f * std::sin((float)u * 9.4247780f);
+        p.head_pitch     = 30.f * std::sin((float)u * 5.0265482f);
         p.fit_level      = std::min(1.f, (float)u * 2.f);
         p.scene_progress = (float)u;
         p.intensity      = 1.f;
@@ -1795,11 +1796,8 @@ int audiotest(double seconds, const char* wav_out) {
         p.key = chord.keyNote();
         p.pad_octave = chord.padOctave();
         if (chord.stageChanged()) {
-            static const char* const kStageNames[mirror::Chord::kStages] = {
-                "Stage0", "Stage1", "Stage2", "Stage3", "Stage4"
-            };
             last_stage = chord.stage();
-            audio.setState("ChordStage", kStageNames[last_stage]);
+            audio.setState("ChordStage", chord.stateName());
             printf("  %5.1fs  chord stage %d  (%.1f %.1f %.1f %.1f)\n", t,
                    last_stage + 1, chord.voicing().target[0], chord.voicing().target[1],
                    chord.voicing().target[2], chord.voicing().target[3]);

@@ -224,6 +224,7 @@ extern float g_strum_vel_smooth_ms; // 1..1000, smoothing on the turn's speed
 extern float g_strum_full_vel;    // 10..720, deg/s of head turn for a full-loudness pluck
 extern int   g_strum_scale;       // which scale the strings carry -- main.mm's kStrumScales
 extern bool  g_strum_shuffle;     // the tones dealt across the yaw at random, per sitting
+extern int   g_strum_per_side;    // 1..4, strings either side of the dead zone (2x this, picked evenly from the scale)
 // The strings drawn: a screen-height inverting line each beside the mask
 // (RootScene::setHarpWires).
 extern bool  g_strum_wires;

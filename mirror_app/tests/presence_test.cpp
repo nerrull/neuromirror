@@ -28,13 +28,14 @@ void check(bool ok, const char* what) {
 }
 
 constexpr int kEyeOuterL = 33, kEyeOuterR = 263, kNoseTip = 1;
-constexpr int kCheekL = 234, kCheekR = 454;
+constexpr int kCheekL = 234, kCheekR = 454, kChin = 152;
 
 // A face of a given size, at a given place, turned and cocked by given amounts.
 // `yaw` and `roll` are in the same -1..1 / degrees units the signals come back
 // in, so the assertions can be about the values that went in.
+// `pitch01` is the nod, -1..1 of the full scale (+ = chin up).
 mirror::FaceResult MakeFace(float cx, float cy, float height, float yaw01,
-                            float roll_deg, float aspect) {
+                            float roll_deg, float aspect, float pitch01 = 0.f) {
     mirror::FaceResult r;
     r.valid = true;
     r.landmarks.resize(478);
@@ -54,7 +55,13 @@ mirror::FaceResult MakeFace(float cx, float cy, float height, float yaw01,
     // measured against; the eye corners set the tilt.
     r.landmarks[kCheekL] = {cx - half_w, cy, 0.f};
     r.landmarks[kCheekR] = {cx + half_w, cy, 0.f};
-    r.landmarks[kNoseTip] = {cx + yaw01 * half_w, cy, 0.f};
+    // The nose tip sits at the default `pitch_neutral` (0.45) of the way
+    // from the eye line (cy) to the chin (cy + half_h), moved by pitch01 x
+    // the default `pitch_span` (0.25); the chin is placed to close that
+    // measure.
+    r.landmarks[kNoseTip] = {cx + yaw01 * half_w,
+                             cy + (0.45f - pitch01 * 0.25f) * half_h, 0.f};
+    r.landmarks[kChin] = {cx, cy + half_h, 0.f};
 
     const float rr = roll_deg * 0.0174532925f;
     const float eye = half_w * 0.6f;
@@ -123,6 +130,14 @@ int main() {
         Settle(p, MakeFace(0.5f, 0.5f, 0.3f, 0.f, 20.f, aspect), aspect, 2.f);
         check(std::fabs(p.signals().head_tilt - 20.f) < 3.f,
               "tilt comes back in the degrees that went in");
+        check(std::fabs(p.signals().head_pitch) < 1.f, "level is 0 pitch");
+        Settle(p, MakeFace(0.5f, 0.5f, 0.3f, 0.f, 0.f, aspect, 0.5f), aspect, 2.f);
+        check(std::fabs(p.signals().head_pitch - 15.f) < 2.f,
+              "half a span of chin-up reads as half the full scale");
+        Settle(p, MakeFace(0.5f, 0.5f, 0.3f, 0.f, 0.f, aspect, -1.f), aspect, 2.f);
+        check(std::fabs(p.signals().head_pitch + 30.f) < 2.f, "a full nod down is -full scale");
+        Settle(p, MakeFace(0.5f, 0.5f, 0.3f, 0.f, 0.f, aspect, 3.f), aspect, 2.f);
+        check(p.signals().head_pitch <= 30.f, "pitch is clamped to full scale");
     }
 
     // --- movement is in face widths, not pixels ------------------------------

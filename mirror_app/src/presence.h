@@ -54,6 +54,7 @@ struct PresenceSignals {
     float centering = 0.f;    // -1 frame left .. +1 frame right
     float head_yaw  = 0.f;    // degrees, + = nose toward frame right
     float head_tilt = 0.f;    // degrees, + = head cocked toward frame right
+    float head_pitch = 0.f;   // degrees, + = chin up, looking above the mirror
 };
 
 class Presence {
@@ -73,6 +74,15 @@ public:
         // they double as the RTPC range.
         float yaw_full  = 60.f;
         float tilt_full = 45.f;
+        // Pitch (the nod) is read as where the nose tip sits between the eye
+        // line and the chin, as a fraction of that distance: `pitch_neutral`
+        // is that fraction for a level head, and a nod of `pitch_span` either
+        // way from it reads as +/- `pitch_full` degrees. The neutral point is
+        // a face proportion, not an angle, so it is the one to calibrate per
+        // camera height -- the panel shows the raw value to set it by.
+        float pitch_full    = 30.f;
+        float pitch_neutral = 0.45f;
+        float pitch_span    = 0.25f;
         // Asymmetric smoothing time constants, seconds. Rise is short so the
         // room answers you; fall is long so it does not flinch at a dropped
         // frame or a blink-length detection gap.

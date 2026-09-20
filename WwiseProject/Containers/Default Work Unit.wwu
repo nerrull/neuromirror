@@ -487,12 +487,52 @@
 														<CustomState Name="" ID="{7E89B3D9-A055-482A-836A-067E14B38F6B}" ShortID="735403947"/>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{3041C4B4-AAD0-4658-8B62-D2E0E1E5E118}" ShortID="3478891">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1300"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{B764E90C-B2F9-40C8-8EEB-3A522135E142}" ShortID="526827000"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{7CC0CF1D-238F-4048-A89E-B4F8B4E0F28A}" ShortID="440022183"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{13900C51-82A1-43AC-9806-09B23BD1F08A}" ShortID="384113199">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{F4902D68-27B2-4202-BC95-3716A4B2F5ED}" ShortID="1048013141">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="200"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{39DF4A12-0F59-4BD4-9166-E3CA5AF7DB26}" ShortID="198942271">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="300"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{563E2CB6-5058-4413-AF63-A2119790125F}" ShortID="949611249">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1000"/>
+															</PropertyList>
+														</CustomState>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -572,6 +612,11 @@
 										</Sound>
 										<Sound Name="Pad_V2" ID="{1AC28D61-D77D-4BFA-A3EB-BBFB661AC042}" ShortID="1064515642">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>1</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -707,6 +752,14 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{8554EC30-72D3-4EDA-BEE5-604592C80DBD}" ShortID="786184914">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1700"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{9BFBC76F-14F5-46DF-AFCF-33BFEA19109C}" ShortID="741949141">
 															<PropertyList>
@@ -719,6 +772,38 @@
 														<CustomState Name="" ID="{2250AFED-9AA1-4F80-AADB-3DD5ED0415BB}" ShortID="593919466">
 															<PropertyList>
 																<Property Name="Pitch" Type="int32" Value="700"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{A57BB508-844A-4BC1-BD8D-23D8B0981AAD}" ShortID="586782378">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1900"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{EFACECF9-3210-4EE4-B63A-F0D2483AD42E}" ShortID="284772418">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1200"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{CB414402-98A5-4919-8E5F-281CE20ED52E}" ShortID="810746120">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1000"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{ADC79751-CF0F-42F7-8DBC-CAE1DB82C9A9}" ShortID="277976094">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1300"/>
 															</PropertyList>
 														</CustomState>
 													</CustomState>
@@ -804,6 +889,11 @@
 										</Sound>
 										<Sound Name="Pad_V3" ID="{836831EF-9731-4F1D-A900-44F7E05E6289}" ShortID="579437458">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>2</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -938,6 +1028,14 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{5E29D480-D70A-46BF-BABB-D71B5DD13C80}" ShortID="901807208">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2100"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{AF746ACE-DAC7-46B7-82D0-BD6DFFEBDAB0}" ShortID="150678922">
 															<PropertyList>
@@ -950,6 +1048,38 @@
 														<CustomState Name="" ID="{98E4D8F8-7BBE-4A5F-BAD7-172C15FE20D1}" ShortID="840286600">
 															<PropertyList>
 																<Property Name="Pitch" Type="int32" Value="1600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{3014336B-A7D5-4ACD-BFB2-37833D714E8E}" ShortID="721450455">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2300"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{0BD0AFAE-073B-4F52-B29C-16903E0F483F}" ShortID="437579568">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1800"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{7622CC44-F66E-49E2-AABD-A8ECD58FBAD5}" ShortID="962405308">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1500"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{E89C52B8-683A-4B67-A532-7A38888EE3AD}" ShortID="635673691">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1700"/>
 															</PropertyList>
 														</CustomState>
 													</CustomState>
@@ -1035,6 +1165,11 @@
 										</Sound>
 										<Sound Name="Pad_V4" ID="{5FF595A6-66C3-4C5B-ACED-E631F6AFD872}" ShortID="805011431">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>3</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -1169,6 +1304,14 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{4ECA62B8-7D3B-4BEE-8406-3A46F66F518A}" ShortID="483647822">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2400"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{EB65B947-2B94-4029-97F2-2CDD1619AE2D}" ShortID="324698255">
 															<PropertyList>
@@ -1181,6 +1324,38 @@
 														<CustomState Name="" ID="{8EFCEF88-2CFB-43D2-AB1B-DF68F0D7D550}" ShortID="105889300">
 															<PropertyList>
 																<Property Name="Pitch" Type="int32" Value="2800"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{F1868C3E-6FDE-4F88-B875-EB771714C4DB}" ShortID="218345026">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{0E800B73-1634-4F50-A34D-AD99A97511B1}" ShortID="577431540">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2600"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{74AA8EAB-0F68-4D64-8244-5D30FB09D6FD}" ShortID="881912374">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="1900"/>
+															</PropertyList>
+														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{0FAF4DFF-7687-4009-8C6B-CDA7BC618736}" ShortID="1058383681">
+															<PropertyList>
+																<Property Name="Pitch" Type="int32" Value="2100"/>
 															</PropertyList>
 														</CustomState>
 													</CustomState>
@@ -1695,12 +1870,32 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{D22ABF5F-D781-401E-B0DA-AB38E37D8EC6}" ShortID="46908244"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{1CD64EAC-CFDE-4784-BB21-98E31C9B7683}" ShortID="780526890"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{F335C14B-60DD-4FFA-A464-BE713D7ED529}" ShortID="470713426"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{E4B74B99-2C7F-453C-9126-741092A21E72}" ShortID="805435326"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{BDE55B48-7822-4182-B12E-195399DCFF27}" ShortID="826747200"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{C0A27182-E34C-4CB5-B67B-D837935A9804}" ShortID="575695242"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{60105AF5-C847-40FB-A6C2-96304AB51AEA}" ShortID="409859618"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -1749,6 +1944,11 @@
 										</Sound>
 										<Sound Name="Pad_V2" ID="{4BC78028-6BEB-4E61-95B1-651D5BADEDBC}" ShortID="898081456">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>1</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -1884,6 +2084,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{144131A2-E905-4E0D-9724-71A551CAD29E}" ShortID="465263137"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{F189C3FC-13A6-4A94-89F0-6E67373D6B95}" ShortID="458736913">
 															<PropertyList>
@@ -1898,6 +2102,22 @@
 																<Property Name="Pitch" Type="int32" Value="3100"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{E149607D-7F1F-4E0B-918A-31AA1760AA5D}" ShortID="530670977"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{DE3B3E22-224C-47D4-816B-EF5F60B73CF3}" ShortID="960596678"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{E8D994E4-694B-4CF4-A4DC-7D961EB74D5B}" ShortID="68399569"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{94771CEB-67FE-42E4-B164-58BB7C19ED2D}" ShortID="292917771"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -1950,6 +2170,11 @@
 										</Sound>
 										<Sound Name="Pad_V3" ID="{EC3E7DAE-6BD6-41E1-9D99-E015C1AE4696}" ShortID="679074768">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>2</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -2084,6 +2309,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{EFCC2321-98A3-46C4-B4E4-932A06591DBA}" ShortID="992987551"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{6ABB470A-386F-4977-90DF-2102EAD86FFA}" ShortID="874246990">
 															<PropertyList>
@@ -2098,6 +2327,22 @@
 																<Property Name="Pitch" Type="int32" Value="3500"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{53466303-6DC1-4A57-A2EC-D659D54ED80C}" ShortID="784283909"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{54CF6EC6-3034-4AFC-9D83-041D7A84DF1D}" ShortID="947822690"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{AD94F9CE-96AE-4557-BD0A-A13DA41715F3}" ShortID="888535325"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{027A67AD-03C6-4F14-80C0-EAE8D4F2581D}" ShortID="769425750"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -2150,6 +2395,11 @@
 										</Sound>
 										<Sound Name="Pad_V4" ID="{9D9E19CE-E6E1-47DC-A6B6-6AD277335D1D}" ShortID="189879881">
 											<PropertyList>
+												<Property Name="InitialDelay" Type="Real64">
+													<ValueList>
+														<Value>3</Value>
+													</ValueList>
+												</Property>
 												<Property Name="IsLoopingEnabled" Type="bool" Value="True"/>
 												<Property Name="UserAuxSendVolume0" Type="Real64">
 													<ValueList>
@@ -2284,6 +2534,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{CCACD4C4-0E79-4963-BC05-E3C3AC3955E3}" ShortID="57550257"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{763DA5A4-BFFA-41FF-BE16-6D4362753248}" ShortID="471820348">
 															<PropertyList>
@@ -2298,6 +2552,22 @@
 																<Property Name="Pitch" Type="int32" Value="1600"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{DBBDA8E2-2EE9-4AF0-A2E1-4F642F63F9E8}" ShortID="876460100"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{3B9E4412-255E-4836-BADB-6464B1971DBB}" ShortID="11260916"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{D58CC57D-0DC4-43B1-B290-141DE0435F29}" ShortID="820118603"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{E408E6C4-3AF1-4D07-B17C-F9EC2AC127E1}" ShortID="208824469"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -2620,12 +2890,32 @@
 														<CustomState Name="" ID="{AE2B4749-7B86-4C83-AB08-79415F49A262}" ShortID="828345066"/>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{E62872F7-DBDA-48D1-AADA-43FB31CCC73A}" ShortID="17464217"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{689CF816-C702-4862-9755-47C38A784971}" ShortID="982149526"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{528C4308-01A7-4130-9787-03E1D788042A}" ShortID="450247453"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{9B8A64FD-69C7-45F9-93B6-DFC17F644E42}" ShortID="514360772"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{ED30115E-01EE-4E78-BBC1-A4F15F819D1E}" ShortID="938844652"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{F0836C7B-4E87-45D4-9BD0-953A1191E5DC}" ShortID="616975179"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{2BAD4848-0F95-417E-A282-25A9ED29835B}" ShortID="1033354353"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -2845,6 +3135,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{346BFC03-0C17-4379-9168-C3A684156D6F}" ShortID="460522571"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{C6BF7A37-4E47-442F-BF4C-94B31C506BA2}" ShortID="820158244">
 															<PropertyList>
@@ -2859,6 +3153,22 @@
 																<Property Name="Pitch" Type="int32" Value="700"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{056728B8-73F1-4ACD-A10A-759E53519745}" ShortID="26508613"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{D30979B6-CE72-4ADA-BA4F-D0546F4C694B}" ShortID="556250804"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{AA9CA8CC-B964-4186-9F1C-F09A28407549}" ShortID="516315795"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{7E052D6D-6798-4FDA-9559-4DBC5654E5D5}" ShortID="94027569"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -3081,6 +3391,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{34171CDC-C8EA-46CC-9A08-DBFAFBBDCAFC}" ShortID="238991163"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{378AE101-6A36-41DE-A49D-564C27DD4B8E}" ShortID="524081141">
 															<PropertyList>
@@ -3095,6 +3409,22 @@
 																<Property Name="Pitch" Type="int32" Value="1600"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{2A24DEB7-744B-4D8A-8B72-E2A65A2A150B}" ShortID="623194771"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{C7F002D5-2A88-4571-AB33-92B59A70063C}" ShortID="21501874"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{68A7215C-771F-467A-9AC3-43BE5F75291E}" ShortID="523070194"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{9BCC2D15-E39F-447A-9AA3-77D44367976D}" ShortID="965575565"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -3317,6 +3647,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{23BF6AD6-DCC9-4395-81E4-6C8C4C6EEDA0}" ShortID="859788328"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{B927402B-1AF5-4C6E-8D86-BAB0B5F87C02}" ShortID="80188739">
 															<PropertyList>
@@ -3331,6 +3665,22 @@
 																<Property Name="Pitch" Type="int32" Value="2800"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{D5D655BB-A7A8-46F2-A1AA-A21117FDCA6E}" ShortID="1034164680"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{E02B4992-ACB8-4245-92C7-35D1111B18DB}" ShortID="462988889"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{8DDB4188-1C77-4223-AB6E-05CA94CFB618}" ShortID="482082261"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{73AA6E26-019A-4D71-B41E-675E8E5CB370}" ShortID="196233305"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -3545,12 +3895,32 @@
 														<CustomState Name="" ID="{B8A1117C-3FFF-4E18-B3D8-576C08C0DFE5}" ShortID="45926420"/>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{2ED92C88-B412-4C91-8900-E38CF1DC6436}" ShortID="561563210"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{7EC79F55-FD53-4496-82FB-B325D9267D23}" ShortID="861137441"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{75362408-9043-4F71-BA30-7565DA15662D}" ShortID="85658573"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{1C1C470E-938F-4771-B409-592B89AEEEA7}" ShortID="509087062"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{C6E32107-4F2C-4681-A9A0-A2A2D5DDC93A}" ShortID="857366923"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{635A4907-069B-4F05-BFF3-C826D36FCDD9}" ShortID="959708778"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{46E76CA7-167D-4D31-8466-0AC3758682B7}" ShortID="989752064"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -3790,6 +4160,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{6C439B17-B2DF-4F85-80D6-5209D736D9BE}" ShortID="428604990"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{450F3839-76DC-4DB1-A3DA-84F7E0EFAA82}" ShortID="962978530">
 															<PropertyList>
@@ -3804,6 +4178,22 @@
 																<Property Name="Pitch" Type="int32" Value="700"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{19B74093-506E-45DD-8483-52AF05E2DB8D}" ShortID="556775909"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{72801DD2-3CFB-4539-A2AA-3F361F24350A}" ShortID="890321330"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{656E21C4-659C-41A2-91CD-765EFC8737F1}" ShortID="648212068"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{F0AF4437-179F-40CD-9EBF-0E2FFA23CAB6}" ShortID="705404088"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -4046,6 +4436,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{D09268E6-8C9A-43ED-A35B-76545C900A6A}" ShortID="388364458"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{1DE283CC-F690-4EF2-BC20-CDB71F459D49}" ShortID="116020246">
 															<PropertyList>
@@ -4060,6 +4454,22 @@
 																<Property Name="Pitch" Type="int32" Value="1600"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{409A79FE-94C8-4590-9F04-13C2562D950C}" ShortID="581763391"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{4DD423B9-6AA8-4485-86CD-2B74CED68DF0}" ShortID="901558080"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{569DEB6B-084A-4CDB-B834-00DE0CE5F31B}" ShortID="532109650"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{D1DFC25A-7981-4A7D-9D06-A9A5FE3463EC}" ShortID="661221555"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -4302,6 +4712,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{75A76693-60FB-4865-8A8B-698BD64EB12C}" ShortID="643703149"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{E31B8F8F-5E8C-4B0E-9882-102DDA0991B3}" ShortID="493613516">
 															<PropertyList>
@@ -4316,6 +4730,22 @@
 																<Property Name="Pitch" Type="int32" Value="2800"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{0CF835C9-D657-4475-B337-B8DC048B289C}" ShortID="715718777"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{7A6E464D-E262-45D6-81DA-61D98B0878DE}" ShortID="882194931"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{20746D69-EA2E-477F-918D-E8E43E4F32A0}" ShortID="49593545"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{4BE25850-72A5-4CE4-88A6-DCA8274BE6B6}" ShortID="433322675"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -4550,12 +4980,32 @@
 														<CustomState Name="" ID="{BAAD8FF6-00BC-4B4C-959C-732E3A9F7017}" ShortID="710103247"/>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{FB4DC5A8-8A37-468B-A366-C6A1978ED696}" ShortID="60549328"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{9A8FD533-7D1A-4E5E-9588-EC2714FB81A5}" ShortID="854963345"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{CE40F4F5-B61C-4D75-A8CD-56EF14A2C0C0}" ShortID="317624723"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{74645D07-89DB-46FD-A0D4-9FE6C7307E89}" ShortID="134443284"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{F404642F-B963-47F7-A4CC-5992425EC554}" ShortID="528591694"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{61986B17-BD5D-4941-B161-61A438F30919}" ShortID="333384910"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{C34658DD-63A9-451B-9B82-4A380CF54274}" ShortID="919841451"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -4790,6 +5240,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{215B10F7-4F93-4EA2-BB1A-0762F9610745}" ShortID="856222939"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{AB502CC5-934A-43B6-B8E6-410DF70F4821}" ShortID="653694352">
 															<PropertyList>
@@ -4804,6 +5258,22 @@
 																<Property Name="Pitch" Type="int32" Value="700"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{717A5642-5313-4830-8C88-176004C7894F}" ShortID="879342332"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{E63F3319-7512-4ABE-B1FC-8D1500786F80}" ShortID="1053367950"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{A81B3311-805B-4237-9BF1-5F92E4634213}" ShortID="119029152"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{EE12E273-F2BA-42CE-9AD4-BB69AA7C648C}" ShortID="534098682"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -5041,6 +5511,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{9771A4DA-C962-46F0-83FB-60DD759B0489}" ShortID="766070534"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{D03FC9F1-85B7-42AC-AE47-E6F4009B0DAE}" ShortID="307476869">
 															<PropertyList>
@@ -5055,6 +5529,22 @@
 																<Property Name="Pitch" Type="int32" Value="1600"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{CDA5C992-23D3-40D9-AB56-3FA635B4EC17}" ShortID="751762931"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{E446C7B3-BC91-4C19-A317-2DEE0923C7F2}" ShortID="496529057"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{2B81702F-741D-4EAA-9AD6-202A1018771F}" ShortID="482255264"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{7684AE0A-92C3-4C6E-9ACE-6EF0448EA4A6}" ShortID="266320240"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -5292,6 +5782,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{5A48DB40-3D67-4D73-A89C-F08AA749EC65}" ShortID="865328125"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{42495BFF-E20D-46F1-8CCC-B7B636BCBD42}" ShortID="781797431">
 															<PropertyList>
@@ -5306,6 +5800,22 @@
 																<Property Name="Pitch" Type="int32" Value="2800"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{A3972127-05F7-4CD2-A816-A12EAAD058C7}" ShortID="488141964"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{5A967A1A-746D-45F0-831D-62A120B3D268}" ShortID="726921075"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{61188819-A0AD-4420-9DFE-4880B1B09BB9}" ShortID="586658513"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{C2F62178-8A92-481A-B1C5-3B780197C4E7}" ShortID="359212438"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -5535,12 +6045,32 @@
 														<CustomState Name="" ID="{0D3AAB99-592D-4DD6-88D9-EA430A233180}" ShortID="83763649"/>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{6F699B4A-F9C9-4C79-B350-A81E88612DB8}" ShortID="607150057"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{77859232-FD42-4CC5-A51B-2D404D376C54}" ShortID="474718596"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage4" ID="{5958D6AC-305C-478A-8608-C9329F3A1A66}"/>
 														<CustomState Name="" ID="{70744609-E240-43F5-86A4-DC13A4B21DB4}" ShortID="844720642"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{FA417B4C-7760-4DD8-B6A3-F2E91F2E78C7}" ShortID="713778575"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{CA4C232B-2CC5-4E1E-8BEA-9181A3FE045F}" ShortID="601907320"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{C83B9849-2C83-473F-9FAC-D650B029D730}" ShortID="1044102348"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{36E6793B-85A6-4851-9417-B4FD460A323B}" ShortID="962494277"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -5780,6 +6310,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{C206EC96-3404-4030-B636-DE52518207FA}" ShortID="771477702"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{1AF70A58-60F4-4CA4-A420-0299BE6AFB1F}" ShortID="350462046">
 															<PropertyList>
@@ -5794,6 +6328,22 @@
 																<Property Name="Pitch" Type="int32" Value="700"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{300064E3-D545-40BB-BE8C-B1151CC3DDF0}" ShortID="888720599"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{5E1FAA69-B93B-42D7-950A-E43A1B0DE8C3}" ShortID="915198158"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{6C76DD5C-E212-4F2F-9303-8371F39C424D}" ShortID="393802291"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{89DC14CE-FF00-4471-8CA5-21DD62E5E25B}" ShortID="130425024"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -6036,6 +6586,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{70E30CE4-A141-4738-85D4-001C73E59A83}" ShortID="946823189"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{F44EA0C4-CA99-4F61-A9FE-9A49B1331B3A}" ShortID="394322600">
 															<PropertyList>
@@ -6050,6 +6604,22 @@
 																<Property Name="Pitch" Type="int32" Value="1600"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{37C0B69E-8900-42C5-A0AF-C60179C2F50A}" ShortID="613606127"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{B0D85D5F-E258-4E11-9DDD-AFC310C144FF}" ShortID="891686145"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{28611231-ACDC-41AD-B7F2-FC6571F35A26}" ShortID="161482076"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{8E5F9E47-B0EF-4DE2-AB21-F956CE73611B}" ShortID="472353157"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>
@@ -6292,6 +6862,10 @@
 														</CustomState>
 													</CustomState>
 													<CustomState>
+														<StateRef Name="Modes3" ID="{7FCF6AB3-239B-46C1-BF96-ECDDBE53E353}"/>
+														<CustomState Name="" ID="{DE58B3DD-DC67-42FC-97A5-187C92EAAD65}" ShortID="853430418"/>
+													</CustomState>
+													<CustomState>
 														<StateRef Name="Stage3" ID="{108C5740-B0B8-4742-B3F3-27BD370B16A1}"/>
 														<CustomState Name="" ID="{25182F56-81AE-47B3-84C4-A81DA2089D58}" ShortID="17814621">
 															<PropertyList>
@@ -6306,6 +6880,22 @@
 																<Property Name="Pitch" Type="int32" Value="2800"/>
 															</PropertyList>
 														</CustomState>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes4" ID="{D83AEBA2-BF82-483B-A238-68D6121377A8}"/>
+														<CustomState Name="" ID="{FE264D47-9734-4346-B614-D731A0F2840B}" ShortID="916783359"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes0" ID="{B8317ABD-89E8-4B74-BFD0-90EC52B5FD27}"/>
+														<CustomState Name="" ID="{565F489B-85B1-4AE6-9E81-AC3F9774794A}" ShortID="586705640"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes1" ID="{53EA1957-7327-4BDB-B63E-DB9FA26EEB29}"/>
+														<CustomState Name="" ID="{8C70518A-BEFA-44D9-824E-424982987B38}" ShortID="789864370"/>
+													</CustomState>
+													<CustomState>
+														<StateRef Name="Modes2" ID="{3F003593-5EAF-4C9E-9908-D3E5132007EB}"/>
+														<CustomState Name="" ID="{9E96E81B-B5C4-4241-9ED9-0C8C9E299C8E}" ShortID="192400131"/>
 													</CustomState>
 													<CustomState>
 														<StateRef Name="Stage0" ID="{CA4694E7-686F-4FCA-A675-F40385810424}"/>

@@ -1789,12 +1789,25 @@ int main(int argc, char** argv) {
     auto strumScale = [&]() -> const StrumScale& {
         return kStrumScales[std::clamp(g_strum_scale, 0, kStrumScaleCount - 1)];
     };
-    auto strumStrings = [&](float out[kMaxStrings]) {
+    // How many strings the harp has: g_strum_per_side either side of the
+    // dead zone, capped by the scale. Fewer strings than tones takes them
+    // spread evenly across the scale -- the ends always, so the range is
+    // kept -- rather than the bottom of it.
+    auto strumCount = [&]() {
+        return std::min(strumScale().n, 2 * std::clamp(g_strum_per_side, 1, kMaxStrings / 2));
+    };
+    auto strumTone = [&](int i) {
         const StrumScale& sc = strumScale();
-        for (int i = 0; i < sc.n; ++i)
-            out[i] = g_chord.visitorNote() + sc.tones[strumOrder[i] % sc.n]
+        const int n = strumCount();
+        const int k = n > 1 ? (int)std::lround((float)i * (float)(sc.n - 1) / (float)(n - 1)) : 0;
+        return sc.tones[std::clamp(k, 0, sc.n - 1)];
+    };
+    auto strumStrings = [&](float out[kMaxStrings]) {
+        const int n = strumCount();
+        for (int i = 0; i < n; ++i)
+            out[i] = g_chord.visitorNote() + strumTone(strumOrder[i] % n)
                    + 12.f * (float)g_strum_octave;
-        return sc.n;
+        return n;
     };
     // The strings drawn (RootScene::setHarpWires): one per string,
     // g_strum_wire_px wide at rest, and on a pluck widening by
@@ -2087,7 +2100,7 @@ int main(int argc, char** argv) {
     // The strum's strings' order across the yaw (strumOrder above): low to
     // high, or dealt at random.
     auto strumDeal = [&]() {
-        const int n = strumScale().n;
+        const int n = strumCount();
         for (int i = 0; i < kMaxStrings; ++i) strumOrder[i] = i;
         if (g_strum_shuffle)
             std::shuffle(strumOrder, strumOrder + n, sittingSeedRng);
@@ -2665,7 +2678,14 @@ int main(int argc, char** argv) {
                     if (hit) {
                         ++g_face_streak;
                         g_face_last_seen = nowT;
-                        g_face_held = false;
+                        // Still "held" until the acquire streak below lets
+                        // the landmarks through: a hit that is not yet
+                        // believed leaves g_face frozen at the last believed
+                        // face, and the sitting's best-texture pick (which
+                        // skips held frames) must not read that frozen face
+                        // against a new picture as a fresh look at them.
+                        g_face_held = g_face.valid &&
+                                      g_face_streak < std::max(1, g_face_acquire);
                     } else {
                         g_face_streak = 0;
                         if (nowT - g_face_last_seen > g_face_hold_secs) {
@@ -3501,6 +3521,7 @@ int main(int argc, char** argv) {
                 ap.centering = ps.centering;
                 ap.head_yaw  = ps.head_yaw;
                 ap.head_tilt = ps.head_tilt;
+                ap.head_pitch = ps.head_pitch;
                 // How well she has been captured, as one number: the *neural*
                 // (CPPN/pond) fit's training loss against the threshold the
                 // fitting phase waits on -- not the one-shot mesh/identity
@@ -3553,12 +3574,8 @@ int main(int argc, char** argv) {
                 ap.comb_hz = g_chord.voicing().comb_hz;
                 ap.key = g_chord.keyNote();
                 ap.pad_octave = g_chord.padOctave();
-                if (g_chord.stageChanged()) {
-                    static const char* const kStageNames[mirror::Chord::kStages] = {
-                        "Stage0", "Stage1", "Stage2", "Stage3", "Stage4"
-                    };
-                    g_audio.setState("ChordStage", kStageNames[g_chord.stage()]);
-                }
+                if (g_chord.stageChanged())
+                    g_audio.setState("ChordStage", g_chord.stateName());
 
                 // The shepherd glissando: a second, continuous rise under the
                 // chord that never resolves, layered in Wwise as octave-spaced
@@ -3752,7 +3769,7 @@ int main(int argc, char** argv) {
                     const float want = (resolvedWindowActive && g_strum_wires) ? 1.f : 0.f;
                     strumWireVis += (want - strumWireVis) * (1.f - std::exp(-(float)dt / 0.4f));
                     if (strumWireVis < 1e-3f && want == 0.f) strumWireVis = 0.f;
-                    const int n = strumScale().n;
+                    const int n = strumCount();
                     const float span = std::max(g_strum_range_deg - g_strum_dead_deg, 1.f);
                     const float gap = 2.f * span / std::max(n - 1, 1);
                     float xoff[kMaxStrings], width[kMaxStrings], amp[kMaxStrings];
@@ -4814,6 +4831,17 @@ int main(int argc, char** argv) {
             if (!ImGui::GetIO().WantTextInput &&
                 ImGui::IsKeyPressed(ImGuiKey_F2, false))
                 g_show_hud = !g_show_hud;
+
+            // The panel dragged somewhere it cannot be found -- off the edge,
+            // behind the piece, on a monitor that is gone. F3 is the same as
+            // --reset-panel, live: shown, attached, uncollapsed and parked in
+            // the top-left corner of the main window (see panel.mm).
+            if (!ImGui::GetIO().WantTextInput &&
+                ImGui::IsKeyPressed(ImGuiKey_F3, false)) {
+                g_panel_reset = true;
+                g_ui_visible = true;
+                g_ui_detached = false;
+            }
 
             // The panel and its overlays -- see panel.h/.mm. PanelFrameArgs
             // bundles the per-frame locals they read/write that aren't

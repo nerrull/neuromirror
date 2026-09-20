@@ -279,6 +279,46 @@
 						<Property Name="Shimmer" Type="Real32" Value="57"/>
 						<Property Name="WetDryMix" Type="Real32" Value="41"/>
 					</PropertyList>
+					<ObjectLists>
+						<ObjectList Name="RTPC">
+							<RTPC Name="" ID="{19A95F51-E2DF-4027-B081-56CA024EA3AA}" ShortID="838939572">
+								<PropertyList>
+									<Property Name="PropertyName" Type="string" Value="Decay"/>
+								</PropertyList>
+								<ReferenceList>
+									<Reference Name="ControlInput">
+										<ObjectRef Name="HeadPitch" ID="{5A30BDB9-89BC-49B1-9D8C-5F9F9D229CF8}" WorkUnitID="{E25362B7-FD3A-411A-8DF6-25DBA0AA67D7}"/>
+									</Reference>
+									<Reference Name="Curve">
+										<Custom>
+											<Curve Name="" ID="{86ACFD92-6B8E-406C-B83A-156655D6F42C}">
+												<PropertyList>
+													<Property Name="Flags" Type="int32" Value="1"/>
+												</PropertyList>
+												<PointList>
+													<Point>
+														<XPos>-30</XPos>
+														<YPos>-1.9</YPos>
+														<Flags>5</Flags>
+													</Point>
+													<Point>
+														<XPos>0</XPos>
+														<YPos>0</YPos>
+														<Flags>0</Flags>
+													</Point>
+													<Point>
+														<XPos>30</XPos>
+														<YPos>7.1</YPos>
+														<Flags>37</Flags>
+													</Point>
+												</PointList>
+											</Curve>
+										</Custom>
+									</Reference>
+								</ReferenceList>
+							</RTPC>
+						</ObjectList>
+					</ObjectLists>
 				</Effect>
 			</ChildrenList>
 		</WorkUnit>

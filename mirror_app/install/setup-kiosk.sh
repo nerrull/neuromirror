@@ -72,12 +72,18 @@ AGENT_DIR="$HOME_DIR/Library/LaunchAgents"
 echo
 echo "== readable tree, writable state"
 run chmod -R a+rX "$ROOT"
-# The app writes these three back: panel layout, panel placement, and any
-# preset saved from the panel during the run.
+# The app writes these back: panel layout, panel placement, any preset saved
+# from the panel during the run -- and the visitors' faces. The capture pool
+# is compiled in as <tree>/mirror_app/captures (face_capture.cpp), gitignored,
+# so the show has its own pool; it has to exist and be writable by expo or
+# every sitting ends in "capture: save failed: cannot create ..." and the
+# face bank deals nothing.
 for f in "$ROOT/imgui.ini" "$ROOT/mirror_panel.ini"; do
     [ -e "$f" ] && run chmod a+w "$f"
 done
 run chmod -R a+w "$ROOT/mirror_app/presets"
+run mkdir -p "$ROOT/mirror_app/captures"
+run chmod 1777 "$ROOT/mirror_app/captures"
 run mkdir -p "$LOG_DIR"
 run chmod 1777 "$LOG_DIR"
 

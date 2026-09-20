@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace {
 
@@ -368,6 +369,77 @@ int main() {
         check(c.voicing().stage == 0, "reset() clears the resolved hold too");
         c.update(0.6f, 0.f, kDt);
         check(c.stage() >= 1, "and the checkpoint tracks the fit again after reset()");
+    }
+
+    // --- the second progression ---------------------------------------------
+    //
+    // Switching the table mid-sitting is a chord change on the same stage
+    // number: the edge fires so the caller reposts the state, the state name
+    // is the modes row, and the diagnostic voicing and the pluck's snap both
+    // read the modes table from then on.
+    {
+        mirror::Chord c = makeChord();
+        hold(c, 0.6f, 0.f, 2.f);
+        check(c.stage() == 2, "the modes test starts from stage 2");
+        (void)c.stageChanged();
+        c.config().progression = mirror::Chord::kProgModes;
+        c.update(0.6f, 0.f, kDt);
+        check(c.stageChanged(), "switching progression fires the stage edge");
+        check(std::string(c.stateName()) == "Modes2", "and names the modes row's state");
+        check(!c.stageChanged(), "the edge is consumed like any other");
+        const float* o = mirror::Chord::StageOffsets(2, mirror::Chord::kProgModes);
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            check(std::fabs(c.voicing().note[i] - (36.f + o[i])) < 1e-3f,
+                  "the voicing reads the modes table");
+        // The pluck's snap is to a tone of the *modes* chord: fold the
+        // pluck's offset from the root to one octave and it must match one.
+        const float rel = std::fmod(c.voicing().pluck_note - c.effectiveRoot() + 1200.f, 12.f);
+        bool on_tone = false;
+        for (int i = 0; i < mirror::kChordVoices; ++i)
+            if (std::fabs(rel - std::fmod(o[i], 12.f)) < 1e-3f) on_tone = true;
+        check(on_tone, "the pluck snaps to a tone of the modes chord");
+        hold(c, 1.f, 0.f, 1.f);
+        check(std::string(c.stateName()) == "Modes4", "the modes row resolves to Modes4");
+        // Back to the arc: another edge, the arc's name again.
+        c.config().progression = mirror::Chord::kProgArc;
+        c.update(1.f, 0.f, kDt);
+        check(c.stageChanged() && std::string(c.stateName()) == "Stage4",
+              "switching back is an edge onto the arc's row");
+    }
+
+    // The last three modes chords climb: from stage 2 on, no voice falls.
+    {
+        for (int st = 2; st < mirror::Chord::kStages - 1; ++st) {
+            const float* a = mirror::Chord::StageOffsets(st, mirror::Chord::kProgModes);
+            const float* b = mirror::Chord::StageOffsets(st + 1, mirror::Chord::kProgModes);
+            for (int i = 0; i < mirror::kChordVoices; ++i)
+                check(b[i] >= a[i], "the modes' last three chords rise voice by voice");
+        }
+    }
+
+    // --- the pinned pluck's drop has a refractory period --------------------
+    //
+    // A face lost for a blink must not bounce the pluck an octave down and
+    // back; the drop waits `pluck_empty_delay_s`, the lift is immediate.
+    {
+        mirror::Chord c = makeChord();
+        c.config().pluck_empty_delay_s = 2.f;
+        const float idle  = c.visitorNote() + 12.f * (float)c.config().pluck_idle_octave;
+        const float empty = c.visitorNote() + 12.f * (float)c.config().pluck_empty_octave;
+        c.update(0.f, 0.f, kDt, true);
+        check(std::fabs(c.voicing().pluck_note - idle) < 1e-3f, "present: the idle octave");
+        for (int i = 0; i < 60; ++i) c.update(0.f, 0.f, kDt, false);   // 1 s gone
+        check(std::fabs(c.voicing().pluck_note - idle) < 1e-3f,
+              "a second's absence has not dropped the pluck yet");
+        c.update(0.f, 0.f, kDt, true);                                 // back for a frame
+        for (int i = 0; i < 90; ++i) c.update(0.f, 0.f, kDt, false);   // 1.5 s gone
+        check(std::fabs(c.voicing().pluck_note - idle) < 1e-3f,
+              "a reappearance restarts the wait");
+        for (int i = 0; i < 60; ++i) c.update(0.f, 0.f, kDt, false);   // 2.5 s gone
+        check(std::fabs(c.voicing().pluck_note - empty) < 1e-3f,
+              "past the delay the pluck drops to the empty-room octave");
+        c.update(0.f, 0.f, kDt, true);
+        check(std::fabs(c.voicing().pluck_note - idle) < 1e-3f, "the lift on arrival is immediate");
     }
 
     // --- one note per visitor: the pluck's pin and the chord's root agree --
